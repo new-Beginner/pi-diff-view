@@ -1,36 +1,71 @@
-# Diff view
+# Diff view for PI-Desktop
 
-Generated from the `panel-basic` template.
+面向 **PI-Desktop 0.17.0+** 的 Codex 风格本地变更审查插件。查看 Git 差异或已采集的 Agent 轮次，添加逐行反馈，确认后暂存、取消暂存或恢复文件。
 
-## Contributions
+> **可信插件，非沙箱。** Agent/renderer 扩展及 Node/Git 文件操作具有较高权限。恢复会修改工作区，暂存会修改 Git 索引；必须阅读安装时的安全说明。不会发送网络请求、调用模型、自动发送聊天、提交或推送。
 
-- Command `plugin.open` opening a panel from `renderer/index.html`
+## 安装与第一次审查
 
-## Develop
+1. 在 PI-Desktop → **插件** → **安装插件包**选择 `plugin/dist/local.diff-view-0.1.0.piplug`。
+2. 由你手动检查并批准权限。开发版可选择 **加载开发插件** → 本项目 `plugin/`；扩大权限后需要显式重新加载，保存源码不自动扩大授权。
+3. 打开一个项目，在右侧工作面板添加 **差异审查 / Diff view** 页签；或通过命令搜索 **Diff view: Open review** 打开独立窗口。
+4. 默认展示未暂存改动。使用范围选择器切换已暂存、提交、基准分支和已记录轮次。
+5. 安装并启用后让 Agent 使用 Write/Edit 修改项目文件，查看最近一轮。安装前历史不会被补造。
 
-1. Open the Plugins page and use **Load development plugin**, pointing at this
-   directory. PI-Desktop reloads the plugin whenever you save a file here.
-2. Verify the contributions from the command palette.
-3. Validate and package:
+初始空仓库没有 HEAD 时可查看新增/暂存内容；提交和分支对比需要真实提交。非 Git 项目仍可查看可靠采集的轮次。不自动初始化用户项目的 Git 仓库。
+
+## 完成一次审查
+
+- 选择文件，切换统一/左右布局；展开已有上下文、启用换行、搜索文件或复制标准 unified diff。
+- 在 diff 行上点击评论按钮。评论记录路径、版本指纹、新旧侧行号和真实代码片段；刷新后版本不匹配的评论标为失效。
+- 在主窗口的审查层中将已准备的评论加入草稿，然后由你手动发送。独立窗口无法直接操作聊天输入框，可复制评论或从主窗口入口回填。
+- Git 未暂存范围支持文件/hunk 暂存和撤销；已暂存范围支持取消暂存且不修改工作区。提交和分支视图为只读。
+- 完整已结算轮次支持文件级撤销与重新应用。改动冲突、缺失快照、不完整轮次、特殊文件不会获得恢复按钮。
+- 扩展上下文后片段可能合并，hunk 操作只在默认三行上下文时提供。
+- 文件列表上方可对当前搜索结果执行批量操作（最多 20 个可操作文件）。确认中列出实际路径，结束后逐文件显示成功或冲突；不保证跨文件原子。
+
+“暂存”和“撤销”不是同义词。暂存只改变索引；撤销改变文件。每次操作要求确认并重新验证版本；外部变化时需要重新审查，不提供强制覆盖。
+
+## 数据和权限
+
+| 项目 | 实际行为 |
+|---|---|
+| `ui.view` / `ui.panel` | 右侧视图与独立窗口 |
+| `agent.extension` | 工具执行前后采集真实内容；在 Agent 进程运行，没有 OS 沙箱 |
+| `renderer.extension` | 官方聊天插槽和审查层；在宿主 renderer 运行 |
+| `clipboard.write` | 复制 diff / 评论，无剪贴板读取 |
+| 文件和 Git 操作 | 插件自行执行 Node/Git 适配器，**不是宿主 fs 网关逐次授权** |
+| 本地存储 | `pi.plugin.getDataPath()` 指定的私有目录，内容寻址快照、评论、恢复副本和日志 |
+| Agent/main 桥接 | `~/.pi-diff-view/locators/<安装路径哈希>.json`，只有协议、数据目录和实例 generation；实例卸载时清理自身定位信息 |
+
+只处理授权项目根或本会话绑定的采集根内路径。拒绝凭据类文件、`..`、符号链接/junction 逃逸和依赖目录；`.git` 只通过固定 Git 操作使用。没有任意 shell、通用读写 RPC、宿主数据库读取或网络服务。
+
+文本上限 **2 MiB/文件**；单轮最多 256 个捕获路径；历史最多 200 轮；快照容量 **128 MiB**；恢复副本 **64 MiB/最多 1000 条文件记录**。大文件/二进制/特殊文件只显示元信息。容量达到限制时采集停止并警告，先停止 Agent 再清理本插件历史。清理历史会删除恢复副本，之后不能恢复已清理的版本；跨进程锁防止与新采集写入同时清理。项目源码、Git 提交和原插件不受清理影响。
+
+## 支持边界
+
+[兼容性和 Codex 对照](docs/compatibility.md)列出限制。特别注意：
+
+- 只可靠采集已声明路径的 Write/Edit；Bash、自定义工具、子代理或模型重试可能导致轮次标为不完整，请用 Git 范围审查最终状态。
+- 移动/删除只有实际生命周期被采集时才可恢复。移动记录可能显示为源删除和目标新增，需要分别确认；不提供未经验证的跨文件原子恢复。
+- 聊天回复插槽缺少宿主 turnId。卡片只在内容指纹和时间唯一匹配时挂载，不明确时仅保留审查入口。
+- Git 行结束/过滤器产生的特殊状态会保守拒绝写操作，而不是执行项目配置的外部过滤器。
+- 恢复先移走并核对实际目标，再独占安装；冲突不覆盖新出现文件。恢复记录和原文件副本留在私有 backups；若无法把实际原文件放回，错误会指出项目内 `.diff-view-*.original` 恢复文件，切勿删除它。整个操作不是 OS 级事务，仍应停止同时编辑该文件的外部进程。
+
+## 本地开发和检查
 
 ```bash
-pnpm pi-plugin check .
-pnpm pi-plugin pack .
-# writes dist/local.diff-view-0.1.0.piplug
+npm ci --ignore-scripts
+npm run typecheck
+npm test
+npm run build
+npm run test:e2e
 ```
 
-Install the resulting `.piplug` from the Plugins page to test it the way a
-user would.
+构建输出在 `plugin/`。运行界面测试前需要本机 Chromium 或 Playwright 浏览器；测试临时仓库/浏览器工件使用 `PI_SCRATCH_DIR`，不在用户项目制造样本文件。
 
-### Panel top drag band
+在 PI-Desktop 中使用官方 **PluginCheck** 校验 `plugin`，使用 **PluginPack** 打包；不要手工 zip，安装器只接受 store-only `.piplug`。具体测试结果和仍需你确认的原生授权/联调见 [验证记录](docs/verification.md)。
 
-PI-Desktop reserves exactly a transparent 46px frameless drag band above panel
-content and renders a minimal fixed three-button window-control capsule in its
-top-right corner. Normal-flow content is offset automatically. The panel title,
-toolbar, and every other visible surface belong to the plugin. Development
-panels show a reminder that the top 46px is not clickable outside the capsule.
-For `position: fixed` or `position: sticky` content, use
-`top: var(--pi-plugin-titlebar-height, 46px)` and account for the same value
-in viewport-height calculations. Add `-webkit-app-region: drag` to a
-plugin-owned toolbar when it should move the window, and
-`-webkit-app-region: no-drag` to controls inside it.
+浏览器演示截图：[宽屏](docs/screenshots/review-wide.png) · [360px 窄屏](docs/screenshots/review-narrow.png)。截图使用标注的模拟后端，不代表原生宿主联调已经完成。
+
+本项目有分阶段 Git 检查点；`git log --oneline` 查看可回档提交，不配置远程或推送。许可证为 MIT，见 [来源说明](THIRD_PARTY_NOTICES.md)。

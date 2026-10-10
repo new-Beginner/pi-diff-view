@@ -1,25 +1,1901 @@
-/**
- * Diff view — PI-Desktop plugin entry.
- *
- * The host injects the global `pi` object. Every call is gated by the
- * permissions declared in manifest.json, so widening what this file does
- * usually means widening `permissions` too.
- */
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-async function onLoad() {
-  await pi.commands.register({
-    id: "plugin.open",
-    title: "Diff view: Open Panel",
-    keywords: ["plugin"],
-    run: async () => {
-      await pi.ui.openPanel({ title: "Diff view" });
-      await pi.ui.showToast("Hello from Diff view");
-    },
+// src/main.ts
+var main_exports = {};
+__export(main_exports, {
+  onLoad: () => onLoad,
+  onPanelInvoke: () => onPanelInvoke,
+  onRendererCall: () => onRendererCall,
+  onUnload: () => onUnload
+});
+module.exports = __toCommonJS(main_exports);
+var import_promises6 = __toESM(require("node:fs/promises"), 1);
+var import_node_crypto7 = require("node:crypto");
+
+// src/core/storage.ts
+var import_promises2 = __toESM(require("node:fs/promises"), 1);
+var import_node_path2 = __toESM(require("node:path"), 1);
+var import_node_os = __toESM(require("node:os"), 1);
+var import_node_crypto2 = require("node:crypto");
+
+// src/core/path-policy.ts
+var import_promises = __toESM(require("node:fs/promises"), 1);
+var import_node_fs = require("node:fs");
+var import_node_path = __toESM(require("node:path"), 1);
+var import_node_crypto = require("node:crypto");
+
+// src/core/contracts.ts
+var MAX_TEXT_BYTES = 2 * 1024 * 1024;
+
+// src/core/path-policy.ts
+function fail(code, message) {
+  throw Object.assign(new Error(message), { code });
+}
+function digest(value) {
+  return (0, import_node_crypto.createHash)("sha256").update(value).digest("hex");
+}
+function canonical(value) {
+  const p = import_node_path.default.resolve(value);
+  return process.platform === "win32" ? p.toLowerCase() : p;
+}
+function inside(root, target) {
+  const rel = import_node_path.default.relative(canonical(root), canonical(target));
+  return !import_node_path.default.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${import_node_path.default.sep}`);
+}
+function assertPublicPath(value) {
+  if (typeof value !== "string" || !value || value.length > 4096 || /[\0\r\n]/.test(value)) fail("INVALID_PATH", "Invalid file path");
+  const parts = value.replace(/\\/g, "/").split("/");
+  for (const part of parts) {
+    const s = part.toLowerCase();
+    if (s === ".." || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi-desktoooop", ".pi-desktop", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) fail("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
+  }
+}
+async function safeResolve(root, value) {
+  if (typeof value !== "string" || !value || value.length > 4096 || /[\0\r\n]/.test(value) || value.replace(/\\/g, "/").split("/").includes("..")) fail("INVALID_PATH", "Invalid or escaping file path");
+  const realRoot = await import_promises.default.realpath(root);
+  const target = import_node_path.default.resolve(realRoot, value);
+  if (!inside(realRoot, target) || canonical(target) === canonical(realRoot)) fail("PATH_ESCAPE", "File is outside the authorized project root");
+  const rel = import_node_path.default.relative(realRoot, target);
+  assertPublicPath(rel);
+  let cursor = realRoot;
+  for (const segment of rel.split(import_node_path.default.sep)) {
+    cursor = import_node_path.default.join(cursor, segment);
+    try {
+      const stat = await import_promises.default.lstat(cursor);
+      if (stat.isSymbolicLink()) fail("SYMLINK_DENIED", "Symlinks and junctions are read-only metadata");
+      if (!inside(realRoot, await import_promises.default.realpath(cursor))) fail("PATH_ESCAPE", "Resolved path escapes the project");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  return target;
+}
+function absentSnapshot() {
+  return { exists: false, text: null, hash: "absent", size: 0, mode: 0, kind: "text" };
+}
+function snapshotFromBytes(bytes, mode = 33188) {
+  let kind = bytes.length > MAX_TEXT_BYTES ? "large" : "text";
+  let text = null;
+  if (kind === "text") {
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      if (text.includes("\0")) {
+        kind = "binary";
+        text = null;
+      }
+    } catch {
+      kind = "binary";
+    }
+  }
+  return { exists: true, text, hash: digest(bytes), size: bytes.length, mode, kind };
+}
+function snapshotOfText(text, mode = 33188) {
+  return snapshotFromBytes(Buffer.from(text), mode);
+}
+function sameSnapshot(a, b) {
+  return a.exists === b.exists && a.hash === b.hash && (!a.exists || (a.mode & 511) === (b.mode & 511));
+}
+async function readSnapshot(root, value) {
+  const target = await safeResolve(root, value);
+  let handle;
+  try {
+    const initial = await import_promises.default.lstat(target);
+    if (!initial.isFile() || initial.isSymbolicLink()) fail("NOT_FILE", "Only regular files can be captured");
+    handle = await import_promises.default.open(target, import_node_fs.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs.constants.O_NONBLOCK | import_node_fs.constants.O_NOFOLLOW));
+    const stat = await handle.stat();
+    if (!stat.isFile()) fail("NOT_FILE", "Only regular files can be captured");
+    if (stat.size > MAX_TEXT_BYTES) return { exists: true, text: null, hash: `large:${stat.size}:${stat.mtimeMs}`, size: stat.size, mode: stat.mode, kind: "large" };
+    const buffer = Buffer.alloc(MAX_TEXT_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > MAX_TEXT_BYTES) fail("FILE_CHANGED", "File grew beyond the snapshot limit during capture");
+    const bytes = buffer.subarray(0, length);
+    const after = await handle.stat();
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) fail("FILE_CHANGED", "File changed during capture");
+    await safeResolve(root, value);
+    return snapshotFromBytes(bytes, stat.mode);
+  } catch (error) {
+    if (error.code === "ENOENT") return absentSnapshot();
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+// src/core/storage.ts
+var MAX_RUNS = 200;
+var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+async function atomicJson(file, value) {
+  await import_promises2.default.mkdir(import_node_path2.default.dirname(file), { recursive: true, mode: 448 });
+  const temp = `${file}.${(0, import_node_crypto2.randomUUID)()}.tmp`;
+  try {
+    await import_promises2.default.writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 384 });
+    await import_promises2.default.rename(temp, file);
+  } finally {
+    await import_promises2.default.rm(temp, { force: true });
+  }
+}
+async function readJson(file, fallback) {
+  try {
+    const s = await import_promises2.default.stat(file);
+    if (s.size > 16 * 1024 * 1024) fail("STORE_LIMIT", "Store record too large");
+    return JSON.parse(await import_promises2.default.readFile(file, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT" && fallback !== void 0) return fallback;
+    throw error;
+  }
+}
+async function locatorPath(pluginRoot2) {
+  return import_node_path2.default.join(import_node_os.default.homedir(), ".pi-diff-view", "locators", `${digest(canonical(await import_promises2.default.realpath(pluginRoot2)))}.json`);
+}
+function validId(id) {
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) fail("INVALID_ID", "Invalid record identifier");
+}
+var SnapshotStore = class {
+  constructor(directory) {
+    this.directory = directory;
+  }
+  async init() {
+    for (const sub of ["blobs", "inbox", "runs", "backups"]) await import_promises2.default.mkdir(import_node_path2.default.join(this.directory, sub), { recursive: true, mode: 448 });
+  }
+  async captureLock(work) {
+    const lock = import_node_path2.default.join(this.directory, "capture.lock");
+    let handle;
+    for (let attempt = 0; attempt < 80 && !handle; attempt++) {
+      try {
+        handle = await import_promises2.default.open(lock, "wx", 384);
+        await handle.writeFile(JSON.stringify({ pid: process.pid }));
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        const owner = await readJson(lock, null).catch(() => null);
+        if (owner?.pid && owner.pid !== process.pid) {
+          try {
+            process.kill(owner.pid, 0);
+          } catch (e) {
+            if (e.code === "ESRCH") await import_promises2.default.rm(lock, { force: true });
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    if (!handle) fail("STORE_BUSY", "Capture store is busy; retry after active Agents stop");
+    try {
+      return await work();
+    } finally {
+      await handle.close();
+      await import_promises2.default.rm(lock, { force: true });
+    }
+  }
+  async saveBlob(snapshot) {
+    if (snapshot.kind === "text" && snapshot.exists && snapshot.text !== null) {
+      if (!/^[a-f0-9]{64}$/.test(snapshot.hash) || digest(snapshot.text) !== snapshot.hash) fail("SNAPSHOT_INVALID", "Snapshot content hash does not match");
+      const file = import_node_path2.default.join(this.directory, "blobs", snapshot.hash);
+      if (!await import_promises2.default.stat(file).catch(() => null)) {
+        const lock = import_node_path2.default.join(this.directory, "quota.lock");
+        let handle;
+        for (let attempt = 0; attempt < 40 && !handle; attempt++) {
+          try {
+            handle = await import_promises2.default.open(lock, "wx", 384);
+          } catch (error) {
+            if (error.code !== "EEXIST") throw error;
+            const s = await import_promises2.default.stat(lock).catch(() => null);
+            if (s && Date.now() - s.mtimeMs > 6e4) await import_promises2.default.rm(lock, { force: true });
+            else await new Promise((r) => setTimeout(r, 25));
+          }
+        }
+        if (!handle) fail("STORE_BUSY", "Snapshot store is busy; capture marked incomplete");
+        try {
+          const entries = await import_promises2.default.readdir(import_node_path2.default.dirname(file));
+          if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
+          let size = 0;
+          for (const entry of entries) size += (await import_promises2.default.stat(import_node_path2.default.join(import_node_path2.default.dirname(file), entry))).size;
+          if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
+          try {
+            await import_promises2.default.writeFile(file, snapshot.text, { flag: "wx", mode: 384 });
+          } catch (error) {
+            if (error.code !== "EEXIST") throw error;
+          }
+        } finally {
+          await handle.close();
+          await import_promises2.default.rm(lock, { force: true });
+        }
+      }
+    }
+    return { ...snapshot, text: null };
+  }
+  async hydrate(snapshot) {
+    if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
+    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
+    try {
+      const file = import_node_path2.default.join(this.directory, "blobs", snapshot.hash);
+      const stat = await import_promises2.default.lstat(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("Unsafe blob");
+      const bytes = await import_promises2.default.readFile(file);
+      if (digest(bytes) !== snapshot.hash) throw new Error("Corrupt blob");
+      return { ...snapshot, text: bytes.toString("utf8") };
+    } catch {
+      return { ...snapshot, kind: "unavailable", text: null };
+    }
+  }
+  async writeRun(run, inbox = false) {
+    const save = async () => {
+      validId(run.id);
+      const changes2 = {};
+      if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
+      for (const [p, c] of Object.entries(run.changes)) changes2[p] = { before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      await atomicJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, changes: changes2 });
+    };
+    if (inbox) await this.captureLock(save);
+    else await save();
+  }
+  async getRun(id, inbox = false, hydrate = true) {
+    validId(id);
+    const run = await readJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${id}.json`), null);
+    if (!run || run.version !== 1 || run.id !== id || typeof run.sessionId !== "string" || !import_node_path2.default.isAbsolute(run.root) || !run.changes) return null;
+    if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
+    return run;
+  }
+  async importInbox(generation2) {
+    await this.captureLock(async () => {
+      const entries = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
+      for (const entry of entries) {
+        const id = entry.slice(0, -5);
+        try {
+          const run = await this.getRun(id, true, false);
+          if (!run) continue;
+          const current = await this.getRun(id, false, false);
+          run.bindings = current?.bindings ?? {};
+          if (run.generation !== generation2 && run.state === "running") {
+            run.state = "incomplete";
+            run.incomplete = true;
+          }
+          await this.writeRun(run);
+          if (run.state !== "running") await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
+        } catch {
+        }
+      }
+    });
+  }
+  async listRuns(hydrate = true) {
+    const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
+    const runs = [];
+    for (const file of files.slice(-MAX_RUNS * 2)) {
+      try {
+        const run = await this.getRun(file.slice(0, -5), false, hydrate);
+        if (run) runs.push(run);
+      } catch {
+      }
+    }
+    return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
+  }
+  async comments() {
+    return readJson(import_node_path2.default.join(this.directory, "comments.json"), []);
+  }
+  async saveComments(comments) {
+    if (comments.length > 1e3 || Buffer.byteLength(JSON.stringify(comments)) > 16 * 1024 * 1024) fail("COMMENT_LIMIT", "Comment count or byte limit reached");
+    await atomicJson(import_node_path2.default.join(this.directory, "comments.json"), comments);
+  }
+  async audit(event) {
+    const file = import_node_path2.default.join(this.directory, "actions.jsonl");
+    const size = (await import_promises2.default.stat(file).catch(() => ({ size: 0 }))).size;
+    if (size > 1024 * 1024) await import_promises2.default.rename(file, `${file}.previous`).catch(() => {
+    });
+    await import_promises2.default.appendFile(file, `${JSON.stringify({ timestamp: Date.now(), event })}
+`, { mode: 384 });
+  }
+  async prune() {
+    const runs = await this.listRuns(false);
+    let used = 0;
+    const keep = /* @__PURE__ */ new Set();
+    for (const run of runs) {
+      const hashes = Object.values(run.changes).flatMap((c) => [c.before, c.after]).filter((s) => s.exists && s.kind === "text");
+      const cost = hashes.reduce((n, s) => n + s.size, 0);
+      if (used + cost <= MAX_HISTORY_BYTES || run.state === "running") {
+        used += cost;
+        keep.add(run.id);
+      }
+    }
+    for (const file of await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))) if (/^[\w-]+\.json$/.test(file) && !keep.has(file.slice(0, -5))) await import_promises2.default.rm(import_node_path2.default.join(this.directory, "runs", file), { force: true });
+  }
+  async clear() {
+    await this.captureLock(async () => {
+      for (const inbox of [false, true]) for (const file of await import_promises2.default.readdir(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs"))) {
+        if (!/^[\w-]+\.json$/.test(file)) continue;
+        const run = await this.getRun(file.slice(0, -5), inbox, false);
+        if (run?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
+      }
+      for (const sub of ["runs", "inbox", "blobs", "backups"]) {
+        const dir = import_node_path2.default.join(this.directory, sub);
+        if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
+        for (const file of await import_promises2.default.readdir(dir)) {
+          const target = import_node_path2.default.join(dir, file);
+          const s = await import_promises2.default.lstat(target);
+          if (s.isFile() && !s.isSymbolicLink()) await import_promises2.default.unlink(target);
+        }
+      }
+      await this.saveComments([]);
+      await import_promises2.default.rm(import_node_path2.default.join(this.directory, "restores.json"), { force: true });
+    });
+  }
+};
+
+// src/core/review-service.ts
+var import_node_path6 = __toESM(require("node:path"), 1);
+var import_node_crypto5 = require("node:crypto");
+
+// node_modules/diff/libesm/diff/base.js
+var Diff = class {
+  diff(oldStr, newStr, options = {}) {
+    let callback;
+    if (typeof options === "function") {
+      callback = options;
+      options = {};
+    } else if ("callback" in options) {
+      callback = options.callback;
+    }
+    const oldString = this.castInput(oldStr, options);
+    const newString = this.castInput(newStr, options);
+    const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
+    const newTokens = this.removeEmpty(this.tokenize(newString, options));
+    return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
+  }
+  diffWithOptionsObj(oldTokens, newTokens, options, callback) {
+    var _a;
+    const done = (value) => {
+      value = this.postProcess(value, options);
+      if (callback) {
+        setTimeout(function() {
+          callback(value);
+        }, 0);
+        return void 0;
+      } else {
+        return value;
+      }
+    };
+    const newLen = newTokens.length, oldLen = oldTokens.length;
+    let editLength = 1;
+    let maxEditLength = newLen + oldLen;
+    if (options.maxEditLength != null) {
+      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
+    }
+    const maxExecutionTime = (_a = options.timeout) !== null && _a !== void 0 ? _a : Infinity;
+    const abortAfterTimestamp = Date.now() + maxExecutionTime;
+    const bestPath = [{ oldPos: -1, lastComponent: void 0 }];
+    let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
+    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+      return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
+    }
+    let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
+    const execEditLength = () => {
+      for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
+        let basePath;
+        const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
+        if (removePath) {
+          bestPath[diagonalPath - 1] = void 0;
+        }
+        let canAdd = false;
+        if (addPath) {
+          const addPathNewPos = addPath.oldPos - diagonalPath;
+          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
+        }
+        const canRemove = removePath && removePath.oldPos + 1 < oldLen;
+        if (!canAdd && !canRemove) {
+          bestPath[diagonalPath] = void 0;
+          continue;
+        }
+        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
+          basePath = this.addToPath(addPath, true, false, 0, options);
+        } else {
+          basePath = this.addToPath(removePath, false, true, 1, options);
+        }
+        newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
+        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+          return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
+        } else {
+          bestPath[diagonalPath] = basePath;
+          if (basePath.oldPos + 1 >= oldLen) {
+            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
+          }
+          if (newPos + 1 >= newLen) {
+            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
+          }
+        }
+      }
+      editLength++;
+    };
+    if (callback) {
+      (function exec() {
+        setTimeout(function() {
+          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
+            return callback(void 0);
+          }
+          if (!execEditLength()) {
+            exec();
+          }
+        }, 0);
+      })();
+    } else {
+      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
+        const ret = execEditLength();
+        if (ret) {
+          return ret;
+        }
+      }
+    }
+  }
+  addToPath(path7, added, removed, oldPosInc, options) {
+    const last = path7.lastComponent;
+    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
+      return {
+        oldPos: path7.oldPos + oldPosInc,
+        lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
+      };
+    } else {
+      return {
+        oldPos: path7.oldPos + oldPosInc,
+        lastComponent: { count: 1, added, removed, previousComponent: last }
+      };
+    }
+  }
+  extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
+    const newLen = newTokens.length, oldLen = oldTokens.length;
+    let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
+    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
+      newPos++;
+      oldPos++;
+      commonCount++;
+      if (options.oneChangePerToken) {
+        basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
+      }
+    }
+    if (commonCount && !options.oneChangePerToken) {
+      basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
+    }
+    basePath.oldPos = oldPos;
+    return newPos;
+  }
+  equals(left, right, options) {
+    if (options.comparator) {
+      return options.comparator(left, right);
+    } else {
+      return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
+    }
+  }
+  removeEmpty(array) {
+    const ret = [];
+    for (let i = 0; i < array.length; i++) {
+      if (array[i]) {
+        ret.push(array[i]);
+      }
+    }
+    return ret;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  castInput(value, options) {
+    return value;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  tokenize(value, options) {
+    return Array.from(value);
+  }
+  join(chars) {
+    return chars.join("");
+  }
+  postProcess(changeObjects, options) {
+    return changeObjects;
+  }
+  get useLongestToken() {
+    return false;
+  }
+  buildValues(lastComponent, newTokens, oldTokens) {
+    const components = [];
+    let nextComponent;
+    while (lastComponent) {
+      components.push(lastComponent);
+      nextComponent = lastComponent.previousComponent;
+      delete lastComponent.previousComponent;
+      lastComponent = nextComponent;
+    }
+    components.reverse();
+    const componentLen = components.length;
+    let componentPos = 0, newPos = 0, oldPos = 0;
+    for (; componentPos < componentLen; componentPos++) {
+      const component = components[componentPos];
+      if (!component.removed) {
+        if (!component.added && this.useLongestToken) {
+          let value = newTokens.slice(newPos, newPos + component.count);
+          value = value.map(function(value2, i) {
+            const oldValue = oldTokens[oldPos + i];
+            return oldValue.length > value2.length ? oldValue : value2;
+          });
+          component.value = this.join(value);
+        } else {
+          component.value = this.join(newTokens.slice(newPos, newPos + component.count));
+        }
+        newPos += component.count;
+        if (!component.added) {
+          oldPos += component.count;
+        }
+      } else {
+        component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
+        oldPos += component.count;
+      }
+    }
+    return components;
+  }
+};
+
+// node_modules/diff/libesm/diff/line.js
+var LineDiff = class extends Diff {
+  constructor() {
+    super(...arguments);
+    this.tokenize = tokenize;
+  }
+  equals(left, right, options) {
+    if (options.ignoreWhitespace) {
+      if (!options.newlineIsToken || !left.includes("\n")) {
+        left = left.trim();
+      }
+      if (!options.newlineIsToken || !right.includes("\n")) {
+        right = right.trim();
+      }
+    } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
+      if (left.endsWith("\n")) {
+        left = left.slice(0, -1);
+      }
+      if (right.endsWith("\n")) {
+        right = right.slice(0, -1);
+      }
+    }
+    return super.equals(left, right, options);
+  }
+};
+var lineDiff = new LineDiff();
+function diffLines(oldStr, newStr, options) {
+  return lineDiff.diff(oldStr, newStr, options);
+}
+function tokenize(value, options) {
+  if (options.stripTrailingCr) {
+    value = value.replace(/\r\n/g, "\n");
+  }
+  const retLines = [], linesAndNewlines = value.split(/(\n|\r\n)/);
+  if (!linesAndNewlines[linesAndNewlines.length - 1]) {
+    linesAndNewlines.pop();
+  }
+  for (let i = 0; i < linesAndNewlines.length; i++) {
+    const line = linesAndNewlines[i];
+    if (i % 2 && !options.newlineIsToken) {
+      retLines[retLines.length - 1] += line;
+    } else {
+      retLines.push(line);
+    }
+  }
+  return retLines;
+}
+
+// node_modules/diff/libesm/patch/create.js
+function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
+  let optionsObj;
+  if (!options) {
+    optionsObj = {};
+  } else if (typeof options === "function") {
+    optionsObj = { callback: options };
+  } else {
+    optionsObj = options;
+  }
+  if (typeof optionsObj.context === "undefined") {
+    optionsObj.context = 4;
+  }
+  const context = optionsObj.context;
+  if (optionsObj.newlineIsToken) {
+    throw new Error("newlineIsToken may not be used with patch-generation functions, only with diffing functions");
+  }
+  if (!optionsObj.callback) {
+    return diffLinesResultToPatch(diffLines(oldStr, newStr, optionsObj));
+  } else {
+    const { callback } = optionsObj;
+    diffLines(oldStr, newStr, Object.assign(Object.assign({}, optionsObj), { callback: (diff) => {
+      const patch = diffLinesResultToPatch(diff);
+      callback(patch);
+    } }));
+  }
+  function diffLinesResultToPatch(diff) {
+    if (!diff) {
+      return;
+    }
+    diff.push({ value: "", lines: [] });
+    function contextLines(lines) {
+      return lines.map(function(entry) {
+        return " " + entry;
+      });
+    }
+    const hunks = [];
+    let oldRangeStart = 0, newRangeStart = 0, curRange = [], oldLine = 1, newLine = 1;
+    for (let i = 0; i < diff.length; i++) {
+      const current = diff[i], lines = current.lines || splitLines(current.value);
+      current.lines = lines;
+      if (current.added || current.removed) {
+        if (!oldRangeStart) {
+          const prev = diff[i - 1];
+          oldRangeStart = oldLine;
+          newRangeStart = newLine;
+          if (prev) {
+            curRange = context > 0 ? contextLines(prev.lines.slice(-context)) : [];
+            oldRangeStart -= curRange.length;
+            newRangeStart -= curRange.length;
+          }
+        }
+        for (const line of lines) {
+          curRange.push((current.added ? "+" : "-") + line);
+        }
+        if (current.added) {
+          newLine += lines.length;
+        } else {
+          oldLine += lines.length;
+        }
+      } else {
+        if (oldRangeStart) {
+          if (lines.length <= context * 2 && i < diff.length - 2) {
+            for (const line of contextLines(lines)) {
+              curRange.push(line);
+            }
+          } else {
+            const contextSize = Math.min(lines.length, context);
+            for (const line of contextLines(lines.slice(0, contextSize))) {
+              curRange.push(line);
+            }
+            const hunk = {
+              oldStart: oldRangeStart,
+              oldLines: oldLine - oldRangeStart + contextSize,
+              newStart: newRangeStart,
+              newLines: newLine - newRangeStart + contextSize,
+              lines: curRange
+            };
+            hunks.push(hunk);
+            oldRangeStart = 0;
+            newRangeStart = 0;
+            curRange = [];
+          }
+        }
+        oldLine += lines.length;
+        newLine += lines.length;
+      }
+    }
+    for (const hunk of hunks) {
+      for (let i = 0; i < hunk.lines.length; i++) {
+        if (hunk.lines[i].endsWith("\n")) {
+          hunk.lines[i] = hunk.lines[i].slice(0, -1);
+        } else {
+          hunk.lines.splice(i + 1, 0, "\\ No newline at end of file");
+          i++;
+        }
+      }
+    }
+    return {
+      oldFileName,
+      newFileName,
+      oldHeader,
+      newHeader,
+      hunks
+    };
+  }
+}
+function formatPatch(patch) {
+  if (Array.isArray(patch)) {
+    return patch.map(formatPatch).join("\n");
+  }
+  const ret = [];
+  if (patch.oldFileName == patch.newFileName) {
+    ret.push("Index: " + patch.oldFileName);
+  }
+  ret.push("===================================================================");
+  ret.push("--- " + patch.oldFileName + (typeof patch.oldHeader === "undefined" ? "" : "	" + patch.oldHeader));
+  ret.push("+++ " + patch.newFileName + (typeof patch.newHeader === "undefined" ? "" : "	" + patch.newHeader));
+  for (let i = 0; i < patch.hunks.length; i++) {
+    const hunk = patch.hunks[i];
+    if (hunk.oldLines === 0) {
+      hunk.oldStart -= 1;
+    }
+    if (hunk.newLines === 0) {
+      hunk.newStart -= 1;
+    }
+    ret.push("@@ -" + hunk.oldStart + "," + hunk.oldLines + " +" + hunk.newStart + "," + hunk.newLines + " @@");
+    for (const line of hunk.lines) {
+      ret.push(line);
+    }
+  }
+  return ret.join("\n") + "\n";
+}
+function createTwoFilesPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
+  if (typeof options === "function") {
+    options = { callback: options };
+  }
+  if (!(options === null || options === void 0 ? void 0 : options.callback)) {
+    const patchObj = structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options);
+    if (!patchObj) {
+      return;
+    }
+    return formatPatch(patchObj);
+  } else {
+    const { callback } = options;
+    structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, Object.assign(Object.assign({}, options), { callback: (patchObj) => {
+      if (!patchObj) {
+        callback(void 0);
+      } else {
+        callback(formatPatch(patchObj));
+      }
+    } }));
+  }
+}
+function splitLines(text) {
+  const hasTrailingNl = text.endsWith("\n");
+  const result = text.split("\n").map((line) => line + "\n");
+  if (hasTrailingNl) {
+    result.pop();
+  } else {
+    result.push(result.pop().slice(0, -1));
+  }
+  return result;
+}
+
+// src/core/diff.ts
+function buildHunks(before, after, context = 3) {
+  const patch = structuredPatch("before", "after", before, after, "", "", { context, maxEditLength: 2e5, timeout: 1e3 });
+  if (!patch) throw Object.assign(new Error("Diff exceeds computation budget"), { code: "DIFF_LIMIT" });
+  return patch.hunks.map((h, index) => {
+    let old = h.oldStart, next = h.newStart;
+    const lines = h.lines.map((line) => {
+      const sign = line[0];
+      if (sign === "\\") return { kind: "notice", text: line, oldLine: null, newLine: null };
+      const kind = sign === "+" ? "add" : sign === "-" ? "del" : "context";
+      return { kind, text: line.slice(1), oldLine: kind === "add" ? null : old++, newLine: kind === "del" ? null : next++ };
+    });
+    return { id: `${index}:${h.oldStart}:${h.newStart}`, header: `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, oldStart: h.oldStart, oldLines: h.oldLines, newStart: h.newStart, newLines: h.newLines, lines };
   });
 }
-
-async function onUnload() {
-  await pi.commands.unregister("plugin.open");
+function publicFile(file) {
+  const { before: _before, after: _after, indexFingerprint: _index, ...rest } = file;
+  return rest;
+}
+function patchText(file) {
+  if (file.kind !== "text") return `${file.path}: ${file.kind}
+`;
+  const quote = (s) => /[\s"\\]/.test(s) ? JSON.stringify(s) : s;
+  return createTwoFilesPatch(file.before.exists ? quote(`a/${file.oldPath ?? file.path}`) : "/dev/null", file.after.exists ? quote(`b/${file.path}`) : "/dev/null", file.before.text ?? "", file.after.text ?? "", "", "", { context: 3 });
+}
+function stats(before, after) {
+  let additions = 0, deletions = 0;
+  for (const hunk of buildHunks(before, after)) for (const line of hunk.lines) {
+    if (line.kind === "add") additions++;
+    if (line.kind === "del") deletions++;
+  }
+  return { additions, deletions };
+}
+function selectHunkText(before, after, hunkId) {
+  const hunks = buildHunks(before, after);
+  const h = hunks.find((h2) => h2.id === hunkId);
+  if (!h) throw Object.assign(new Error("Hunk changed; refresh the review"), { code: "STALE_HUNK" });
+  const split = (s) => s.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const left = split(before), right = split(after);
+  const start = h.oldLines === 0 ? h.oldStart : h.oldStart - 1;
+  const newStart = h.newLines === 0 ? h.newStart : h.newStart - 1;
+  return [...left.slice(0, start), ...right.slice(newStart, newStart + h.newLines), ...left.slice(start + h.oldLines)].join("");
 }
 
-module.exports = { onLoad, onUnload };
+// src/core/rollback.ts
+var import_promises3 = __toESM(require("node:fs/promises"), 1);
+var import_node_fs2 = require("node:fs");
+var import_node_path3 = __toESM(require("node:path"), 1);
+var import_node_crypto3 = require("node:crypto");
+async function replaceSnapshot(root, value, expected, desired, backupDir) {
+  if (expected.kind !== "text" || desired.kind !== "text" || desired.exists && (desired.text === null || digest(desired.text) !== desired.hash)) fail("RESTORE_UNAVAILABLE", "Complete validated text snapshots are required");
+  const target = await safeResolve(root, value);
+  if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed outside this review; refresh before retrying");
+  await import_promises3.default.mkdir(backupDir, { recursive: true, mode: 448 });
+  const backups = await import_promises3.default.readdir(backupDir);
+  let backupBytes = 0;
+  for (const file of backups) backupBytes += (await import_promises3.default.stat(import_node_path3.default.join(backupDir, file))).size;
+  if (backups.length >= 998 || backupBytes + 2 * expected.size + desired.size + 8192 > 64 * 1024 * 1024) fail("BACKUP_LIMIT", "Recovery backup limit reached; export needed backups before clearing plugin history");
+  const id = (0, import_node_crypto3.randomUUID)(), record = import_node_path3.default.join(backupDir, `${id}.json`);
+  await atomicJson(record, { version: 1, root, path: value, before: expected, after: desired });
+  if (!expected.exists && !desired.exists) return;
+  await import_promises3.default.mkdir(import_node_path3.default.dirname(target), { recursive: true });
+  await safeResolve(root, value);
+  const temp = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id}.tmp`);
+  const original = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id}.original`);
+  const originalRel = import_node_path3.default.relative(root, original);
+  let held = false;
+  try {
+    if (desired.exists) {
+      const handle = await import_promises3.default.open(temp, "wx", desired.mode & 511 || 420);
+      try {
+        await handle.writeFile(desired.text, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      if (process.platform !== "win32") await import_promises3.default.chmod(temp, desired.mode & 511);
+    }
+    await safeResolve(root, value);
+    if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed before restore");
+    if (expected.exists) {
+      await import_promises3.default.rename(target, original);
+      held = true;
+      const actual = await readSnapshot(root, originalRel);
+      if (!sameSnapshot(actual, expected)) fail("FILE_CONFLICT", "Actual moved file changed; original content will be preserved");
+      const rawBackup = import_node_path3.default.join(backupDir, `${id}.original`);
+      await import_promises3.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
+      await import_promises3.default.chmod(rawBackup, 384);
+      if (!sameSnapshot(await readSnapshot(root, originalRel), expected)) fail("FILE_CONFLICT", "Moved file changed while backing up");
+    }
+    if (desired.exists) await import_promises3.default.link(temp, target);
+    else if ((await readSnapshot(root, value)).exists) fail("FILE_CONFLICT", "Another file appeared before deletion completed");
+    if (held) {
+      await import_promises3.default.unlink(original);
+      held = false;
+    }
+  } catch (error) {
+    if (held) {
+      try {
+        await safeResolve(root, value);
+        await import_promises3.default.link(original, target);
+        await import_promises3.default.unlink(original);
+        held = false;
+      } catch {
+      }
+    }
+    if (held) throw Object.assign(new Error(`${error.message}. Original preserved at ${original}`), { code: "FILE_CONFLICT" });
+    if (error.code === "EEXIST") fail("FILE_CONFLICT", "Another file appeared; it was not overwritten");
+    throw error;
+  } finally {
+    await import_promises3.default.rm(temp, { force: true });
+  }
+}
+
+// src/git/repository.ts
+var import_promises4 = __toESM(require("node:fs/promises"), 1);
+var import_node_path4 = __toESM(require("node:path"), 1);
+var import_node_crypto4 = require("node:crypto");
+
+// src/git/runner.ts
+var import_node_child_process = require("node:child_process");
+var devNull = "/dev/null";
+var OUTPUT_LIMIT = 16 * 1024 * 1024;
+async function git(root, args, options = {}) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.toUpperCase().startsWith("GIT_")) delete env[key];
+  Object.assign(env, {
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_SYSTEM: devNull,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_LITERAL_PATHSPECS: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_GRAFT_FILE: devNull,
+    LC_ALL: "C"
+  });
+  if (options.index) env.GIT_INDEX_FILE = options.index;
+  const fixed = [
+    "-c",
+    `core.hooksPath=${devNull}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.untrackedCache=false",
+    "-c",
+    "core.splitIndex=false",
+    "-c",
+    "index.sparse=false",
+    "-c",
+    "diff.external=",
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "core.pager=cat",
+    "--no-pager",
+    ...args
+  ];
+  return new Promise((resolve, reject) => {
+    const child = (0, import_node_child_process.spawn)("git", fixed, { cwd: root, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const out = [], err = [];
+    let size = 0, error;
+    const abort = (code, message) => {
+      error ??= Object.assign(new Error(message), { code });
+      child.kill();
+    };
+    const timer2 = setTimeout(() => abort("GIT_TIMEOUT", "Git exceeded the time budget"), options.timeout ?? 15e3);
+    const collect = (parts, bytes) => {
+      size += bytes.length;
+      if (size > (options.limit ?? OUTPUT_LIMIT)) abort("GIT_LIMIT", "Git output exceeds the review budget");
+      else parts.push(bytes);
+    };
+    child.stdout.on("data", (bytes) => collect(out, bytes));
+    child.stderr.on("data", (bytes) => collect(err, bytes));
+    child.on("error", (cause) => {
+      error ??= cause;
+    });
+    child.stdin.on("error", (cause) => {
+      if (cause.code !== "EPIPE") error ??= cause;
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer2);
+      if (error) {
+        reject(error);
+        return;
+      }
+      const result = { stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString("utf8"), code: code ?? -1 };
+      if (result.code !== 0 && !options.allowFailure) {
+        try {
+          fail("GIT_FAILED", `Git ${args[0]} failed (${result.code})`);
+        } catch (cause) {
+          reject(cause);
+        }
+      } else resolve(result);
+    });
+    child.stdin.end(options.input);
+  });
+}
+function validateRef(ref) {
+  if (typeof ref !== "string" || !ref || ref.length > 512 || ref.startsWith("-") || /[\s\x00-\x1f\x7f\\:?[\]{}*]/u.test(ref) || ref.includes(".."))
+    fail("INVALID_REF", "Use a single local branch, tag or commit reference");
+}
+async function resolveCommit(root, ref) {
+  validateRef(ref);
+  const value = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { limit: 4096 })).stdout.toString().trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) fail("INVALID_REF", "Reference did not resolve to a commit");
+  return value;
+}
+async function headCommit(root) {
+  const result = await git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"], { allowFailure: true, limit: 4096 });
+  if (result.code === 1) return void 0;
+  if (result.code !== 0) fail("GIT_FAILED", "Could not resolve HEAD");
+  const value = result.stdout.toString().trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) fail("GIT_FAILED", "Invalid HEAD object");
+  return value;
+}
+
+// src/git/repository.ts
+var states = /* @__PURE__ */ new WeakMap();
+function reviewState(review) {
+  const state = states.get(review);
+  if (!state) fail("INVALID_REVIEW", "Refresh the Git review before acting");
+  return state;
+}
+async function discoverRepository(authorizedRoot) {
+  const root = await import_promises4.default.realpath(authorizedRoot);
+  if (!(await import_promises4.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
+  const result = { root, name: import_node_path4.default.basename(root), git: false };
+  const top = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true, limit: 16384 });
+  if (top.code !== 0) return result;
+  const gitRoot = await import_promises4.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
+  if (canonical(gitRoot) !== canonical(root)) return result;
+  result.git = true;
+  const branch = await git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"], { allowFailure: true, limit: 4096 });
+  if (branch.code === 0) result.branch = branch.stdout.toString("utf8").replace(/\r?\n$/, "");
+  return result;
+}
+async function boundedRead(handle, size, code) {
+  const buffer = Buffer.alloc(size + 1);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+    if (!bytesRead) break;
+    offset += bytesRead;
+  }
+  if (offset > size) fail(code, "File grew during bounded capture");
+  return buffer.subarray(0, offset);
+}
+async function readIndex(indexPath) {
+  let handle;
+  try {
+    const stat = await import_promises4.default.lstat(indexPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) fail("INDEX_DENIED", "Git index must be a regular file");
+    if (stat.size > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
+    handle = await import_promises4.default.open(indexPath, "r");
+    const bytes = await boundedRead(handle, stat.size, "STALE_INDEX");
+    if (bytes.length > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
+    const after = await handle.stat();
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) fail("STALE_INDEX", "Index changed during capture");
+    return { bytes, fingerprint: digest(bytes) };
+  } catch (error) {
+    if (error.code === "ENOENT") return { bytes: null, fingerprint: "absent" };
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+function bytesSnapshot(bytes, mode) {
+  const snapshot = snapshotFromBytes(bytes, mode);
+  if (snapshot.kind === "text") snapshot.text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  return snapshot;
+}
+function metadata(kind, hash, mode, size = 0) {
+  return { exists: true, text: null, hash, size, mode, kind };
+}
+async function workingSnapshot(root, rel, budget = MAX_TEXT_BYTES) {
+  assertPublicPath(rel);
+  const parent = import_node_path4.default.posix.dirname(rel);
+  if (parent !== ".") await safeResolve(root, parent);
+  let target;
+  try {
+    target = await safeResolve(root, rel);
+  } catch (error) {
+    if (error.code !== "SYMLINK_DENIED") throw error;
+    const leaf = import_node_path4.default.resolve(root, rel);
+    const stat = await import_promises4.default.lstat(leaf);
+    if (!stat.isSymbolicLink()) throw error;
+    return metadata("symlink", digest(await import_promises4.default.readlink(leaf)), 40960, stat.size);
+  }
+  let handle;
+  try {
+    const stat = await import_promises4.default.lstat(target);
+    if (stat.isDirectory()) return metadata("submodule", `directory:${stat.mtimeMs}`, 57344);
+    if (!stat.isFile()) return metadata("unavailable", `special:${stat.mode}`, stat.mode);
+    if (stat.size > MAX_TEXT_BYTES) return metadata("large", `large:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
+    if (stat.size > budget) return metadata("unavailable", `budget:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
+    handle = await import_promises4.default.open(target, "r");
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs)
+      fail("FILE_CHANGED", "Working file changed during capture");
+    const bytes = await boundedRead(handle, stat.size, "FILE_CHANGED");
+    const after = await handle.stat();
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) fail("FILE_CHANGED", "Working file changed during capture");
+    await safeResolve(root, rel);
+    return bytesSnapshot(bytes, stat.mode);
+  } catch (error) {
+    if (error.code === "ENOENT") return absentSnapshot();
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+function records(bytes) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes).split("\0").filter(Boolean);
+  } catch {
+    fail("INVALID_PATH", "Git filenames are not valid UTF-8; this repository is read-only");
+  }
+}
+function parseEntries(bytes, tree) {
+  const result = /* @__PURE__ */ new Map();
+  for (const row of records(bytes)) {
+    const match = tree ? /^(\d{6}) (?:blob|commit) ([a-f0-9]{40,64})\t([\s\S]+)$/.exec(row) : /^(\d{6}) ([a-f0-9]{40,64}) ([0-3])\t([\s\S]+)$/.exec(row);
+    if (!match) fail("GIT_FAILED", "Invalid Git entry record");
+    const rel = match[tree ? 3 : 4];
+    const entry = { mode: parseInt(match[1], 8), oid: match[2], stage: tree ? 0 : Number(match[3]) };
+    result.set(rel, [...result.get(rel) ?? [], entry]);
+  }
+  return result;
+}
+async function treeEntries(root, commit) {
+  return commit ? parseEntries((await git(root, ["ls-tree", "-r", "-z", "--full-tree", commit, "--"])).stdout, true) : /* @__PURE__ */ new Map();
+}
+function changes(bytes) {
+  const rows = records(bytes), result = [];
+  for (let i = 0; i < rows.length; ) {
+    const code = rows[i++];
+    if (!/^[ADMRTUC](?:\d+)?$/.test(code) || !rows[i]) fail("GIT_FAILED", "Invalid Git change record");
+    const first = rows[i++];
+    if (code[0] === "R" || code[0] === "C") {
+      const next = rows[i++];
+      if (!next) fail("GIT_FAILED", "Invalid Git rename record");
+      result.push(code[0] === "R" ? { path: next, oldPath: first, status: "renamed" } : { path: next, status: "added" });
+    } else result.push({ path: first, status: code[0] === "A" ? "added" : code[0] === "D" ? "deleted" : "modified" });
+  }
+  return result;
+}
+async function readGitReview(requestedRoot, scope, ref) {
+  if (!["unstaged", "staged", "commit", "branch"].includes(scope)) fail("INVALID_SCOPE", "Invalid Git review scope");
+  const repo = await discoverRepository(requestedRoot);
+  if (!repo.git) return { root: repo.root, scope, files: [], notice: "Selected project is not a Git root; enclosing repositories are not authorized." };
+  const root = repo.root;
+  const indexPath = (await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"], { limit: 16384 })).stdout.toString().replace(/\r?\n$/, "");
+  const index = await readIndex(indexPath), head = await headCommit(root);
+  const indexEntries = parseEntries((await git(root, ["ls-files", "--stage", "-z", "--"])).stdout, false);
+  const objectLength = (await git(root, ["rev-parse", "--show-object-format"], { limit: 1024 })).stdout.toString().trim() === "sha256" ? 64 : 40;
+  const filemodeResult = await git(root, ["config", "--type=bool", "--get", "core.filemode"], { allowFailure: true, limit: 1024 });
+  const filemode = filemodeResult.stdout.toString().trim() !== "false";
+  const diffOptions = ["--name-status", "-z", "--no-ext-diff", "--no-textconv", "--find-renames=50%", "-l200", "--ignore-submodules=none"];
+  let beforeEntries, afterEntries;
+  let listed, notice, selectedRef;
+  if (scope === "unstaged") {
+    beforeEntries = indexEntries;
+    afterEntries = /* @__PURE__ */ new Map();
+    listed = [...indexEntries.keys()].map((rel) => ({ path: rel, status: "modified" }));
+    for (const rel of records((await git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--"])).stdout))
+      listed.push({ path: rel, status: "added" });
+  } else if (scope === "staged") {
+    beforeEntries = await treeEntries(root, head);
+    afterEntries = indexEntries;
+    listed = changes((await git(root, ["diff", "--cached", ...diffOptions, ...head ? [head] : [], "--"])).stdout);
+    if (!head) notice = "Unborn HEAD: staged changes are compared with an empty tree.";
+  } else if (scope === "commit") {
+    selectedRef = await resolveCommit(root, ref ?? "HEAD");
+    const header = (await git(root, ["cat-file", "commit", selectedRef])).stdout.toString("utf8").split("\n\n", 1)[0];
+    const parents = header.split("\n").filter((line) => line.startsWith("parent ")).map((line) => line.slice(7));
+    if (parents.some((parent) => !new RegExp(`^[a-f0-9]{${objectLength}}$`).test(parent))) fail("GIT_FAILED", "Invalid commit parent");
+    beforeEntries = await treeEntries(root, parents[0]);
+    afterEntries = await treeEntries(root, selectedRef);
+    listed = changes((await git(root, [
+      "diff-tree",
+      "--root",
+      "--no-commit-id",
+      "-r",
+      ...diffOptions,
+      ...parents.length ? [parents[0], selectedRef] : [selectedRef],
+      "--"
+    ])).stdout);
+    notice = parents.length > 1 ? "Merge commit: compared with its first parent only." : parents.length === 0 ? "Root commit: compared with an empty tree." : "Commit: compared with its parent.";
+  } else {
+    if (!head) fail("NO_HEAD", "Branch comparison requires a committed HEAD");
+    if (!ref) fail("INVALID_REF", "Branch comparison requires a local base reference");
+    selectedRef = await resolveCommit(root, ref);
+    const base = (await git(root, ["merge-base", "--all", selectedRef, head], { limit: 4096 })).stdout.toString().trim();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(base)) fail("INVALID_REF", "No unique merge base");
+    beforeEntries = await treeEntries(root, base);
+    afterEntries = await treeEntries(root, head);
+    listed = changes((await git(root, ["diff", ...diffOptions, base, head, "--"])).stdout);
+    notice = `Branch: merge-base(${ref}, HEAD) ${base.slice(0, 12)} \u2192 HEAD ${head.slice(0, 12)}.`;
+  }
+  if (scope === "unstaged" || scope === "staged") {
+    for (const [rel, entries] of indexEntries)
+      if (entries.some((entry) => entry.stage !== 0)) listed.push({ path: rel, status: "modified" });
+  }
+  listed = [...new Map(listed.map((change) => [change.path, change])).values()];
+  if (listed.length > (scope === "unstaged" ? 1e4 : 1e3)) fail("GIT_LIMIT", "Repository path count exceeds the review budget");
+  const review = { root, scope, files: [], notice, ...selectedRef ? { ref: selectedRef } : {} };
+  const state = {
+    root,
+    scope,
+    indexPath,
+    indexFingerprint: index.fingerprint,
+    head,
+    files: /* @__PURE__ */ new Map(),
+    working: /* @__PURE__ */ new Map(),
+    objectLength
+  };
+  let skipped = 0, remaining = OUTPUT_LIMIT;
+  const deadline = Date.now() + 3e4;
+  const blob = async (entry) => {
+    if (!entry) return absentSnapshot();
+    if (entry.mode === 40960) {
+      const bytes = (await git(root, ["cat-file", "blob", entry.oid], { limit: 8192 })).stdout;
+      return metadata("symlink", digest(bytes), entry.mode, bytes.length);
+    }
+    if (entry.mode === 57344) return metadata("submodule", `git:${entry.oid}`, entry.mode);
+    const size = Number((await git(root, ["cat-file", "-s", entry.oid], { limit: 1024 })).stdout.toString().trim());
+    if (!Number.isSafeInteger(size) || size < 0) fail("GIT_FAILED", "Invalid Git blob size");
+    if (size > MAX_TEXT_BYTES) return metadata("large", `git:${entry.oid}`, entry.mode, size);
+    if (size > remaining || Date.now() > deadline) return metadata("unavailable", `git:${entry.oid}`, entry.mode, size);
+    remaining -= size;
+    return bytesSnapshot((await git(root, ["cat-file", "blob", entry.oid], { limit: MAX_TEXT_BYTES + 4096 })).stdout, entry.mode);
+  };
+  for (const change of listed) {
+    if (Date.now() > deadline) fail("GIT_TIMEOUT", "Review exceeded the time budget; use a smaller repository");
+    let working, oldWorking;
+    try {
+      assertPublicPath(change.path);
+      if (change.oldPath) assertPublicPath(change.oldPath);
+      working = await workingSnapshot(root, change.path, remaining);
+      if (working.kind === "text" || working.kind === "binary") remaining -= working.size;
+      if (change.oldPath) {
+        oldWorking = await workingSnapshot(root, change.oldPath, remaining);
+        if (oldWorking.kind === "text" || oldWorking.kind === "binary") remaining -= oldWorking.size;
+      }
+    } catch (error) {
+      if (["PATH_DENIED", "INVALID_PATH", "PATH_ESCAPE", "SYMLINK_DENIED"].includes(error.code)) {
+        skipped++;
+        continue;
+      }
+      throw error;
+    }
+    const conflict = (scope === "unstaged" || scope === "staged") && indexEntries.get(change.path)?.some((entry) => entry.stage !== 0);
+    const leftEntry = beforeEntries.get(change.oldPath ?? change.path)?.find((entry) => entry.stage === 0);
+    const rightEntry = afterEntries.get(change.path)?.find((entry) => entry.stage === 0);
+    if (scope === "unstaged" && !conflict) {
+      if (leftEntry && working.kind === "text" && working.text !== null) {
+        const bytes = Buffer.from(working.text);
+        const oid = (0, import_node_crypto4.createHash)(objectLength === 64 ? "sha256" : "sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+        const mode = filemode ? working.mode & 73 ? 33261 : 33188 : leftEntry.mode === 33261 ? 33261 : 33188;
+        if (oid === leftEntry.oid && mode === leftEntry.mode) {
+          remaining += working.size;
+          continue;
+        }
+      }
+      change.status = !working.exists ? "deleted" : !leftEntry ? "added" : "modified";
+    }
+    let before = conflict ? metadata("conflict", "unmerged", 0) : await blob(leftEntry);
+    let after = conflict ? metadata("conflict", "unmerged", 0) : scope === "unstaged" ? { ...working } : await blob(rightEntry);
+    if (scope === "unstaged" && after.exists && ["text", "binary", "large", "unavailable"].includes(after.kind)) {
+      after.mode = filemode ? working.mode & 73 ? 33261 : 33188 : leftEntry?.mode === 33261 ? 33261 : 33188;
+    }
+    if (!conflict && !change.oldPath && before.kind === after.kind && sameSnapshot(before, after)) {
+      if (before.kind === "text" || before.kind === "binary") remaining += before.size + working.size;
+      continue;
+    }
+    if (before.kind === "text" && after.kind === "text" && before.exists && after.exists && before.hash === after.hash) {
+      if ((before.mode & 511) === (after.mode & 511) && !change.oldPath) continue;
+      if (!change.oldPath) change.status = "mode";
+    }
+    let kind = "text";
+    for (const candidate of ["conflict", "symlink", "submodule", "large", "binary", "unavailable"])
+      if (before.kind === candidate || after.kind === candidate || working.kind === candidate) {
+        kind = candidate;
+        break;
+      }
+    let counts = { additions: 0, deletions: 0 }, note;
+    if (kind === "text") {
+      try {
+        counts = stats(before.text ?? "", after.text ?? "");
+      } catch (error) {
+        if (error.code !== "DIFF_LIMIT") throw error;
+        kind = "unavailable";
+        note = "Diff exceeds the computation budget.";
+      }
+    }
+    let actions = [];
+    if (kind !== "text") {
+      note ??= `${kind}: read-only metadata; no destructive actions.`;
+      if (scope === "unstaged" && (kind === "large" || kind === "submodule"))
+        note = `${kind}: content/dirty status is not inspected; conservative read-only metadata.`;
+    } else if (change.status === "mode") note = "Mode-only change: read-only metadata.";
+    else if (change.status === "renamed") {
+      if (scope === "staged" && working.kind === "text" && oldWorking?.kind === "text") actions = ["unstage"];
+      note = "Rename: only whole-file index unstage is supported; working rename/revert and hunks are read-only.";
+    } else if (scope === "unstaged") actions = ["stage", "revert"];
+    else if (scope === "staged") actions = ["unstage"];
+    const id = digest(`${root}\0${scope}\0${change.path}\0${change.oldPath ?? ""}`).slice(0, 32);
+    const fingerprint = digest(JSON.stringify({ scope, change, before, after, index: index.fingerprint, working, oldWorking }));
+    const file = { id, ...change, kind, ...counts, fingerprint, actions, before, after, indexFingerprint: index.fingerprint, ...note ? { note } : {} };
+    if (review.files.length >= 1e3) fail("GIT_LIMIT", "More than 1000 changed files; use a smaller repository");
+    review.files.push(file);
+    state.files.set(id, structuredClone(file));
+    state.working.set(change.path, working);
+    if (change.oldPath && oldWorking) state.working.set(change.oldPath, oldWorking);
+  }
+  if (scope === "unstaged") {
+    const removed = review.files.filter((f) => f.kind === "text" && f.status === "deleted");
+    const added = review.files.filter((f) => f.kind === "text" && f.status === "added");
+    const discarded = /* @__PURE__ */ new Set();
+    for (const previous of removed) {
+      const matches = added.filter((f) => f.after.hash === previous.before.hash);
+      if (matches.length !== 1 || removed.filter((f) => f.before.hash === previous.before.hash).length !== 1) continue;
+      const next = matches[0];
+      state.files.delete(previous.id);
+      state.files.delete(next.id);
+      discarded.add(previous.id);
+      next.oldPath = previous.path;
+      next.status = "renamed";
+      next.before = previous.before;
+      next.additions = 0;
+      next.deletions = 0;
+      next.actions = ["stage"];
+      next.note = "Exact-byte rename: whole-file stage only; working rename/revert and hunks are unsupported.";
+      next.id = digest(`${root}\0${scope}\0${next.path}\0${next.oldPath}`).slice(0, 32);
+      next.fingerprint = digest(JSON.stringify({
+        scope,
+        path: next.path,
+        oldPath: next.oldPath,
+        before: next.before,
+        after: next.after,
+        index: index.fingerprint,
+        working: state.working.get(next.path),
+        oldWorking: state.working.get(next.oldPath)
+      }));
+      state.files.set(next.id, structuredClone(next));
+    }
+    review.files = review.files.filter((f) => !discarded.has(f.id));
+  }
+  if ((await readIndex(indexPath)).fingerprint !== index.fingerprint) fail("STALE_INDEX", "Index changed; refresh the review");
+  for (const file of state.files.values()) if (file.actions.length) for (const rel of [file.path, ...file.oldPath ? [file.oldPath] : []]) {
+    if (!sameSnapshot(await workingSnapshot(root, rel), state.working.get(rel))) fail("FILE_CHANGED", "Working file changed; refresh the review");
+  }
+  if (skipped) review.notice = [review.notice, `${skipped} credential/internal/unsafe path(s) omitted.`].filter(Boolean).join(" ");
+  states.set(review, state);
+  return review;
+}
+
+// src/git/actions.ts
+var import_promises5 = __toESM(require("node:fs/promises"), 1);
+var import_node_path5 = __toESM(require("node:path"), 1);
+var import_node_os2 = __toESM(require("node:os"), 1);
+function reverseHunkText(before, after, hunkId) {
+  const hunk = buildHunks(before, after).find((h) => h.id === hunkId);
+  if (!hunk) fail("STALE_HUNK", "Hunk changed; refresh the review");
+  const split = (text) => text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const left = split(before), right = split(after);
+  const oldStart = hunk.oldLines === 0 ? hunk.oldStart : hunk.oldStart - 1;
+  const newStart = hunk.newLines === 0 ? hunk.newStart : hunk.newStart - 1;
+  const desired = [
+    ...right.slice(0, newStart),
+    ...left.slice(oldStart, oldStart + hunk.oldLines),
+    ...right.slice(newStart + hunk.newLines)
+  ].join("");
+  const inverse = buildHunks(after, desired);
+  if (inverse.length !== 1) fail("STALE_HUNK", "Cannot isolate the exact reverse edit safely");
+  const selected = selectHunkText(after, desired, inverse[0].id);
+  if (selected !== desired) fail("STALE_HUNK", "Cannot isolate the exact reverse edit safely");
+  return selected;
+}
+function desiredSnapshot(file, action, hunkId) {
+  if (!hunkId) return structuredClone(action === "stage" ? file.after : file.before);
+  const before = file.before.text ?? "", after = file.after.text ?? "";
+  const text = action === "stage" ? selectHunkText(before, after, hunkId) : reverseHunkText(before, after, hunkId);
+  const target = action === "stage" ? file.after : file.before;
+  if (!target.exists && text === "") return absentSnapshot();
+  const mode = action === "stage" ? file.before.exists ? file.before.mode : file.after.mode : file.after.mode || file.before.mode;
+  return snapshotOfText(text, mode);
+}
+async function guard(state, file, action) {
+  if ((await readIndex(state.indexPath)).fingerprint !== state.indexFingerprint || file.indexFingerprint !== state.indexFingerprint)
+    fail("STALE_INDEX", "Index changed; refresh the review");
+  if (action === "unstage" && await headCommit(state.root) !== state.head)
+    fail("STALE_HEAD", "HEAD changed; refresh the review");
+  for (const rel of [file.path, ...file.oldPath ? [file.oldPath] : []]) {
+    assertPublicPath(rel);
+    await safeResolve(state.root, rel);
+    const expected = state.working.get(rel);
+    if (!expected || !sameSnapshot(expected, await workingSnapshot(state.root, rel)))
+      fail("FILE_CHANGED", "Working file changed; refresh the review");
+  }
+}
+async function applyGitAction(review, fileId, action, fingerprint, hunkId, backupDir) {
+  const state = reviewState(review), file = state.files.get(fileId);
+  if (!file || file.fingerprint !== fingerprint) fail("STALE_FILE", "File changed; refresh the review");
+  if (!file.actions.includes(action) || file.kind !== "text") fail("ACTION_DENIED", "This change is read-only for the requested action");
+  if (file.oldPath && hunkId) fail("ACTION_DENIED", "Rename actions require the whole file");
+  if (action === "revert" && !backupDir) fail("BACKUP_REQUIRED", "A recovery backup directory is required");
+  const desired = desiredSnapshot(file, action, hunkId);
+  if (action === "revert" && desired.exists && state.working.get(file.path)?.exists) desired.mode = state.working.get(file.path).mode;
+  const lockPath = `${state.indexPath}.lock`;
+  let lock;
+  try {
+    lock = await import_promises5.default.open(lockPath, "wx", 384);
+  } catch (error) {
+    if (error.code === "EEXIST") fail("INDEX_LOCKED", "Git index is locked; retry after the other operation finishes");
+    throw error;
+  }
+  let tempDir, installed = false;
+  try {
+    await guard(state, file, action);
+    if (action === "revert") {
+      await guard(state, file, action);
+      await replaceSnapshot(state.root, file.path, state.working.get(file.path), desired, backupDir);
+      return;
+    }
+    tempDir = await import_promises5.default.mkdtemp(import_node_path5.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
+    const tempIndex = import_node_path5.default.join(tempDir, "index");
+    const current = await readIndex(state.indexPath);
+    if (current.fingerprint !== state.indexFingerprint) fail("STALE_INDEX", "Index changed; refresh the review");
+    if (current.bytes) await import_promises5.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
+    else await git(state.root, ["read-tree", "--empty"], { index: tempIndex, limit: 4096 });
+    await git(state.root, ["update-index", "--no-split-index"], { index: tempIndex, limit: 4096 });
+    const changes2 = file.oldPath ? action === "stage" ? [{ path: file.oldPath, snapshot: absentSnapshot() }, { path: file.path, snapshot: desired }] : [{ path: file.path, snapshot: absentSnapshot() }, { path: file.oldPath, snapshot: file.before }] : [{ path: file.path, snapshot: desired }];
+    const rows = [];
+    for (const change of changes2) {
+      assertPublicPath(change.path);
+      await safeResolve(state.root, change.path);
+      if (!change.snapshot.exists) rows.push(`0 ${"0".repeat(state.objectLength)}	${change.path}\0`);
+      else {
+        if (change.snapshot.kind !== "text" || change.snapshot.text === null) fail("ACTION_DENIED", "Only exact UTF-8 text index content can be changed");
+        const oid = (await git(state.root, ["hash-object", "--no-filters", "-w", "--stdin"], {
+          input: Buffer.from(change.snapshot.text, "utf8"),
+          limit: 4096
+        })).stdout.toString().trim();
+        if (!new RegExp(`^[a-f0-9]{${state.objectLength}}$`).test(oid)) fail("GIT_FAILED", "Invalid new blob object");
+        rows.push(`${(change.snapshot.mode & 73 ? 33261 : 33188).toString(8)} ${oid}	${change.path}\0`);
+      }
+    }
+    await git(state.root, ["update-index", "-z", "--index-info"], { index: tempIndex, input: Buffer.from(rows.join("")), limit: 4096 });
+    const replacement = await readIndex(tempIndex);
+    if (!replacement.bytes) fail("GIT_FAILED", "Temporary index was not created");
+    await lock.writeFile(replacement.bytes);
+    await lock.sync();
+    await guard(state, file, action);
+    await lock.close();
+    await import_promises5.default.rename(lockPath, state.indexPath);
+    installed = true;
+  } finally {
+    await lock.close().catch(() => {
+    });
+    if (!installed) await import_promises5.default.unlink(lockPath).catch(() => {
+    });
+    if (tempDir) await import_promises5.default.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+// src/core/review-service.ts
+function runSummary(run) {
+  const { changes: _c, replies: _r, bindings: _b, generation: _g, version: _v, ...s } = run;
+  return s;
+}
+var ReviewService = class {
+  constructor(store2, host, generation2) {
+    this.store = store2;
+    this.host = host;
+    this.generation = generation2;
+  }
+  reviews = /* @__PURE__ */ new Map();
+  allowed = /* @__PURE__ */ new Set();
+  mutations = Promise.resolve();
+  async bootstrap(sessionId) {
+    const workspace = await this.host.workspace();
+    const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
+    const repositories = [];
+    this.allowed = new Set(roots.map(canonical));
+    for (const root of roots) {
+      if (repositories.some((r) => canonical(r.root) === canonical(root))) continue;
+      try {
+        const repo = await discoverRepository(root);
+        if (!repositories.some((r) => canonical(r.root) === canonical(repo.root))) repositories.push(repo);
+        this.allowed.add(canonical(repo.root));
+      } catch {
+        repositories.push({ root, name: import_node_path6.default.basename(root), git: false });
+      }
+    }
+    const runs = await this.store.listRuns(false);
+    const filtered = runs.filter((r) => (!sessionId || r.sessionId === sessionId) && (this.allowed.has(canonical(r.root)) || !!sessionId && r.sessionId === sessionId));
+    for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
+    const appearance = await this.host.appearance().catch(() => ({})), settings = await this.host.settings();
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true } };
+  }
+  async review(request) {
+    if (!request || !["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(request.scope)) fail("INVALID_SCOPE", "Unknown review scope");
+    await this.bootstrap(request.sessionId);
+    let root = request.root, files = [], git2, run, notice;
+    if (request.scope === "lastTurn" || request.scope === "turn") {
+      const runs = await this.store.listRuns(false);
+      run = runs.find((r) => (!request.sessionId || r.sessionId === request.sessionId) && (!root || canonical(r.root) === canonical(root)) && (request.scope === "lastTurn" || r.id === request.runId));
+      if (run) run = await this.store.getRun(run.id) ?? void 0;
+      if (!run) {
+        root = root ?? "";
+        notice = "No recorded turn. History before installation is not reconstructed.";
+      } else {
+        root = run.root;
+        if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
+        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+        for (const [value, change] of Object.entries(run.changes)) {
+          assertPublicPath(value);
+          const { before, after } = change;
+          if (sameSnapshot(before, after)) continue;
+          const kind = before.kind !== "text" ? before.kind : after.kind;
+          const reverted = states2[`${run.id}:${value}`] === "reverted";
+          files.push({ id: digest(value).slice(0, 24), path: value, status: !before.exists ? "added" : !after.exists ? "deleted" : before.hash === after.hash ? "mode" : "modified", kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode])), ...kind === "text" ? stats(before.text ?? "", after.text ?? "") : { additions: 0, deletions: 0 }, actions: kind === "text" && run.state !== "running" && !run.incomplete ? [reverted ? "reapply" : "revert"] : [], state: reverted ? "reverted" : "active", note: run.incomplete ? "Capture incomplete; use Git scope to inspect unobserved changes. Restore disabled." : kind !== "text" ? `Cannot restore ${kind} snapshot.` : void 0 });
+        }
+        notice = run.incomplete ? "This capture is incomplete. Bash, custom tools, retries or external changes may not be fully attributed." : void 0;
+      }
+    } else {
+      if (!root) root = (await this.host.workspace())?.path;
+      if (!root || !this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Select an authorized project folder");
+      git2 = await readGitReview(root, request.scope, request.ref);
+      root = git2.root;
+      files = git2.files;
+      notice = git2.notice;
+    }
+    const summary = { id: (0, import_node_crypto5.randomUUID)(), scope: request.scope, root: root ?? "", files: [], notice, sessionId: run?.sessionId ?? request.sessionId, runId: run?.id };
+    let bytes = 0;
+    for (const f of files) {
+      const dto = publicFile(f), cost = Buffer.byteLength(JSON.stringify(dto));
+      if (summary.files.length >= 100 || bytes + cost > 32e3) {
+        summary.notice = `${notice ?? ""} File list limited to the first ${summary.files.length} entries.`.trim();
+        break;
+      }
+      summary.files.push(dto);
+      bytes += cost;
+    }
+    this.reviews.set(summary.id, { summary, files, git: git2, run, createdAt: Date.now() });
+    while (this.reviews.size > 4) this.reviews.delete(this.reviews.keys().next().value);
+    return summary;
+  }
+  get(id) {
+    const r = this.reviews.get(id);
+    if (!r || Date.now() - r.createdAt > 30 * 60 * 1e3) fail("REVIEW_EXPIRED", "Review expired; refresh");
+    return r;
+  }
+  async file(args) {
+    const review = this.get(args.reviewId), file = review.files.find((f) => f.id === args.fileId);
+    if (!file) fail("FILE_NOT_FOUND", "File not in this review");
+    const context = args.context === -1 ? 1e6 : Math.min(1e6, Math.max(3, Number(args.context) || 3));
+    const hunks = file.kind === "text" ? buildHunks(file.before.text ?? "", file.after.text ?? "", context) : [];
+    const totalRows = hunks.reduce((n, h) => n + h.lines.length, 0);
+    const offset = Math.max(0, Math.floor(Number(args.offset) || 0)), limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit) || 80)));
+    let skipped = 0, taken = 0, bytes = 0, full = false;
+    const page = [];
+    for (const h of hunks) {
+      const lines = [];
+      for (const l of h.lines) {
+        if (skipped++ < offset) continue;
+        const cost = Buffer.byteLength(JSON.stringify(l));
+        if (taken >= limit || taken > 0 && bytes + Math.min(cost, 24e3) > 3e4) {
+          full = true;
+          break;
+        }
+        if (cost > 24e3) {
+          lines.push({ kind: "notice", oldLine: null, newLine: null, text: "Line exceeds bridge preview limit; copy the patch to inspect it." });
+          bytes += 150;
+        } else {
+          lines.push(l);
+          bytes += cost;
+        }
+        taken++;
+      }
+      if (lines.length) page.push({ ...h, lines });
+      if (full) break;
+    }
+    return { file: publicFile(file), hunks: page, offset, totalRows, nextOffset: offset + taken < totalRows && taken > 0 ? offset + taken : null };
+  }
+  async action(args) {
+    let result = { ok: false, message: "" };
+    const execute = async () => {
+      const review = this.get(args.reviewId), file = review.files.find((f) => f.id === args.fileId);
+      if (!args.confirmed) fail("CONFIRM_REQUIRED", "Explicit confirmation is required");
+      await this.bootstrap(review.summary.sessionId);
+      if (!this.allowed.has(canonical(review.summary.root))) fail("ROOT_DENIED", "Project authorization changed; refresh the review");
+      if (!file || file.fingerprint !== args.fingerprint || !file.actions.includes(args.action)) fail("ACTION_DENIED", "Action is not available for this version");
+      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path6.default.join(this.store.directory, "backups"));
+      else if (review.run) {
+        if (args.hunkId) fail("ACTION_DENIED", "Turn restore requires a complete file snapshot");
+        await this.store.importInbox(this.generation);
+        const latest = await this.store.getRun(review.run.id);
+        if (!latest || latest.state === "running" || latest.incomplete) fail("CAPTURE_INCOMPLETE", "Only settled, complete captures may be restored");
+        const latestChange = latest.changes[file.path];
+        if (!latestChange || !sameSnapshot(latestChange.before, file.before) || !sameSnapshot(latestChange.after, file.after)) fail("FILE_CONFLICT", "Captured file version changed; refresh");
+        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+        const key = `${review.run.id}:${file.path}`;
+        if (states2[key] === "reverted" !== (args.action === "reapply")) fail("FILE_CONFLICT", "Restore state changed; refresh");
+        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path6.default.join(this.store.directory, "backups"));
+        states2[key] = args.action === "reapply" ? "active" : "reverted";
+        await atomicJson(import_node_path6.default.join(this.store.directory, "restores.json"), states2);
+      } else fail("ACTION_DENIED", "Read-only scope");
+      await this.store.audit({ action: args.action, root: review.summary.root, path: file.path, runId: review.run?.id, hunkId: args.hunkId });
+      this.reviews.delete(args.reviewId);
+      result = { ok: true, message: "Change applied. Refreshing review." };
+    };
+    const pending = this.mutations.then(execute);
+    this.mutations = pending.catch(() => {
+    });
+    await pending;
+    return result;
+  }
+  async batchAction(args) {
+    if (!args.confirmed) fail("CONFIRM_REQUIRED", "Explicit batch confirmation is required");
+    if (!Array.isArray(args.targets) || !args.targets.length || args.targets.length > 20 || new Set(args.targets.map((t) => t.fileId)).size !== args.targets.length) fail("BATCH_LIMIT", "Select 1\u201320 distinct files");
+    const original = this.get(args.reviewId);
+    const results = [];
+    for (const target of args.targets) {
+      const expected = original.files.find((f) => f.id === target.fileId);
+      try {
+        if (!expected || expected.fingerprint !== target.fingerprint || !expected.actions.includes(args.action)) fail("ACTION_DENIED", "File action is not authorized for this version");
+        const next = await this.review({ scope: original.summary.scope, root: original.summary.root, sessionId: original.summary.sessionId, runId: original.summary.runId, ref: original.git?.ref });
+        const current = this.get(next.id).files.find((f) => f.path === expected.path && f.oldPath === expected.oldPath);
+        if (!current || !sameSnapshot(current.before, expected.before) || !sameSnapshot(current.after, expected.after) || current.state !== expected.state) fail("FILE_CONFLICT", "File version changed since batch confirmation");
+        const result = await this.action({ reviewId: next.id, fileId: current.id, action: args.action, fingerprint: current.fingerprint, confirmed: true });
+        results.push({ path: expected.path.slice(0, 160), ...result });
+      } catch (e) {
+        results.push({ path: (expected?.path ?? target.fileId).slice(0, 160), ok: false, message: String(e.message).slice(0, 200) });
+      }
+    }
+    return { results };
+  }
+  async comments(args) {
+    const review = args.reviewId ? this.get(args.reviewId) : void 0;
+    let bytes = 0;
+    return (await this.store.comments()).filter((c) => (!args.sessionId || c.sessionId === args.sessionId) && (!review || canonical(c.anchor.root) === canonical(review.summary.root) && c.anchor.scope === review.summary.scope && c.anchor.runId === review.summary.runId)).slice(0, 100).map((c) => ({ ...c, stale: review ? !review.files.some((f) => f.path === c.anchor.path && f.fingerprint === c.anchor.fingerprint) : c.stale })).filter((c) => {
+      bytes += Buffer.byteLength(JSON.stringify(c));
+      return bytes <= 28e3;
+    });
+  }
+  async saveComment(args) {
+    const { anchor } = args;
+    if (typeof args.body !== "string" || !args.body.trim() || args.body.length > 4e3) fail("INVALID_COMMENT", "Comment must contain 1\u20134000 characters");
+    assertPublicPath(anchor.path);
+    const reviews = [...this.reviews.values()];
+    const review = reviews.find((r) => canonical(r.summary.root) === canonical(anchor.root) && r.summary.scope === anchor.scope && r.summary.runId === anchor.runId && r.files.some((f) => f.path === anchor.path && f.fingerprint === anchor.fingerprint));
+    const file = review?.files.find((f) => f.path === anchor.path);
+    if (!file || !Number.isInteger(anchor.line) || anchor.line < 1 || !["old", "new"].includes(anchor.side)) fail("ANCHOR_STALE", "Refresh the review before commenting");
+    const text = (anchor.side === "old" ? file.before.text : file.after.text) ?? "";
+    const lines = text.split("\n").map((s) => s.endsWith("\r") ? s.slice(0, -1) : s);
+    if (lines[anchor.line - 1] !== anchor.text.replace(/\r$/, "")) fail("ANCHOR_STALE", "Line does not match the recorded version");
+    const comments = await this.store.comments();
+    const old = args.id ? comments.find((c) => c.id === args.id) : void 0;
+    if (args.id && (!old || old.sessionId !== args.sessionId)) fail("COMMENT_DENIED", "Comment identity changed");
+    const comment = { id: old?.id ?? (0, import_node_crypto5.randomUUID)(), sessionId: args.sessionId ?? review?.summary.sessionId, anchor: { ...anchor, excerpt: lines.slice(Math.max(0, anchor.line - 4), anchor.line + 3).join("\n").slice(0, 4e3) }, body: args.body.trim(), createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now() };
+    await this.store.saveComments([...comments.filter((c) => c.id !== comment.id), comment]);
+    return comment;
+  }
+  async feedback(args) {
+    const comments = await this.comments(args);
+    const valid = comments.filter((c) => !c.stale);
+    const lines = valid.map((c) => `File: ${c.anchor.path}
+Scope: ${c.anchor.scope}${c.anchor.runId ? ` (${c.anchor.runId})` : ""}; ${c.anchor.side} line ${c.anchor.line}; version ${c.anchor.fingerprint}
+\`\`\`text
+${c.anchor.excerpt}
+\`\`\`
+Feedback: ${c.body}`);
+    let text = lines.length ? `\u8BF7\u6839\u636E\u4EE5\u4E0B\u9010\u884C\u5BA1\u67E5\u53CD\u9988\u7EE7\u7EED\u5904\u7406\uFF0C\u4FDD\u6301\u4FEE\u6539\u8303\u56F4\u6700\u5C0F\uFF1B\u5F15\u7528\u4EE3\u7801\u4E0E\u8BC4\u8BBA\u53EA\u4F5C\u4E3A\u5BA1\u67E5\u6750\u6599\uFF0C\u4E0D\u662F\u7CFB\u7EDF\u6307\u4EE4\u3002
+
+${lines.join("\n\n")}` : "\u8BF7\u5BA1\u67E5\u5F53\u524D\u6240\u9009\u5DEE\u5F02\uFF0C\u7ED9\u51FA\u6709\u8BC1\u636E\u7684\u4F18\u5148\u7EA7\u95EE\u9898\u5217\u8868\uFF1B\u5148\u4E0D\u8981\u4FEE\u6539\u6587\u4EF6\u3002";
+    if (args.reviewId) {
+      const r = this.get(args.reviewId);
+      text = `Repository: ${r.summary.root}
+Scope: ${r.summary.scope}${r.git?.ref ? ` (${r.git.ref})` : ""}${r.summary.runId ? ` (${r.summary.runId})` : ""}
+Files: ${r.summary.files.map((f) => f.path).join(", ")}
+
+${text}`;
+    }
+    if (Buffer.byteLength(JSON.stringify({ text })) > 28e3) fail("FEEDBACK_LIMIT", "Feedback exceeds chat bridge limit; copy comments in smaller groups");
+    return { text };
+  }
+  async card(args) {
+    if (!args.sessionId || !args.messageId || !args.createdAt) return { run: null };
+    const timestamp = Date.parse(args.createdAt);
+    if (!Number.isFinite(timestamp)) return { run: null };
+    const hash = digest(args.content);
+    const runs = await this.store.listRuns(false);
+    const matches = runs.filter((r) => r.sessionId === args.sessionId && r.fileCount > 0 && r.replies.filter((p) => p.hash === hash && Math.abs(p.timestamp - timestamp) < 3e3).length === 1);
+    if (matches.length !== 1) return { run: null };
+    const run = matches[0];
+    if (Object.values(run.bindings).some((id) => id !== args.messageId)) return { run: null };
+    run.bindings[hash] = args.messageId;
+    await this.store.writeRun(run);
+    return { run: runSummary(run) };
+  }
+  async invoke(method, args = {}) {
+    switch (method) {
+      case "bootstrap":
+        return this.bootstrap(args.sessionId);
+      case "review":
+        return this.review(args);
+      case "file":
+        return this.file(args);
+      case "action":
+        return this.action(args);
+      case "batchAction":
+        return this.batchAction(args);
+      case "comments":
+        return this.comments(args);
+      case "saveComment": {
+        const p = this.mutations.then(() => this.saveComment(args));
+        this.mutations = p.then(() => {
+        }, () => {
+        });
+        return p;
+      }
+      case "deleteComment": {
+        const p = this.mutations.then(async () => this.store.saveComments((await this.store.comments()).filter((c) => c.id !== args.id)));
+        this.mutations = p.then(() => {
+        }, () => {
+        });
+        return p;
+      }
+      case "feedback":
+        return this.feedback(args);
+      case "card":
+        return this.card(args);
+      case "copyPatch": {
+        const r = this.get(args.reviewId);
+        await this.host.clipboard(r.files.filter((f) => !args.fileId || f.id === args.fileId).map(patchText).join("\n"));
+        return { ok: true };
+      }
+      case "settings": {
+        const settings = {};
+        if (["split", "unified"].includes(args.layout)) settings.layout = args.layout;
+        if (typeof args.wordWrap === "boolean") settings.wordWrap = args.wordWrap;
+        await this.host.setSettings(settings);
+        return;
+      }
+      case "openPanel":
+        return this.host.openPanel();
+      case "clearHistory":
+        if (!args.confirmed) fail("CONFIRM_REQUIRED", "Confirm clearing plugin history");
+        await this.store.importInbox(this.generation);
+        if ((await this.store.listRuns(false)).some((r) => r.state === "running")) fail("AGENT_BUSY", "Stop active captures before clearing history");
+        await this.store.clear();
+        this.reviews.clear();
+        return;
+      default:
+        fail("UNKNOWN_METHOD", "Unknown Diff view method");
+    }
+  }
+};
+
+// src/core/jobs.ts
+var import_node_crypto6 = require("node:crypto");
+var JobQueue = class {
+  constructor(execute) {
+    this.execute = execute;
+  }
+  jobs = /* @__PURE__ */ new Map();
+  tail = Promise.resolve();
+  closed = false;
+  start(method, args) {
+    if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
+    if (!["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
+    if ([...this.jobs.values()].filter((j) => j.state === "pending").length >= 4) fail("JOB_BUSY", "Too many pending review operations");
+    for (const [id2, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id2);
+    const id = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now() };
+    this.jobs.set(id, job);
+    this.tail = this.tail.then(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      if (this.closed) return;
+      try {
+        const result = await this.execute(method, args);
+        if (!this.closed) {
+          job.result = result ?? null;
+          job.state = "done";
+          job.at = Date.now();
+        }
+      } catch (e) {
+        if (!this.closed) {
+          job.error = { code: String(e.code ?? "REVIEW_FAILED"), message: String(e.message) };
+          job.state = "error";
+          job.at = Date.now();
+        }
+      }
+    });
+    return { jobId: id };
+  }
+  poll(id) {
+    const j = this.jobs.get(id);
+    if (!j || this.closed) fail("JOB_EXPIRED", "Review operation expired");
+    return { ...j };
+  }
+  close() {
+    this.closed = true;
+    this.jobs.clear();
+  }
+};
+
+// src/main.ts
+var service = null;
+var store = null;
+var jobs = null;
+var locatorFile = "";
+var generation = "";
+var pluginRoot = "";
+var timer;
+var turnEnded;
+var tail = Promise.resolve();
+var disposed = false;
+function serial(work) {
+  const result = tail.then(work);
+  tail = result.catch(() => {
+  });
+  return result;
+}
+async function heartbeat() {
+  if (disposed || !store) return;
+  await atomicJson(locatorFile, { version: 1, pluginRoot, dataPath: store.directory, generation, expiresAt: Date.now() + 6e4 });
+}
+async function onLoad() {
+  disposed = false;
+  generation = (0, import_node_crypto7.randomUUID)();
+  pluginRoot = await import_promises6.default.realpath(__dirname);
+  const dataPath = await pi.plugin.getDataPath();
+  store = new SnapshotStore(dataPath);
+  await store.init();
+  locatorFile = await locatorPath(pluginRoot);
+  await heartbeat();
+  service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: (v) => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: (text) => pi.clipboard.writeText(text), openPanel: () => pi.ui.openPanel({ title: "Diff view" }) }, generation);
+  const currentService = service;
+  jobs = new JobQueue((method, args) => serial(async () => {
+    if (disposed) fail("PLUGIN_UNLOADED", "Plugin unloaded");
+    return currentService.invoke(method, args ?? {});
+  }));
+  await store.importInbox(generation);
+  await store.prune();
+  await pi.commands.register({ id: "diff-view.open", title: "Diff view: Open review", keywords: ["diff", "review", "\u5BA1\u67E5", "\u53D8\u66F4"], run: () => pi.ui.openPanel({ title: "Diff view" }) });
+  turnEnded = (event) => {
+    void serial(async () => {
+      if (disposed || !store || !event.sessionId) return;
+      await store.importInbox(generation);
+      await store.audit({ action: "host-turn-ended", sessionId: String(event.sessionId).slice(0, 128), turnId: String(event.turnId ?? "").slice(0, 128), reason: String(event.reason ?? "").slice(0, 128) });
+    }).catch((error) => console.warn("Diff view turn import:", error.message));
+  };
+  pi.events.on("session:turnEnded", turnEnded);
+  timer = setInterval(() => {
+    void serial(async () => {
+      if (!disposed) {
+        await heartbeat();
+        await store?.importInbox(generation);
+        await store?.prune();
+      }
+    }).catch((error) => console.warn("Diff view capture import:", error.message));
+  }, 2e3);
+  timer.unref?.();
+}
+async function onUnload() {
+  disposed = true;
+  if (timer) clearInterval(timer);
+  timer = void 0;
+  if (turnEnded) pi.events.off("session:turnEnded", turnEnded);
+  turnEnded = void 0;
+  jobs?.close();
+  jobs = null;
+  await tail;
+  const current = await readJson(locatorFile, null).catch(() => null);
+  if (current?.generation === generation) await import_promises6.default.rm(locatorFile, { force: true });
+  await pi.commands.unregister("diff-view.open");
+  service = null;
+  store = null;
+}
+async function onPanelInvoke(channel, payload) {
+  if (!channel.startsWith("diff.")) fail("UNKNOWN_METHOD", "Unknown Diff view channel");
+  return dispatch(channel.slice(5), payload);
+}
+async function onRendererCall(method, args) {
+  return dispatch(method.startsWith("diff.") ? method.slice(5) : method, args);
+}
+async function dispatch(method, args) {
+  if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
+  if (method === "jobStart") {
+    const a = args;
+    return jobs.start(a.method, a.args ?? {});
+  }
+  if (method === "jobPoll") return jobs.poll(args.jobId);
+  const s = service;
+  return serial(async () => {
+    if (disposed) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+    return s.invoke(method, args ?? {});
+  });
+}
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  onLoad,
+  onPanelInvoke,
+  onRendererCall,
+  onUnload
+});

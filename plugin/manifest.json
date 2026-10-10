@@ -3,31 +3,28 @@
   "id": "local.diff-view",
   "name": "Diff view",
   "version": "0.1.0",
-  "description": "Diff view — generated from the panel-basic template.",
+  "description": "Codex 风格的本地差异审查：Git 范围、轮次快照、逐行反馈和有冲突保护的暂存/撤销。",
+  "author": "new-Beginner",
+  "license": "MIT",
   "main": "main.js",
-  "ui": {
-    "panel": "renderer/index.html",
-    "title": "Diff view"
-  },
+  "engines": { "piDesktop": ">=0.17.0" },
+  "activationEvents": ["onStartup", "onCommand:diff-view.open"],
+  "permissions": ["ui.panel", "ui.view", "agent.extension", "renderer.extension", "clipboard.write"],
+  "ui": { "panel": "views/index.html", "title": "Diff view", "width": 1180, "height": 800 },
+  "renderer": "renderer/index.mjs",
+  "rendererActions": ["plugin.call", "composer.insertText", "composer.readDraft"],
+  "rendererCallMethods": ["jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "openPanel"],
   "contributes": {
-    "commands": [
-      {
-        "id": "plugin.open",
-        "title": "Diff view: Open Panel",
-        "keywords": [
-          "plugin"
-        ]
-      }
+    "commands": [{ "id": "diff-view.open", "title": "Diff view: Open review", "keywords": ["diff", "review", "变更", "审查"] }],
+    "views": [{ "id": "review", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "icon": "diff", "entry": "views/index.html", "order": 45 }],
+    "agentExtensions": ["agent/index.mjs"],
+    "settings": [
+      { "key": "layout", "type": "string", "default": "unified", "title": "Diff layout (unified / split)" },
+      { "key": "wordWrap", "type": "boolean", "default": false, "title": "Wrap long lines" }
     ]
   },
-  "permissions": [
-    "ui.panel"
-  ],
-  "engines": {
-    "piDesktop": ">=0.1.0"
-  },
-  "activationEvents": [
-    "onCommand:plugin.open",
-    "onStartup"
-  ]
+  "safetyNotes": "可信本地插件：agent.extension 在 Agent 进程运行、renderer.extension 在宿主界面运行，都没有 OS 沙箱。快照、Git 索引暂存和撤销使用插件内的 Node/Git 适配器，不受宿主 fs 网关逐次约束。插件自行限制在授权项目根/已绑定采集根内，拒绝凭据路径、.. 和符号链接逃逸。恢复先校验内容指纹、保留恢复副本并要求确认。无网络、模型调用、自动发送、提交或推送；历史与评论存放插件私有目录。Agent/main 桥接只在用户目录 .pi-diff-view/locators 写入本插件实例定位信息，不读取宿主数据库。",
+  "i18n": {
+    "en": { "description": "Codex-style local change review: Git scopes, captured turns, inline feedback, staging and conflict-protected restore.", "safetyNotes": "Trusted unsandboxed Agent and renderer extensions. Node/Git adapters perform snapshots, index writes and guarded restores outside the host fs gateway. Project-root containment, credential/symlink rejection, content checks, backups and user confirmation are enforced by this plugin. No network, paid model calls, auto-send, commit or push. Private history plus a plugin-only locator under ~/.pi-diff-view. No host database access." }
+  }
 }

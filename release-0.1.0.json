@@ -1,0 +1,33 @@
+{
+  "id": "local.diff-view",
+  "version": "0.1.0",
+  "targetHost": "PI-Desktop 0.17.0",
+  "package": "plugin/dist/local.diff-view-0.1.0.piplug",
+  "bytes": 1794011,
+  "files": 20,
+  "sha256": "48d0bc50a9cde3b0275fc10b6d4056f44e6f0d86c174e1ec5c6a26c563029bfb",
+  "packager": "official PluginPack",
+  "archiveVerification": {
+    "storeOnly": true,
+    "crcPassed": true,
+    "matchesBuiltFiles": true,
+    "noSymlinks": true,
+    "noDependenciesTestsSnapshots": true
+  },
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed",
+    "backendTests": { "passed": 60, "skipped": 1, "skipReason": "POSIX FIFO on Windows" },
+    "chromiumTests": { "passed": 17, "backend": "mocked, not native PI-Desktop" },
+    "builtMainMockLifecycle": "passed",
+    "pluginCheck": { "errors": 0, "warnings": 0 },
+    "nativeHostAcceptance": "not verified; expanded permissions require user's explicit reload/approval"
+  },
+  "localCheckpoints": [
+    { "commit": "4bfcc86", "stage": "official scaffold and development foundation" },
+    { "commit": "38ed776", "stage": "Git review and captured turns with guarded operations" },
+    { "commit": "425aeff", "stage": "UI, inline feedback, asynchronous jobs and safety regressions" }
+  ],
+  "deliveryCommit": "git log --oneline -1",
+  "verificationDocument": "docs/verification.md"
+}
