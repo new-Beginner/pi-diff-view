@@ -56,6 +56,7 @@ export async function applyGitAction(review: GitReview, fileId: string, action: 
   if (file.oldPath && hunkId) fail('ACTION_DENIED', 'Rename actions require the whole file');
   if (action === 'revert' && !backupDir) fail('BACKUP_REQUIRED', 'A recovery backup directory is required');
   const desired = desiredSnapshot(file, action, hunkId);
+  if (action === 'revert' && desired.exists && state.working.get(file.path)?.exists) desired.mode = state.working.get(file.path)!.mode; // Content restore never broadens POSIX permissions.
   // Cooperative Git writers cannot change the real index while we validate/build/install.
   const lockPath = `${state.indexPath}.lock`;
   let lock: fs.FileHandle;

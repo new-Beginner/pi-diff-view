@@ -30,6 +30,22 @@ function validId(id: string): void { if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) fail(
 export class SnapshotStore {
   constructor(readonly directory: string) {}
   async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'backups']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
+  async captureLock<T>(work: () => Promise<T>): Promise<T> {
+    const lock = path.join(this.directory, 'capture.lock'); let handle: fs.FileHandle | undefined;
+    for (let attempt = 0; attempt < 80 && !handle; attempt++) {
+      try { handle = await fs.open(lock, 'wx', 0o600); await handle.writeFile(JSON.stringify({ pid: process.pid })); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const owner = await readJson<{ pid?: number } | null>(lock, null).catch(() => null);
+        if (owner?.pid && owner.pid !== process.pid) {
+          try { process.kill(owner.pid, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') await fs.rm(lock, { force: true }); }
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    if (!handle) fail('STORE_BUSY', 'Capture store is busy; retry after active Agents stop');
+    try { return await work(); } finally { await handle.close(); await fs.rm(lock, { force: true }); }
+  }
   async saveBlob(snapshot: FileSnapshot): Promise<FileSnapshot> {
     if (snapshot.kind === 'text' && snapshot.exists && snapshot.text !== null) {
       if (!/^[a-f0-9]{64}$/.test(snapshot.hash) || digest(snapshot.text) !== snapshot.hash) fail('SNAPSHOT_INVALID', 'Snapshot content hash does not match');
@@ -66,10 +82,13 @@ export class SnapshotStore {
     } catch { return { ...snapshot, kind: 'unavailable', text: null }; }
   }
   async writeRun(run: CaptureRun, inbox = false): Promise<void> {
-    validId(run.id); const changes: CaptureRun['changes'] = {};
-    if (Object.keys(run.changes).length > 256) fail('STORE_LIMIT', 'Turn exceeds 256 captured files');
-    for (const [p, c] of Object.entries(run.changes)) changes[p] = { before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
-    await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, changes });
+    const save = async () => {
+      validId(run.id); const changes: CaptureRun['changes'] = {};
+      if (Object.keys(run.changes).length > 256) fail('STORE_LIMIT', 'Turn exceeds 256 captured files');
+      for (const [p, c] of Object.entries(run.changes)) changes[p] = { before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, changes });
+    };
+    if (inbox) await this.captureLock(save); else await save();
   }
   async getRun(id: string, inbox = false, hydrate = true): Promise<CaptureRun | null> {
     validId(id);
@@ -79,6 +98,7 @@ export class SnapshotStore {
     return run;
   }
   async importInbox(generation: string): Promise<void> {
+    await this.captureLock(async () => {
     const entries = (await fs.readdir(path.join(this.directory, 'inbox'))).filter(e => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
     for (const entry of entries) {
       const id = entry.slice(0, -5);
@@ -93,6 +113,7 @@ export class SnapshotStore {
         if (run.state !== 'running') await fs.rm(path.join(this.directory, 'inbox', entry), { force: true });
       } catch { /* A corrupt capture is isolated, never imported as trusted history. */ }
     }
+    });
   }
   async listRuns(hydrate = true): Promise<CaptureRun[]> {
     const files = (await fs.readdir(path.join(this.directory, 'runs'))).filter(e => /^[\w-]+\.json$/.test(e));
@@ -101,7 +122,7 @@ export class SnapshotStore {
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
   async comments(): Promise<ReviewComment[]> { return readJson<ReviewComment[]>(path.join(this.directory, 'comments.json'), []); }
-  async saveComments(comments: ReviewComment[]): Promise<void> { if (comments.length > 1000) fail('COMMENT_LIMIT', 'Comment limit reached'); await atomicJson(path.join(this.directory, 'comments.json'), comments); }
+  async saveComments(comments: ReviewComment[]): Promise<void> { if (comments.length > 1000 || Buffer.byteLength(JSON.stringify(comments)) > 16 * 1024 * 1024) fail('COMMENT_LIMIT', 'Comment count or byte limit reached'); await atomicJson(path.join(this.directory, 'comments.json'), comments); }
   async audit(event: unknown): Promise<void> {
     const file = path.join(this.directory, 'actions.jsonl');
     const size = (await fs.stat(file).catch(() => ({ size: 0 }))).size;
@@ -119,11 +140,18 @@ export class SnapshotStore {
     // Do not GC blobs while a capture writer is live. A history reset is the safe collection point.
   }
   async clear(): Promise<void> {
-    for (const sub of ['runs', 'inbox', 'blobs', 'backups']) {
-      const dir = path.join(this.directory, sub);
-      if (!inside(this.directory, dir)) fail('STORE_ESCAPE', 'Invalid store path');
-      for (const file of await fs.readdir(dir)) { const target = path.join(dir, file); const s = await fs.lstat(target); if (s.isFile() && !s.isSymbolicLink()) await fs.unlink(target); }
-    }
-    await this.saveComments([]);
+    await this.captureLock(async () => {
+      for (const inbox of [false, true]) for (const file of await fs.readdir(path.join(this.directory, inbox ? 'inbox' : 'runs'))) {
+        if (!/^[\w-]+\.json$/.test(file)) continue;
+        const run = await this.getRun(file.slice(0, -5), inbox, false);
+        if (run?.state === 'running') fail('AGENT_BUSY', 'Stop active captures before clearing history');
+      }
+      for (const sub of ['runs', 'inbox', 'blobs', 'backups']) {
+        const dir = path.join(this.directory, sub);
+        if (!inside(this.directory, dir)) fail('STORE_ESCAPE', 'Invalid store path');
+        for (const file of await fs.readdir(dir)) { const target = path.join(dir, file); const s = await fs.lstat(target); if (s.isFile() && !s.isSymbolicLink()) await fs.unlink(target); }
+      }
+      await this.saveComments([]); await fs.rm(path.join(this.directory, 'restores.json'), { force: true });
+    });
   }
 }

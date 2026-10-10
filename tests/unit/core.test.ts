@@ -25,4 +25,10 @@ describe('real text diffs', () => {
     for (const p of ['../out', '.env.production', 'src/private.pem', '.git/config', 'a/.ssh/key']) expect(() => assertPublicPath(p)).toThrow();
     expect(() => assertPublicPath('src/中文 file.ts')).not.toThrow();
   });
+  it('handles empty files, full real context and bounded long-line inline comparison', () => {
+    expect(buildHunks('', '')).toEqual([]); expect(buildHunks('old\n', '')[0].lines.find(l => l.kind === 'del')?.oldLine).toBe(1);
+    const before = Array.from({ length: 20 }, (_, i) => `${i}\n`).join(''); const after = before.replace('10\n', 'ten\n');
+    expect(buildHunks(before, after, 100).flatMap(h => h.lines).filter(l => l.kind === 'context')).toHaveLength(19);
+    const long = 'x'.repeat(100000); expect(inlineParts(long, long + 'y').next).toEqual([{ text: long + 'y', changed: false }]);
+  });
 });

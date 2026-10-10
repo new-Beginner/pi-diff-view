@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { MAX_TEXT_BYTES, type FileSnapshot } from './contracts';
@@ -49,7 +50,9 @@ export async function readSnapshot(root: string, value: string): Promise<FileSna
   const target = await safeResolve(root, value);
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(target, 'r');
+    const initial = await fs.lstat(target);
+    if (!initial.isFile() || initial.isSymbolicLink()) fail('NOT_FILE', 'Only regular files can be captured');
+    handle = await fs.open(target, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NONBLOCK | constants.O_NOFOLLOW));
     const stat = await handle.stat();
     if (!stat.isFile()) fail('NOT_FILE', 'Only regular files can be captured');
     if (stat.size > MAX_TEXT_BYTES) return { exists: true, text: null, hash: `large:${stat.size}:${stat.mtimeMs}`, size: stat.size, mode: stat.mode, kind: 'large' };

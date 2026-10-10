@@ -49,4 +49,18 @@ describe('review service', () => {
   await expect(service.action({ reviewId: review.id, fileId: file.id, action: 'revert', fingerprint: file.fingerprint, confirmed: true })).rejects.toThrow('complete');
   expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('after\n');
  });
+ it('reports each batch file independently and does not overwrite a conflicting file', async () => {
+  await fs.writeFile(path.join(root, 'b.txt'), 'after-b\n'); const after = await readSnapshot(root, 'b.txt'); run.changes['b.txt'] = { before: snapshotOfText('before-b\n', after.mode), after }; run.fileCount = 2; await store.writeRun(run);
+  const review = await turn(); await fs.writeFile(path.join(root, 'a.txt'), 'user changed');
+  const args = { reviewId: review.id, action: 'revert' as const, confirmed: true, targets: review.files.map(f => ({ fileId: f.id, fingerprint: f.fingerprint })) };
+  await expect(service.batchAction({ ...args, confirmed: false })).rejects.toThrow('confirmation');
+  const result = await service.batchAction(args); expect(result.results.map(r => r.ok)).toEqual([false, true]);
+  expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('user changed'); expect(await fs.readFile(path.join(root, 'b.txt'), 'utf8')).toBe('before-b\n');
+ });
+ it('never supplements recorded context with current working-tree lines', async () => {
+  run.changes['a.txt'].before = snapshotOfText('one\nbefore\nthree\n'); run.changes['a.txt'].after = snapshotOfText('one\nafter\nthree\n'); await store.writeRun(run);
+  await fs.writeFile(path.join(root, 'a.txt'), 'fabricated live context'); const review = await turn();
+  const detail = await service.file({ reviewId: review.id, fileId: review.files[0].id, context: -1 }); expect(detail.hunks.flatMap(h => h.lines).map(l => l.text).join('\n')).toContain('three');
+  expect(JSON.stringify(detail)).not.toContain('fabricated');
+ });
 });
