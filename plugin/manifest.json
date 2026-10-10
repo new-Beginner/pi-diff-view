@@ -13,18 +13,19 @@
   "ui": { "panel": "views/index.html", "title": "Diff view", "width": 1180, "height": 800 },
   "renderer": "renderer/index.mjs",
   "rendererActions": ["plugin.call", "composer.insertText", "composer.readDraft"],
-  "rendererCallMethods": ["jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "openPanel"],
+  "rendererCallMethods": ["nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "openPanel"],
   "contributes": {
     "commands": [{ "id": "diff-view.open", "title": "Diff view: Open review", "keywords": ["diff", "review", "变更", "审查"] }],
     "views": [{ "id": "review", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "icon": "diff", "entry": "views/index.html", "order": 45 }],
     "agentExtensions": ["agent/index.mjs"],
     "settings": [
       { "key": "layout", "type": "string", "default": "unified", "title": "Diff layout (unified / split)" },
-      { "key": "wordWrap", "type": "boolean", "default": false, "title": "Wrap long lines" }
+      { "key": "wordWrap", "type": "boolean", "default": false, "title": "Wrap long lines" },
+      { "key": "nativePreflight", "type": "boolean", "default": false, "title": "Native review preflight (experimental 0.17.0 build only)" }
     ]
   },
-  "safetyNotes": "可信本地插件：agent.extension 在 Agent 进程运行、renderer.extension 在宿主界面运行，都没有 OS 沙箱。快照、Git 索引暂存和撤销使用插件内的 Node/Git 适配器，不受宿主 fs 网关逐次约束。插件自行限制在授权项目根/已绑定采集根内，拒绝凭据路径、.. 和符号链接逃逸。恢复先校验内容指纹、保留恢复副本并要求确认。无网络、模型调用、自动发送、提交或推送；历史与评论存放插件私有目录。Agent/main 桥接只在用户目录 .pi-diff-view/locators 写入本插件实例定位信息，不读取宿主数据库。",
+  "safetyNotes": "可信本地插件：agent.extension 在 Agent 进程运行、renderer.extension 在宿主界面运行，都没有 OS 沙箱。快照、Git 索引暂存和撤销使用插件内的 Node/Git 适配器，不受宿主 fs 网关逐次约束。插件自行限制在授权项目根/已绑定采集根内，拒绝凭据路径、.. 和符号链接逃逸。恢复先校验内容指纹、保留恢复副本并要求确认。无网络、模型调用、自动发送、提交或推送；历史与评论存放插件私有目录。Agent/main 桥接只在用户目录 .pi-diff-view/locators 写入本插件实例定位信息，不读取宿主数据库。实验性原生预检仅支持已核对的 0.17.0 构建：只读三个固定宿主资源核验哈希；用户按钮调用宿主内部工作面板/原生变更组件，DOM 操作仅限审阅内的 diff 展开和插件拥有区域。不修改安装文件、真实工具记录或数据库。宿主升级会拒绝接入；演示只读，不启用原生回退。",
   "i18n": {
-    "en": { "description": "Codex-style local change review: Git scopes, captured turns, inline feedback, staging and conflict-protected restore.", "safetyNotes": "Trusted unsandboxed Agent and renderer extensions. Node/Git adapters perform snapshots, index writes and guarded restores outside the host fs gateway. Project-root containment, credential/symlink rejection, content checks, backups and user confirmation are enforced by this plugin. No network, paid model calls, auto-send, commit or push. Private history plus a plugin-only locator under ~/.pi-diff-view. No host database access." }
+    "en": { "description": "Codex-style local change review: Git scopes, captured turns, inline feedback, staging and conflict-protected restore.", "safetyNotes": "Trusted unsandboxed Agent and renderer extensions. Node/Git adapters work outside the host fs gateway. No network, paid model calls, auto-send, commit/push or host database access. Experimental native preflight pins ONE inspected 0.17.0 build and reads three fixed host assets only to hash them. User clicks call internal work-panel/component APIs and bounded diff disclosure DOM; plugin-owned read-only display only. No installation, transcript or database mutation. Unknown builds are rejected." }
   }
 }

@@ -29,7 +29,7 @@ export class ReviewService {
     const filtered = runs.filter(r => (!sessionId || r.sessionId === sessionId) && (this.allowed.has(canonical(r.root)) || (!!sessionId && r.sessionId === sessionId)));
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string })), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   async review(request: ReviewRequest): Promise<ReviewSummary> {
     if (!request || !['unstaged', 'staged', 'commit', 'branch', 'lastTurn', 'turn'].includes(request.scope)) fail('INVALID_SCOPE', 'Unknown review scope');

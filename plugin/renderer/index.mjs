@@ -1564,7 +1564,7 @@ var require_core = __commonJS({
 
 // src/renderer/index.tsx
 import { useEffect as useEffect2, useRef as useRef2, useState as useState2 } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot as createRoot2 } from "react-dom/client";
 
 // src/view/ReviewApp.tsx
 import { useCallback, useEffect, useMemo as useMemo2, useRef, useState } from "react";
@@ -7067,6 +7067,236 @@ var styles_default = String.raw`
 @keyframes dv-reveal{from{opacity:.5;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}@media(max-width:720px){.dv-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:160px minmax(0,1fr)}.dv-files{border-right:0;border-bottom:1px solid var(--dv-border)}.dv-file-search{display:flex;align-items:center;padding:8px 12px}.dv-file-search input{flex:1;width:100%}.dv-file-list{display:flex;align-items:stretch;overflow:auto}.dv-app .dv-file{width:220px;flex:0 0 220px;border-right:1px solid var(--dv-border)}.dv-top{padding:8px 12px}.dv-heading{margin-bottom:8px}.dv-repo-toolbar>label{flex:1 1 100%}.dv-repo-toolbar>label select{flex:1}.dv-heading .dv-toolbar label{font-size:12px}.dv-row{grid-template-columns:34px 34px 16px minmax(0,1fr)}.dv-side{grid-template-columns:34px 16px minmax(0,1fr)}.dv-wrap .dv-code{font-size:11px}}@media(prefers-reduced-motion:reduce){.dv-hunk{animation:none}}
 `;
 
+// src/renderer/native-review-adapter.ts
+import React3 from "react";
+import { createRoot } from "react-dom/client";
+
+// src/core/native-build-contract.ts
+var NATIVE_BUILD = {
+  version: "0.17.0",
+  assets: {
+    main: { name: "index-DKEhNN1e.js", sha256: "f89d7fd4d428fc8ece04a65a7021af4983aa8ede1349eeddbe743f3865380e6b" },
+    transcript: { name: "use-transcript-view-BZJWhb9_.js", sha256: "92c227ce4c98bdeacc676163d6e1f0065f01c2d03f142122e86017d7c5cb34e4" },
+    panel: { name: "WorkPanel-C3oPGQMI.js", sha256: "6621ca03f19b3ccbf78777e7c05affaf79502facd356e9e77da41013508b8a79" }
+  }
+};
+function matchesNativeBuild(version, hashes) {
+  return version === NATIVE_BUILD.version && Object.values(NATIVE_BUILD.assets).every((asset) => hashes[asset.name] === asset.sha256);
+}
+
+// src/renderer/native-review-adapter.ts
+var NativeReviewError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+};
+function denied(code, message) {
+  throw new NativeReviewError(code, message);
+}
+function pinnedModuleUrls(documentUrl, scriptUrls) {
+  const page = new URL(documentUrl);
+  if (page.protocol !== "file:" || !/\/app\.asar\/out\/renderer\/index\.html$/.test(page.pathname)) denied("NATIVE_ORIGIN", "Not the inspected native renderer document");
+  const main = new URL(`assets/${NATIVE_BUILD.assets.main.name}`, page).href;
+  if (scriptUrls.filter((url) => new URL(url, page).href === main).length !== 1) denied("NATIVE_ENTRY", "Pinned main module is not the document entry");
+  return { main, transcript: new URL(`assets/${NATIVE_BUILD.assets.transcript.name}`, page).href };
+}
+async function loadPinnedModules() {
+  const scripts = Array.from(document.querySelectorAll('script[type="module"][src]')).map((script) => script.src);
+  const urls = pinnedModuleUrls(document.location.href, scripts);
+  const main = await import(
+    /* @vite-ignore */
+    urls.main
+  );
+  const transcript = await import(
+    /* @vite-ignore */
+    urls.transcript
+  );
+  return { store: main.R, parse: main.bp, records: main.au, tab: main.V, component: transcript.R, hostReact: main.r };
+}
+function nativeDisplayDto(presentation) {
+  if (!presentation.id || !presentation.path || presentation.path.length > 4096 || presentation.hunks.length > 20 || presentation.hunks.reduce((n, h) => n + h.lines.length, 0) > 100 || !Number.isSafeInteger(presentation.additions) || presentation.additions < 0 || !Number.isSafeInteger(presentation.deletions) || presentation.deletions < 0) denied("NATIVE_DISPLAY_LIMIT", "Invalid or oversized native presentation");
+  const dto = {
+    id: `diff-view-display:${presentation.id}`,
+    role: "tool",
+    toolName: "Write",
+    toolStatus: "success",
+    // root is a rendering discriminator required by the internal component, NOT an authorization claim.
+    toolResult: { details: { root: "workspace", pluginPresentation: { owner: "local.diff-view", origin: presentation.origin, demo: presentation.demo === true }, review: { version: 1, snapshotId: `diff-view-display:${presentation.id}`, messageId: `diff-view-display:${presentation.id}`, path: presentation.path, operation: "write", status: "modified", state: "active", additions: presentation.additions, deletions: presentation.deletions, hunks: presentation.hunks, reversible: false } } }
+  };
+  if (new TextEncoder().encode(JSON.stringify(dto)).length > 3e4) denied("NATIVE_DISPLAY_LIMIT", "Native display exceeds 30 KiB");
+  return dto;
+}
+function createNativeReviewAdapter(options) {
+  class NativeDisplayBoundary extends React3.Component {
+    state = { failed: false };
+    static getDerivedStateFromError() {
+      return { failed: true };
+    }
+    componentDidCatch(error) {
+      this.props.onError(error);
+    }
+    render() {
+      return this.state.failed ? React3.createElement("p", { role: "alert" }, "Native component failed") : this.props.children;
+    }
+  }
+  let closed = false, modules, pending;
+  let mount;
+  const unmount = () => {
+    const current = mount;
+    mount = void 0;
+    if (current) {
+      current.stop();
+      current.root.unmount();
+      current.element.remove();
+    }
+  };
+  let probing = false;
+  const alive = () => {
+    if (closed) denied("NATIVE_UNLOADED", "Native adapter unloaded");
+  };
+  const inspect = async () => {
+    alive();
+    if (modules) return modules;
+    if (!pending) pending = (async () => {
+      const info = await options.info();
+      alive();
+      if (!info.supported || !matchesNativeBuild(info.version, info.hashes)) denied("NATIVE_BUILD", info.reason ?? "Host version/build is not supported");
+      const result = await (options.load ?? loadPinnedModules)();
+      alive();
+      if (typeof result.store?.getState !== "function" || typeof result.store?.subscribe !== "function" || typeof result.parse !== "function" || typeof result.records !== "function" || typeof result.tab !== "function" || !result.component || result.hostReact?.createElement !== React3.createElement || result.hostReact?.useState !== React3.useState) denied("NATIVE_CONTRACT", "Native exports or React identity changed");
+      const state = result.store.getState();
+      if (typeof state.openWorkPanelTabForSession !== "function" || !Array.isArray(state.messages) || result.tab("review").kind !== "review" || result.tab("review").id !== "review") denied("NATIVE_CONTRACT", "Native work-panel contract changed");
+      modules = result;
+      return result;
+    })();
+    return pending;
+  };
+  const guard = (sessionId, native) => {
+    alive();
+    const state = native.store.getState();
+    if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied("NATIVE_SESSION", "Session changed; no old-session review was opened");
+    return state;
+  };
+  const isReview = (sessionId, native) => {
+    const s = native.store.getState();
+    return !closed && s.activeSessionId === sessionId && !s.selectingSessionId && s.workPanelOpen && s.activeWorkPanelTabId === "review";
+  };
+  const pane = () => document.querySelector('#work-panel-surface-review.work-panel-tabpane[role="tabpanel"]');
+  const wait = async (sessionId, native, predicate) => {
+    const end = Date.now() + 2e3;
+    while (Date.now() < end) {
+      guard(sessionId, native);
+      if (!isReview(sessionId, native)) denied("NATIVE_CLOSED", "Review tab was closed or changed");
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    denied("NATIVE_SURFACE", "Expected native review surface was not rendered");
+  };
+  const locate = (native, reference, sessionId) => {
+    const state = guard(sessionId, native);
+    const records = native.records(state.messages), index = records.findIndex((record) => record.change.snapshotId === reference.snapshotId && record.change.messageId === reference.messageId && record.change.path === reference.path);
+    if (index < 0 || records.filter((record) => record.change.snapshotId === reference.snapshotId).length !== 1) denied("NATIVE_RECORD", "Native snapshot is missing or ambiguous; nothing was guessed");
+    const headers = pane()?.querySelectorAll(".review-scroll > section.review-change-card > button.review-change-card-header");
+    const header = headers?.[index];
+    if (!header || header.querySelector(".review-change-card-path")?.getAttribute("title") !== reference.path) denied("NATIVE_ANCHOR", "Native snapshot/DOM order no longer matches this build");
+    if (header.getAttribute("aria-expanded") === "false") header.click();
+    header.scrollIntoView({ block: "nearest" });
+    return header;
+  };
+  const show = async (native, sessionId, presentation) => {
+    guard(sessionId, native);
+    unmount();
+    const surface = pane();
+    if (!surface || !isReview(sessionId, native)) denied("NATIVE_SURFACE", "Native review tab is not visible");
+    const scroll = surface.querySelector(".review-scroll");
+    if (!scroll) denied("NATIVE_SURFACE", "Pinned native review list is missing");
+    const message = nativeDisplayDto(presentation), parsed = native.parse(message);
+    if (!parsed || parsed.snapshotId !== `diff-view-display:${presentation.id}` || parsed.path !== presentation.path) denied("NATIVE_CONTRACT", "Native parser rejected isolated display DTO");
+    const element = document.createElement("section");
+    element.dataset.diffViewNativeSupplement = presentation.id;
+    element.style.cssText = "padding:12px;border-top:1px solid color-mix(in srgb,currentColor 14%,transparent);max-height:320px;overflow:auto;min-height:64px";
+    scroll.append(element);
+    const root = createRoot(element);
+    let stopped = false;
+    let renderError;
+    const unsubscribe = native.store.subscribe(() => {
+      if (!isReview(sessionId, native)) unmount();
+    });
+    const observer = new MutationObserver(() => {
+      if (!element.isConnected || !isReview(sessionId, native)) unmount();
+    });
+    observer.observe(surface.parentElement ?? surface, { childList: true, subtree: true });
+    const stop = () => {
+      if (!stopped) {
+        stopped = true;
+        unsubscribe();
+        observer.disconnect();
+      }
+    };
+    mount = { element, root, stop };
+    root.render(React3.createElement(
+      React3.Fragment,
+      null,
+      React3.createElement("p", null, presentation.demo ? "\u5DE5\u4F5C\u533A\u5916\u6587\u4EF6\u6F14\u793A / External-file demo \u2014 \u4EC5\u9A8C\u8BC1\u539F\u751F\u7EC4\u4EF6\uFF0C\u4E0D\u662F\u804A\u5929\u8BB0\u5F55\u6216\u771F\u5B9E\u91C7\u96C6 / not a transcript record or capture" : `\u63D2\u4EF6\u8BB0\u5F55 / Plugin capture \u2014 ${presentation.origin === "external" ? "\u5DE5\u4F5C\u533A\u5916 / outside workspace" : "workspace"}`),
+      React3.createElement(NativeDisplayBoundary, { onError: (error) => {
+        renderError = error;
+      }, children: React3.createElement(native.component, { message, compact: true }) }),
+      React3.createElement("button", { type: "button", onClick: unmount }, "\u79FB\u9664\u6F14\u793A / Remove display")
+    ));
+    try {
+      await wait(sessionId, native, () => {
+        if (renderError) denied("NATIVE_RENDER", `Native component failed: ${renderError.message.slice(0, 200)}`);
+        return !!element.querySelector("button.review-change-card-header");
+      });
+      const header = element.querySelector("button.review-change-card-header");
+      if (header.getAttribute("aria-expanded") === "false") header.click();
+      await wait(sessionId, native, () => {
+        if (renderError) denied("NATIVE_RENDER", `Native component failed: ${renderError.message.slice(0, 200)}`);
+        return !!element.querySelector(".review-change-diff");
+      });
+      element.scrollIntoView({ block: "nearest" });
+      await wait(sessionId, native, () => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== "hidden";
+      });
+      if (element.querySelector(".review-change-rollback")) denied("NATIVE_READONLY", "Display unexpectedly exposed a rollback action");
+      return element;
+    } catch (error) {
+      unmount();
+      throw error;
+    }
+  };
+  return {
+    inspect,
+    async probe(sessionId, workspacePath, presentation) {
+      alive();
+      if (probing) denied("NATIVE_BUSY", "A native preflight is already running");
+      probing = true;
+      try {
+        const native = await inspect(), state = guard(sessionId, native);
+        const candidates = native.records(state.messages).filter((record) => record.change.path === workspacePath);
+        if (state.isRunning) denied("NATIVE_RUNNING", "Wait until the Agent finishes before running the native preflight");
+        if (candidates.length !== 1) denied("NATIVE_RECORD", "Exactly one current native record for the preflight file is required");
+        native.store.getState().openWorkPanelTabForSession(sessionId, native.tab("review"));
+        await wait(sessionId, native, () => !!pane()?.querySelector(".review-scroll > section.review-change-card"));
+        const header = locate(native, candidates[0].change, sessionId);
+        await wait(sessionId, native, () => header.getAttribute("aria-expanded") === "true" && !!header.parentElement?.querySelector(".review-change-card-body"));
+        const element = await show(native, sessionId, presentation);
+        guard(sessionId, native);
+        return { opened: true, located: true, externalRendered: !!element.querySelector(".review-change-diff"), readonly: !element.querySelector(".review-change-rollback"), sessionGuard: true };
+      } finally {
+        probing = false;
+      }
+    },
+    close() {
+      closed = true;
+      unmount();
+      modules = void 0;
+    }
+  };
+}
+
 // src/renderer/index.tsx
 import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 var hub = null;
@@ -7157,7 +7387,7 @@ function openReview(current, run) {
     }, children: /* @__PURE__ */ jsx3("div", { className: "dv-layer-inner", children: /* @__PURE__ */ jsx3(ReviewApp_default, { transport, initialRequest: run ? { scope: "turn", root: run.root, sessionId, runId: run.id } : { scope: "unstaged", sessionId }, locale: boot?.locale, base: boot?.base, onClose: close }) }) });
   }
   layers.add(close);
-  root = createRoot(layer.element);
+  root = createRoot2(layer.element);
   root.render(/* @__PURE__ */ jsx3(Layer, {}));
 }
 function EntryExtra(props) {
@@ -7202,6 +7432,7 @@ function ComposerControl() {
   const [error, setError] = useState2("");
   const [busy, setBusy] = useState2(false);
   const mounted = useRef2(true);
+  const [probeStatus, setProbeStatus] = useState2("");
   useEffect2(() => {
     mounted.current = true;
     return () => {
@@ -7222,6 +7453,20 @@ function ComposerControl() {
         if (mounted.current) setBusy(false);
       }
     }, children: busy ? t.loading : t.title }),
+    boot?.settings.nativePreflight && /* @__PURE__ */ jsx3("button", { className: "dv-composer", disabled: busy || !same(current) || !current.activeSession, onClick: () => {
+      if (!same(current) || !current.native || !current.activeSession) return;
+      const sessionId = current.activeSession;
+      setBusy(true);
+      setProbeStatus("\u9A8C\u8BC1\u4E2D / Checking native integration\u2026");
+      current.native.probe(sessionId, "docs/native-preflight-fixture.txt", { id: "preflight-demo", path: "[\u5916\u90E8\u6587\u4EF6\u6F14\u793A / render-only] native-preflight-external.txt", origin: "external", demo: true, additions: 1, deletions: 1, hunks: [{ header: "@@ -1,1 +1,1 @@", lines: [{ type: "del", text: "native preflight before" }, { type: "add", text: "native preflight after" }] }] }).then((result) => {
+        if (mounted.current && same(current) && current.activeSession === sessionId) setProbeStatus(`\u539F\u751F\u9884\u68C0 / Native preflight: ${JSON.stringify(result)}\u3002\u8BF7\u4EBA\u5DE5\u6838\u5BF9\u4FA7\u680F\uFF1B\u6F14\u793A\u4E0D\u662F\u5B9E\u9645\u91C7\u96C6\u3002`);
+      }).catch((err) => {
+        if (mounted.current && same(current)) setProbeStatus(`\u539F\u751F\u9884\u68C0\u672A\u901A\u8FC7 / Failed: ${String(err?.code ?? "NATIVE_IMPORT")} ${err instanceof Error ? err.message : String(err)}`);
+      }).finally(() => {
+        if (mounted.current && same(current)) setBusy(false);
+      });
+    }, children: "\u539F\u751F\u5BA1\u9605\u9884\u68C0 / Native preflight" }),
+    probeStatus && /* @__PURE__ */ jsx3("span", { className: "dv-layer-error", role: "status", style: { whiteSpace: "pre-wrap" }, children: probeStatus }),
     error && /* @__PURE__ */ jsx3("span", { className: "dv-layer-error", role: "alert", children: error })
   ] });
 }
@@ -7234,6 +7479,7 @@ function onLoad(pi) {
   } });
   const current = { host: pi, transport, disposed: false, bootstrap: null, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cursor: 0 };
   hub = current;
+  current.native = createNativeReviewAdapter({ info: () => transport.invoke("nativeProbeInfo") });
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
   current.unsubscribeDraft = pi.composer.subscribeDraft((draft) => {
     if (!same(current)) return;
@@ -7255,6 +7501,7 @@ function onUnload() {
     current.cards.clear();
     current.listeners.clear();
   }
+  current?.native?.close();
   for (const dispose of [...layers]) dispose();
   for (const dispose of disposers.splice(0).reverse()) dispose();
   if (realm2.__piDiffRenderer?.hub === current) delete realm2.__piDiffRenderer;

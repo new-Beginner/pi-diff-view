@@ -5,6 +5,7 @@ import { SnapshotStore, atomicJson, locatorPath, readJson, type Locator } from '
 import { ReviewService } from './core/review-service';
 import { fail } from './core/path-policy';
 import { JobQueue } from './core/jobs';
+import { inspectNativeHostBuild } from './core/native-host-build';
 declare const pi: any;
 let service: ReviewService | null = null, store: SnapshotStore | null = null;
 let jobs: JobQueue | null = null;
@@ -53,6 +54,7 @@ export async function onPanelInvoke(channel: string, payload: unknown): Promise<
 export async function onRendererCall(method: string, args: unknown): Promise<unknown> { return dispatch(method.startsWith('diff.') ? method.slice(5) : method, args); }
 async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (!service || disposed) fail('PLUGIN_UNLOADED', 'Diff view is not loaded');
+  if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'jobStart') { const a = args as { method: string; args?: unknown }; return jobs!.start(a.method, a.args ?? {}); }
   if (method === 'jobPoll') return jobs!.poll((args as { jobId: string }).jobId);
   const s = service;

@@ -5,6 +5,8 @@ import { ensureBounded } from '../view/transport';
 import { messages } from '../view/i18n';
 import type { Bootstrap, RunSummary, UiTransport } from '../core/contracts';
 import reviewStyle from './styles';
+import { createNativeReviewAdapter, type NativeReviewAdapter } from './native-review-adapter';
+import type { NativeBuildInfo } from '../core/native-build-contract';
 
 type Disposer = () => void;
 interface DraftSnapshot { sessionId?: string; text?: string }
@@ -20,6 +22,7 @@ interface Hub {
   host: RendererHost; transport: UiTransport; disposed: boolean; timer?: ReturnType<typeof setTimeout>;
   bootstrap: Bootstrap | null; listeners: Set<(boot: Bootstrap | null) => void>; cards: Map<string, CardItem>; cursor: number;
   activeSession?: string; unsubscribeDraft?: Disposer;
+  native?: NativeReviewAdapter;
 }
 let hub: Hub | null = null;
 const realm = globalThis as typeof globalThis & { __piDiffRenderer?: { hub: Hub; dispose: Disposer } };
@@ -96,18 +99,27 @@ function EntryExtra(props: ReplyProps) {
 }
 function ComposerControl() {
   const current = hub; const boot = useBootstrap(current); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const mounted = useRef(true);
+  const [probeStatus, setProbeStatus] = useState('');
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const t = messages(boot?.locale ?? 'zh-CN');
   return <><button className="dv-composer" disabled={busy || !same(current)} title={t.title} onClick={() => {
     if (!same(current)) return;
     setBusy(true); setError(''); try { openReview(current); } catch (err) { if (mounted.current) setError(err instanceof Error ? err.message : String(err)); } finally { if (mounted.current) setBusy(false); }
-  }}>{busy ? t.loading : t.title}</button>{error && <span className="dv-layer-error" role="alert">{error}</span>}</>;
+  }}>{busy ? t.loading : t.title}</button>{boot?.settings.nativePreflight && <button className="dv-composer" disabled={busy || !same(current) || !current.activeSession} onClick={() => {
+    if (!same(current) || !current.native || !current.activeSession) return;
+    const sessionId = current.activeSession;
+    setBusy(true); setProbeStatus('验证中 / Checking native integration…');
+    current.native.probe(sessionId, 'docs/native-preflight-fixture.txt', { id: 'preflight-demo', path: '[外部文件演示 / render-only] native-preflight-external.txt', origin: 'external', demo: true, additions: 1, deletions: 1, hunks: [{ header: '@@ -1,1 +1,1 @@', lines: [{ type: 'del', text: 'native preflight before' }, { type: 'add', text: 'native preflight after' }] }] }).then(result => {
+      if (mounted.current && same(current) && current.activeSession === sessionId) setProbeStatus(`原生预检 / Native preflight: ${JSON.stringify(result)}。请人工核对侧栏；演示不是实际采集。`);
+    }).catch(err => { if (mounted.current && same(current)) setProbeStatus(`原生预检未通过 / Failed: ${String(err?.code ?? 'NATIVE_IMPORT')} ${err instanceof Error ? err.message : String(err)}`); }).finally(() => { if (mounted.current && same(current)) setBusy(false); });
+  }}>原生审阅预检 / Native preflight</button>}{probeStatus && <span className="dv-layer-error" role="status" style={{ whiteSpace: 'pre-wrap' }}>{probeStatus}</span>}{error && <span className="dv-layer-error" role="alert">{error}</span>}</>;
 }
 export function onLoad(pi: RendererHost) {
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
   const current: Hub = { host: pi, transport, disposed: false, bootstrap: null, listeners: new Set(), cards: new Map(), cursor: 0 };
   hub = current;
+  current.native = createNativeReviewAdapter({ info: () => transport.invoke<NativeBuildInfo>('nativeProbeInfo') });
   realm.__piDiffRenderer = { hub: current, dispose: onUnload };
   current.unsubscribeDraft = pi.composer.subscribeDraft(draft => {
     if (!same(current)) return;
@@ -122,6 +134,7 @@ export function onLoad(pi: RendererHost) {
 export function onUnload() {
   const current = hub;
   if (current) { current.disposed = true; if (current.timer) clearTimeout(current.timer); current.unsubscribeDraft?.(); current.cards.clear(); current.listeners.clear(); }
+  current?.native?.close();
   for (const dispose of [...layers]) dispose();
   for (const dispose of disposers.splice(0).reverse()) dispose();
   if (realm.__piDiffRenderer?.hub === current) delete realm.__piDiffRenderer;

@@ -36,7 +36,7 @@ __export(main_exports, {
   onUnload: () => onUnload
 });
 module.exports = __toCommonJS(main_exports);
-var import_promises6 = __toESM(require("node:fs/promises"), 1);
+var import_promises7 = __toESM(require("node:fs/promises"), 1);
 var import_node_crypto7 = require("node:crypto");
 
 // src/core/storage.ts
@@ -474,16 +474,16 @@ var Diff = class {
       }
     }
   }
-  addToPath(path7, added, removed, oldPosInc, options) {
-    const last = path7.lastComponent;
+  addToPath(path8, added, removed, oldPosInc, options) {
+    const last = path8.lastComponent;
     if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
       return {
-        oldPos: path7.oldPos + oldPosInc,
+        oldPos: path8.oldPos + oldPosInc,
         lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
       };
     } else {
       return {
-        oldPos: path7.oldPos + oldPosInc,
+        oldPos: path8.oldPos + oldPosInc,
         lastComponent: { count: 1, added, removed, previousComponent: last }
       };
     }
@@ -1490,7 +1490,7 @@ var ReviewService = class {
     const filtered = runs.filter((r) => (!sessionId || r.sessionId === sessionId) && (this.allowed.has(canonical(r.root)) || !!sessionId && r.sessionId === sessionId));
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({})), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   async review(request) {
     if (!request || !["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(request.scope)) fail("INVALID_SCOPE", "Unknown review scope");
@@ -1799,6 +1799,63 @@ var JobQueue = class {
   }
 };
 
+// src/core/native-host-build.ts
+var import_promises6 = __toESM(require("node:fs/promises"), 1);
+var import_node_path7 = __toESM(require("node:path"), 1);
+
+// src/core/native-build-contract.ts
+var NATIVE_BUILD = {
+  version: "0.17.0",
+  assets: {
+    main: { name: "index-DKEhNN1e.js", sha256: "f89d7fd4d428fc8ece04a65a7021af4983aa8ede1349eeddbe743f3865380e6b" },
+    transcript: { name: "use-transcript-view-BZJWhb9_.js", sha256: "92c227ce4c98bdeacc676163d6e1f0065f01c2d03f142122e86017d7c5cb34e4" },
+    panel: { name: "WorkPanel-C3oPGQMI.js", sha256: "6621ca03f19b3ccbf78777e7c05affaf79502facd356e9e77da41013508b8a79" }
+  }
+};
+function matchesNativeBuild(version, hashes) {
+  return version === NATIVE_BUILD.version && Object.values(NATIVE_BUILD.assets).every((asset) => hashes[asset.name] === asset.sha256);
+}
+
+// src/core/native-host-build.ts
+async function inspectNativeHostBuild(version, executable = process.execPath) {
+  const hashes = {};
+  if (version !== NATIVE_BUILD.version) return { version, hashes, supported: false, reason: `Only the inspected PI-Desktop ${NATIVE_BUILD.version} build is supported` };
+  let handle;
+  try {
+    let archiveFs = import_promises6.default;
+    try {
+      archiveFs = require("original-fs").promises;
+    } catch {
+    }
+    const archive = import_node_path7.default.join(import_node_path7.default.dirname(executable), "resources", "app.asar");
+    const stat = await archiveFs.lstat(archive);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Host archive is not a regular file");
+    handle = await archiveFs.open(archive, "r");
+    const header = Buffer.alloc(16);
+    if ((await handle.read(header, 0, header.length, 0)).bytesRead !== header.length) throw new Error("Short ASAR header");
+    const size = header.readUInt32LE(12), base = 8 + header.readUInt32LE(4);
+    if (size < 2 || size > 2 * 1024 * 1024 || base < 16 + size || base > stat.size) throw new Error("Invalid ASAR bounds");
+    const bytes = Buffer.alloc(size);
+    if ((await handle.read(bytes, 0, size, 16)).bytesRead !== size) throw new Error("Short ASAR index");
+    const index = JSON.parse(bytes.toString("utf8"));
+    for (const asset of Object.values(NATIVE_BUILD.assets)) {
+      let entry = index;
+      for (const part of ["out", "renderer", "assets", asset.name]) entry = entry?.files?.[part];
+      const offset = Number(entry?.offset), length = entry?.size;
+      if (entry?.unpacked || entry?.link || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 2 * 1024 * 1024 || base + offset + length > stat.size) throw new Error("Pinned asset missing or invalid");
+      const source = Buffer.alloc(length);
+      if ((await handle.read(source, 0, length, base + offset)).bytesRead !== length) throw new Error("Short asset");
+      hashes[asset.name] = digest(source);
+    }
+    const supported = matchesNativeBuild(version, hashes);
+    return { version, hashes, supported, ...supported ? {} : { reason: "Renderer build fingerprints do not match the inspected 0.17.0 build" } };
+  } catch (error) {
+    return { version, hashes, supported: false, reason: `Cannot verify pinned host assets: ${String(error.code ?? error.message).slice(0, 200)}` };
+  } finally {
+    await handle?.close();
+  }
+}
+
 // src/main.ts
 var service = null;
 var store = null;
@@ -1823,7 +1880,7 @@ async function heartbeat() {
 async function onLoad() {
   disposed = false;
   generation = (0, import_node_crypto7.randomUUID)();
-  pluginRoot = await import_promises6.default.realpath(__dirname);
+  pluginRoot = await import_promises7.default.realpath(__dirname);
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
@@ -1867,7 +1924,7 @@ async function onUnload() {
   jobs = null;
   await tail;
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises6.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises7.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -1881,6 +1938,7 @@ async function onRendererCall(method, args) {
 }
 async function dispatch(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
+  if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "jobStart") {
     const a = args;
     return jobs.start(a.method, a.args ?? {});

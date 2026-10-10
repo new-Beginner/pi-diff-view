@@ -17,7 +17,7 @@ export interface RunSummary { id: string; sessionId: string; root: string; start
 export interface CaptureRun extends RunSummary { version: 1; generation: string; changes: Record<string, { before: FileSnapshot; after: FileSnapshot }>; replies: { hash: string; timestamp: number }[]; bindings: Record<string, string>; }
 export interface LineAnchor { path: string; fingerprint: string; scope: Scope; root: string; side: 'old' | 'new'; line: number; text: string; excerpt: string; runId?: string; }
 export interface ReviewComment { id: string; sessionId?: string; anchor: LineAnchor; body: string; createdAt: number; updatedAt: number; stale?: boolean; }
-export interface Bootstrap { repositories: RepositoryInfo[]; runs: RunSummary[]; locale: string; base: 'light' | 'dark'; settings: { layout: 'unified' | 'split'; wordWrap: boolean }; }
+export interface Bootstrap { repositories: RepositoryInfo[]; runs: RunSummary[]; locale: string; base: 'light' | 'dark'; settings: { layout: 'unified' | 'split'; wordWrap: boolean; nativePreflight?: boolean }; }
 export interface ReviewActionRequest { reviewId: string; fileId: string; action: Action; hunkId?: string; fingerprint: string; confirmed: boolean; }
 export interface ActionResult { ok: boolean; message: string; }
 export interface UiTransport { invoke<T = unknown>(method: string, args?: unknown): Promise<T>; insertText?: (text: string) => Promise<void>; }
