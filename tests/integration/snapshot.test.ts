@@ -1,13 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises'; import path from 'node:path'; import os from 'node:os'; import { randomUUID } from 'node:crypto';
-import { readSnapshot, snapshotOfText, absentSnapshot, digest } from '../../src/core/path-policy';
+import { readSnapshot, snapshotOfText, absentSnapshot, digest, canonical } from '../../src/core/path-policy';
 import { replaceSnapshot } from '../../src/core/rollback';
 import { SnapshotStore, atomicJson } from '../../src/core/storage';
 import { createCaptureExtension } from '../../src/agent/capture';
-let root: string, data: string, plugin: string, locator: string, generation: string;
+let root: string, virtualRoot: string, data: string, plugin: string, locator: string, generation: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'diff-snapshot-')); data = path.join(root, 'data'); plugin = path.join(root, 'plugin'); await fs.mkdir(plugin); generation = randomUUID(); locator = path.join(root, 'locator.json'); const store = new SnapshotStore(data); await store.init(); await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: data, generation, expiresAt: Date.now()+60000 }); });
-afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
-function harness(sessionId = 's1') { const hooks: Record<string, Function> = {}; const ctx = { cwd: root, sessionManager: { getSessionId: () => sessionId }, ui: { notify: () => {} } }; createCaptureExtension({ pluginRoot: plugin, locator })({ on: (event, cb) => { hooks[event] = cb; } }); return { emit: (event: string, args: unknown = {}) => hooks[event]?.(args, ctx) }; }
+beforeEach(() => {
+  // Virtual public cwd; all fixture bytes remain inside mandated app-private scratch.
+  virtualRoot = path.join(path.parse(root).root, `diff-view-workspace-${randomUUID()}`);
+  const mapped = (p: any) => typeof p === 'string' && (canonical(p) === canonical(virtualRoot) || canonical(p).startsWith(canonical(virtualRoot) + path.sep)) ? path.join(root, path.relative(virtualRoot, p)) : p;
+  const lstat = fs.lstat.bind(fs), realpath = fs.realpath.bind(fs), open = fs.open.bind(fs);
+  vi.spyOn(fs, 'lstat').mockImplementation((p: any, opts?: any) => lstat(mapped(p), opts) as any);
+  vi.spyOn(fs, 'realpath').mockImplementation(async (p: any) => { const result = await realpath(mapped(p)); return mapped(p) !== p ? path.join(virtualRoot, path.relative(root, result)) : result; });
+  vi.spyOn(fs, 'open').mockImplementation((p: any, flags: any, mode?: any) => open(mapped(p), flags, mode));
+});
+afterEach(async () => { vi.restoreAllMocks(); await fs.rm(root, { recursive: true, force: true }); });
+function harness(sessionId = 's1') { const hooks: Record<string, Function> = {}; const ctx = { cwd: virtualRoot, sessionManager: { getSessionId: () => sessionId }, ui: { notify: () => {} } }; createCaptureExtension({ pluginRoot: plugin, locator })({ on: (event, cb) => { hooks[event] = cb; } }); return { emit: (event: string, args: unknown = {}) => hooks[event]?.(args, ctx) }; }
 async function imported() { const store = new SnapshotStore(data); await store.importInbox(generation); return store.listRuns(); }
 describe('snapshots and guarded restore', () => {
   it('preserves BOM bytes, permits reversible create/delete, rejects external edits', async () => {
@@ -25,7 +34,7 @@ describe('snapshots and guarded restore', () => {
   it('keeps tool calls paired and aggregates absolute/relative aliases without splitting internal turns', async () => {
     const h = harness(); await h.emit('before_agent_start', { prompt: 'private prompt' });
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 't1', input: { path: 'a.txt' } }); await fs.writeFile(path.join(root, 'a.txt'), 'first'); await h.emit('tool_result', { toolCallId: 't1', isError: false });
-    await h.emit('tool_call', { toolName: 'Edit', toolCallId: 't2', input: { path: path.join(root, 'a.txt') } }); await fs.writeFile(path.join(root, 'a.txt'), 'second'); await h.emit('tool_result', { toolCallId: 't2' }); await h.emit('tool_result', { toolCallId: 't2' });
+    await h.emit('tool_call', { toolName: 'Edit', toolCallId: 't2', input: { path: path.join(virtualRoot, 'a.txt') } }); await fs.writeFile(path.join(root, 'a.txt'), 'second'); await h.emit('tool_result', { toolCallId: 't2' }); await h.emit('tool_result', { toolCallId: 't2' });
     await h.emit('message_end', { message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], timestamp: Date.now() } }); await h.emit('agent_end');
     const runs = await imported(); expect(runs).toHaveLength(1); expect(runs[0].fileCount).toBe(1); expect(runs[0].changes['a.txt'].before.exists).toBe(false); expect(runs[0].changes['a.txt'].after.text).toBe('second'); expect(runs[0].state).toBe('completed'); expect(runs[0].prompt).toBeUndefined(); expect(runs[0].replies[0].hash).toBe(digest('done'));
   });
@@ -55,7 +64,7 @@ describe('snapshots and guarded restore', () => {
     await fs.rename(path.join(root, 'from.txt'), path.join(root, 'to.txt')); await h.emit('tool_result', { toolCallId: 'move' });
     await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'delete', input: { path: 'to.txt', ops: 'REM' } });
     await fs.unlink(path.join(root, 'to.txt')); await h.emit('tool_result', { toolCallId: 'delete' }); await h.emit('agent_end');
-    const [run] = await imported(); expect(run.incomplete).toBe(false); expect(run.changes['from.txt'].before.text).toBe('original');
+    const [run] = await imported(); expect(run.incomplete).toBe(true); expect(run.boundary).toBe('uncertain'); expect(run.finalReply).toBeUndefined(); expect(run.changes['from.txt'].before.text).toBe('original');
     expect(run.changes['from.txt'].after.exists).toBe(false); expect(run.changes['to.txt'].before.exists).toBe(false); expect(run.changes['to.txt'].after.exists).toBe(false);
   });
   it('detects external edits between tools, duplicate calls and unsupported writers', async () => {

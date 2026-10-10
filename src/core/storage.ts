@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { canonical, digest, fail, inside } from './path-policy';
+import { assertPublicPath, canonical, digest, fail, inside, sameSnapshot } from './path-policy';
 import type { CaptureRun, FileSnapshot, ReviewComment } from './contracts';
 export const MAX_RUNS = 200;
 export const MAX_HISTORY_BYTES = 128 * 1024 * 1024;
@@ -27,6 +27,23 @@ export async function resolveLocator(file: string, pluginRoot: string): Promise<
   return locator;
 }
 function validId(id: string): void { if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) fail('INVALID_ID', 'Invalid record identifier'); }
+function validRun(run: CaptureRun, id: string): boolean {
+  if (!run || ![1, 2].includes(run.version) || run.id !== id || typeof run.sessionId !== 'string' || !path.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
+  try {
+    for (const [value, change] of Object.entries(run.changes)) {
+      assertPublicPath(value);
+      for (const snapshot of [change.before, change.after]) if (!snapshot || typeof snapshot.exists !== 'boolean' || typeof snapshot.hash !== 'string' || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !['text', 'binary', 'large', 'symlink', 'submodule', 'conflict', 'unavailable'].includes(snapshot.kind)) return false;
+      if (run.version === 1) { if (path.isAbsolute(value) || !inside(run.root, path.resolve(run.root, value))) return false; }
+      else {
+        const c = change.capture;
+        if (!c || c.path !== value || !path.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) return false;
+        if (c.origin === 'workspace') { if (path.isAbsolute(value) || !inside(run.root, c.absolutePath) || canonical(path.resolve(run.root, value)) !== c.identity) return false; }
+        else if (c.origin !== 'external' || inside(run.root, c.absolutePath) || canonical(value) !== c.identity) return false;
+      }
+    }
+    return true;
+  } catch { return false; }
+}
 export class SnapshotStore {
   constructor(readonly directory: string) {}
   async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'backups']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
@@ -83,18 +100,19 @@ export class SnapshotStore {
   }
   async writeRun(run: CaptureRun, inbox = false): Promise<void> {
     const save = async () => {
-      validId(run.id); const changes: CaptureRun['changes'] = {};
+      validId(run.id); const changes: CaptureRun['changes'] = Object.create(null);
       if (Object.keys(run.changes).length > 256) fail('STORE_LIMIT', 'Turn exceeds 256 captured files');
-      for (const [p, c] of Object.entries(run.changes)) changes[p] = { before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
-      await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, changes });
+      for (const [p, c] of Object.entries(run.changes)) changes[p] = { ...c, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      const fileCount = Object.values(changes).filter(c => !sameSnapshot(c.before, c.after)).length;
+      await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, fileCount, changes });
     };
     if (inbox) await this.captureLock(save); else await save();
   }
   async getRun(id: string, inbox = false, hydrate = true): Promise<CaptureRun | null> {
     validId(id);
     const run = await readJson<CaptureRun | null>(path.join(this.directory, inbox ? 'inbox' : 'runs', `${id}.json`), null);
-    if (!run || run.version !== 1 || run.id !== id || typeof run.sessionId !== 'string' || !path.isAbsolute(run.root) || !run.changes) return null;
-    if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
+    if (!run || !validRun(run, id)) return null;
+    if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
     return run;
   }
   async importInbox(generation: string): Promise<void> {

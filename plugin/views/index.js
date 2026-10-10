@@ -30786,7 +30786,7 @@ function kindLabel(kind, locale) {
 // src/view/transport.ts
 var realm = globalThis;
 var queue = realm.__piDiffQueue ??= { tail: Promise.resolve(), last: 0 };
-var background = /* @__PURE__ */ new Set(["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory"]);
+var background = /* @__PURE__ */ new Set(["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "selectTurn"]);
 function boundedTransport(invoke) {
   const wire = (method, args) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
@@ -30855,7 +30855,7 @@ function Modal({ title, children, onClose, busy }) {
     children
   ] });
 }
-function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: hostLocale, base: hostBase }) {
+function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onClose, locale: hostLocale, base: hostBase }) {
   const transport = (0, import_react2.useMemo)(() => ensureBounded(source), [source]);
   const [boot, setBoot] = (0, import_react2.useState)(null);
   const [bootError, setBootError] = (0, import_react2.useState)("");
@@ -30956,10 +30956,10 @@ function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: ho
       return;
     }
     setLoadingReview(true);
-    transport.invoke("review", request).then((data) => {
+    transport.invoke("review", { ...request, focusFileId: request.scope === "turn" && request.runId === initialRequest.runId ? initialFileId : void 0 }).then((data) => {
       if (!active) return;
       setReview(data);
-      setSelected((previous) => data.files.some((file) => file.id === previous) ? previous : data.files[0]?.id ?? "");
+      setSelected((previous) => data.files.some((file) => file.id === previous) ? previous : initialFileId && data.files.some((file) => file.id === initialFileId) ? initialFileId : data.files[0]?.id ?? "");
     }).catch((err) => {
       if (active) setReviewError(errorText(err));
     }).finally(() => {
@@ -30977,7 +30977,11 @@ function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: ho
     let active = true;
     setLoadingDetail(true);
     transport.invoke("file", { reviewId: review.id, fileId: selected, offset, limit: 80, context }).then((data) => {
-      if (active) setDetail(data);
+      if (active) {
+        setDetail(data);
+        if (initialRequest.runId && (!initialFileId || selected === initialFileId)) void transport.invoke("rendererReport", { stage: "view-targeted" }).catch(() => {
+        });
+      }
     }).catch((err) => {
       if (active) setDetailError(errorText(err));
     }).finally(() => {
@@ -31257,6 +31261,7 @@ function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: ho
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-file-status", children: [
             t[file.status],
+            file.origin === "external" ? locale.startsWith("zh") ? " \xB7 \u5DE5\u4F5C\u533A\u5916 \xB7 \u53EA\u8BFB" : " \xB7 Outside workspace \xB7 read-only" : "",
             file.kind !== "text" ? ` \xB7 ${kindLabel(file.kind, locale)}` : "",
             file.state === "reverted" ? ` \xB7 ${t.reverted}` : ""
           ] })
@@ -31515,6 +31520,7 @@ var ReviewApp_default = ReviewApp;
 var import_jsx_runtime3 = __toESM(require_jsx_runtime(), 1);
 function Panel() {
   const [appearance, setAppearance] = (0, import_react3.useState)({});
+  const [navigation, setNavigation] = (0, import_react3.useState)(null), [error, setError] = (0, import_react3.useState)(""), [selecting, setSelecting] = (0, import_react3.useState)(Boolean(new URLSearchParams(location.search).get("piViewOpen")));
   const transport = (0, import_react3.useMemo)(() => ({ invoke(method, args) {
     const bridge = window.pluginBridge;
     if (!bridge) return Promise.reject(new Error("PI-Desktop bridge is unavailable / PI-Desktop \u6865\u63A5\u4E0D\u53EF\u7528\u3002"));
@@ -31536,6 +31542,54 @@ function Panel() {
       if (typeof dispose === "function") dispose();
     };
   }, []);
+  (0, import_react3.useEffect)(() => {
+    let live = true, generation = 0, target = null;
+    const load = (initial) => {
+      if (!target) return;
+      const own = generation, nonce = target;
+      if (initial) {
+        setSelecting(true);
+        setError("");
+        setNavigation(null);
+      }
+      transport.invoke("readTurnSelection", { nonce }).then((selection) => {
+        if (!live || own !== generation) return;
+        setNavigation((previous) => previous?.nonce === selection.nonce ? previous : selection);
+        setError("");
+        setSelecting(false);
+      }).catch((err) => {
+        if (live && own === generation) {
+          setNavigation(null);
+          setError(String(err?.message ?? err));
+          setSelecting(false);
+        }
+      });
+    };
+    const receive = (path) => {
+      if (path == null || path === "") return;
+      generation++;
+      if (typeof path !== "string" || !/^diff-view:[0-9a-f-]{36}$/i.test(path)) {
+        target = null;
+        setNavigation(null);
+        setSelecting(false);
+        setError("\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid plugin selection");
+        return;
+      }
+      target = path.slice("diff-view:".length);
+      load(true);
+    };
+    const dispose = window.pluginBridge?.on?.("view:open", (value) => receive(value?.path));
+    receive(new URLSearchParams(location.search).get("piViewOpen"));
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "hidden") load(false);
+    }, 1500);
+    return () => {
+      live = false;
+      generation++;
+      clearInterval(timer);
+      if (typeof dispose === "function") dispose();
+    };
+  }, [transport]);
   const initialRequest = (0, import_react3.useMemo)(() => {
     const params = new URLSearchParams(location.search);
     const result = {};
@@ -31544,10 +31598,14 @@ function Panel() {
     if (scope && ["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(scope)) result.scope = scope;
     return result;
   }, []);
-  return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ReviewApp_default, { transport, initialRequest, ...appearance });
+  if (selecting || error) return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("section", { className: "dv-app", "data-base": appearance.base ?? "light", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: `dv-empty ${error ? "dv-error" : ""}`, role: error ? "alert" : "status", children: error || "\u6B63\u5728\u5B9A\u4F4D\u6240\u9009\u6587\u4EF6\u2026 / Locating selected file\u2026" }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ReviewApp_default, { transport, initialRequest: navigation?.request ?? initialRequest, initialFileId: navigation?.fileId, ...appearance }, navigation?.nonce ?? "default");
 }
 var element = document.getElementById("root");
 if (element) (0, import_client.createRoot)(element).render(/* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Panel, {}));
+export {
+  Panel
+};
 /*! Bundled license information:
 
 react/cjs/react.development.js:

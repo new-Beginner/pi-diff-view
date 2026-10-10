@@ -1,17 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises'; import path from 'node:path'; import os from 'node:os'; import { randomUUID } from 'node:crypto';
-import { ReviewService } from '../../src/core/review-service'; import { SnapshotStore } from '../../src/core/storage'; import { snapshotOfText, readSnapshot, digest } from '../../src/core/path-policy'; import type { CaptureRun, LineAnchor, ReviewSummary } from '../../src/core/contracts';
+import { ReviewService } from '../../src/core/review-service'; import { SnapshotStore } from '../../src/core/storage'; import { snapshotOfText, readSnapshot, digest, canonical } from '../../src/core/path-policy'; import type { CaptureIdentity, CaptureRun, LineAnchor, ReviewSummary } from '../../src/core/contracts';
 let root: string, store: SnapshotStore, service: ReviewService, run: CaptureRun;
+function capture(value: string): CaptureIdentity { const absolutePath = path.resolve(root, value), identity = canonical(absolutePath); return { id: digest(identity).slice(0, 24), identity, absolutePath, path: value, origin: 'workspace' }; }
 beforeEach(async () => {
  root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'diff-service-')); store = new SnapshotStore(path.join(root, 'data')); await store.init();
  await fs.writeFile(path.join(root, 'a.txt'), 'after\n'); const after = await readSnapshot(root, 'a.txt');
- run = { version: 1, id: randomUUID(), generation: 'test-generation-123456789', sessionId: 's', root, startedAt: Date.now()-5000, endedAt: Date.now(), state: 'completed', fileCount: 1, incomplete: false, changes: { 'a.txt': { before: snapshotOfText('before\n', after.mode), after } }, replies: [{ hash: digest('reply'), timestamp: Date.now() }], bindings: {} }; await store.writeRun(run);
+ run = { version: 2, boundary: 'user', contentVersion: 1, id: randomUUID(), generation: 'test-generation-123456789', sessionId: 's', root, startedAt: Date.now()-5000, endedAt: Date.now(), state: 'completed', fileCount: 1, incomplete: false, changes: { 'a.txt': { capture: capture('a.txt'), before: snapshotOfText('before\n', after.mode), after } }, replies: [{ hash: digest('reply'), timestamp: Date.now() }], bindings: {} }; run.finalReply = run.replies[0]; await store.writeRun(run);
  service = new ReviewService(store, { workspace: async () => ({ path: root }), settings: async () => ({}), setSettings: async () => {}, appearance: async () => ({ locale: 'zh-CN', base: 'light' }), clipboard: async () => {}, openPanel: async () => {} }, run.generation);
 });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
 async function turn(): Promise<ReviewSummary> { return service.review({ scope: 'turn', runId: run.id, sessionId: 's' }); }
 describe('review service', () => {
- it('returns missing history honestly and denies unapproved roots', async () => { expect((await service.review({ scope: 'turn', runId: randomUUID() })).notice).toContain('No recorded'); await expect(service.review({ scope: 'unstaged', root: path.dirname(root) })).rejects.toThrow('authorized'); });
+ it('returns missing history honestly and denies unapproved roots', async () => { expect((await service.review({ scope: 'turn', runId: randomUUID(), sessionId: 's' })).notice).toContain('No recorded'); await expect(service.review({ scope: 'unstaged', root: path.dirname(root) })).rejects.toThrow('authorized'); });
  it('comments validate original lines, preserve versions and become stale after diff version changes', async () => {
   const review = await turn(), file = review.files[0]; const anchor: LineAnchor = { root, path: file.path, scope: 'turn', runId: run.id, fingerprint: file.fingerprint, side: 'new', line: 1, text: 'after', excerpt: 'fake' };
   const comment = await service.saveComment({ anchor, body: 'Fix this', sessionId: 's' }); expect(comment.anchor.excerpt).toBe('after\n');
@@ -50,7 +51,7 @@ describe('review service', () => {
   expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('after\n');
  });
  it('reports each batch file independently and does not overwrite a conflicting file', async () => {
-  await fs.writeFile(path.join(root, 'b.txt'), 'after-b\n'); const after = await readSnapshot(root, 'b.txt'); run.changes['b.txt'] = { before: snapshotOfText('before-b\n', after.mode), after }; run.fileCount = 2; await store.writeRun(run);
+  await fs.writeFile(path.join(root, 'b.txt'), 'after-b\n'); const after = await readSnapshot(root, 'b.txt'); run.changes['b.txt'] = { capture: capture('b.txt'), before: snapshotOfText('before-b\n', after.mode), after }; run.fileCount = 2; await store.writeRun(run);
   const review = await turn(); await fs.writeFile(path.join(root, 'a.txt'), 'user changed');
   const args = { reviewId: review.id, action: 'revert' as const, confirmed: true, targets: review.files.map(f => ({ fileId: f.id, fingerprint: f.fingerprint })) };
   await expect(service.batchAction({ ...args, confirmed: false })).rejects.toThrow('confirmation');

@@ -3,7 +3,7 @@
   "id": "local.diff-view",
   "name": "Diff view",
   "version": "0.1.0",
-  "description": "Codex 风格的本地差异审查：Git 范围、轮次快照、逐行反馈和有冲突保护的暂存/撤销。",
+  "description": "任务最终回复末尾的文件变更汇总，点击定位本插件右侧 diff；保留 Git 审查、逐行反馈和受保护操作。",
   "author": "new-Beginner",
   "license": "MIT",
   "main": "main.js",
@@ -12,20 +12,19 @@
   "permissions": ["ui.panel", "ui.view", "agent.extension", "renderer.extension", "clipboard.write"],
   "ui": { "panel": "views/index.html", "title": "Diff view", "width": 1180, "height": 800 },
   "renderer": "renderer/index.mjs",
-  "rendererActions": ["plugin.call", "composer.insertText", "composer.readDraft"],
-  "rendererCallMethods": ["rendererReport", "nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "openPanel"],
+  "rendererActions": ["plugin.call", "composer.readDraft"],
+  "rendererCallMethods": ["rendererReport", "nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "turnSummary", "selectTurn", "readTurnSelection", "activeReviewSession", "openPanel"],
   "contributes": {
     "commands": [{ "id": "diff-view.open", "title": "Diff view: Open review", "keywords": ["diff", "review", "变更", "审查"] }],
     "views": [{ "id": "review", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "icon": "diff", "entry": "views/index.html", "order": 45 }],
     "agentExtensions": ["agent/index.mjs"],
     "settings": [
       { "key": "layout", "type": "string", "default": "unified", "title": "Diff layout (unified / split)" },
-      { "key": "wordWrap", "type": "boolean", "default": false, "title": "Wrap long lines" },
-      { "key": "nativePreflight", "type": "boolean", "default": false, "title": "Native review preflight (experimental 0.17.0 build only)" }
+      { "key": "wordWrap", "type": "boolean", "default": false, "title": "Wrap long lines" }
     ]
   },
-  "safetyNotes": "可信本地插件：agent.extension 在 Agent 进程运行、renderer.extension 在宿主界面运行，都没有 OS 沙箱。快照、Git 索引暂存和撤销使用插件内的 Node/Git 适配器，不受宿主 fs 网关逐次约束。插件自行限制在授权项目根/已绑定采集根内，拒绝凭据路径、.. 和符号链接逃逸。恢复先校验内容指纹、保留恢复副本并要求确认。无网络、模型调用、自动发送、提交或推送；历史与评论存放插件私有目录。Agent/main 桥接只在用户目录 .pi-diff-view/locators 写入本插件实例定位信息，不读取宿主数据库。实验性原生预检仅支持已核对的 0.17.0 构建：只读三个固定宿主资源核验哈希；用户按钮调用宿主内部工作面板/原生变更组件，DOM 操作仅限审阅内的 diff 展开和插件拥有区域。不修改安装文件、真实工具记录或数据库。宿主升级会拒绝接入；演示只读，不启用原生回退。",
+  "safetyNotes": "可信本地插件：Agent 和 renderer 扩展没有 OS 沙箱；Node/Git 操作不受宿主 fs 网关逐次约束。只采集 Write/Edit 明确触及的普通文件，不扫描磁盘或从 Bash 推测路径。工作区外文件只读记录，没有恢复权限；工作区内恢复要求当前项目授权、完整任务归因、指纹校验、备份和手动确认。拒绝凭据、应用私有数据、UNC/设备/ADS、链接祖先及依赖/内部路径。无网络、模型调用、自动发送、提交或推送，不读取宿主数据库。文末卡片使用公开回复插槽；点击时仅复用固定 0.17.0 构建的内部插件页签工厂和工作面板接口，不操作原生审阅 DOM 或改写工具消息。宿主构建不匹配时拒绝自动跳转。临时选择只在插件内存中保存，按会话隔离。",
   "i18n": {
-    "en": { "description": "Codex-style local change review: Git scopes, captured turns, inline feedback, staging and conflict-protected restore.", "safetyNotes": "Trusted unsandboxed Agent and renderer extensions. Node/Git adapters work outside the host fs gateway. No network, paid model calls, auto-send, commit/push or host database access. Experimental native preflight pins ONE inspected 0.17.0 build and reads three fixed host assets only to hash them. User clicks call internal work-panel/component APIs and bounded diff disclosure DOM; plugin-owned read-only display only. No installation, transcript or database mutation. Unknown builds are rejected." }
+    "en": { "description": "Per-task reply-end file summaries linked to the plugin's own diff sidebar, plus bounded Git review and inline comments.", "safetyNotes": "Trusted unsandboxed Agent and renderer extensions; Node/Git adapters work outside the host filesystem gateway. Captures only explicit supported file-tool targets; external files are read-only. No disk scanning, network, model calls, automatic chat sending, commit/push, host database reads or transcript mutation. Auto-open pins one inspected PI-Desktop 0.17.0 build and calls only the internal plugin-tab factory and work-panel opener; no native review DOM manipulation. Unknown builds fail closed. Volatile navigation tokens are session-guarded." }
   }
 }

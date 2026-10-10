@@ -5,7 +5,7 @@ import { messages, kindLabel } from './i18n';
 import { ensureBounded } from './transport';
 import './review.css';
 
-export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
+export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
 type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' } | { kind: 'comment'; comment: ReviewComment };
 type Editor = { anchor: LineAnchor; body: string; id?: string };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -16,7 +16,7 @@ function Modal({ title, children, onClose, busy }: { title: string; children: Re
     <h2>{title}</h2>{children}
   </dialog>;
 }
-export function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: hostLocale, base: hostBase }: ReviewAppProps) {
+export function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onClose, locale: hostLocale, base: hostBase }: ReviewAppProps) {
   const transport = useMemo(() => ensureBounded(source), [source]);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [bootError, setBootError] = useState('');
@@ -86,9 +86,9 @@ export function ReviewApp({ transport: source, initialRequest = {}, onClose, loc
     if (!request.root && !request.sessionId && !request.runId) return;
     if ((request.scope === 'commit' || request.scope === 'branch') && !request.ref?.trim()) { setReviewError(t.emptyRef); return; }
     setLoadingReview(true);
-    transport.invoke<ReviewSummary>('review', request).then(data => {
+    transport.invoke<ReviewSummary>('review', { ...request, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(data => {
       if (!active) return;
-      setReview(data); setSelected(previous => data.files.some(file => file.id === previous) ? previous : data.files[0]?.id ?? '');
+      setReview(data); setSelected(previous => data.files.some(file => file.id === previous) ? previous : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.files[0]?.id ?? '');
     }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (active) setLoadingReview(false); });
     return () => { active = false; };
   }, [transport, boot, scopeKey, refreshTick]);
@@ -96,7 +96,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, onClose, loc
     setLoadingDetail(false); setDetail(null); setDetailError('');
     if (!review || !selected) return;
     let active = true; setLoadingDetail(true);
-    transport.invoke<ReviewDetail>('file', { reviewId: review.id, fileId: selected, offset, limit: 80, context }).then(data => { if (active) setDetail(data); }).catch(err => { if (active) setDetailError(errorText(err)); }).finally(() => { if (active) setLoadingDetail(false); });
+    transport.invoke<ReviewDetail>('file', { reviewId: review.id, fileId: selected, offset, limit: 80, context }).then(data => { if (active) { setDetail(data); if (initialRequest.runId && (!initialFileId || selected === initialFileId)) void transport.invoke('rendererReport', { stage: 'view-targeted' }).catch(() => {}); } }).catch(err => { if (active) setDetailError(errorText(err)); }).finally(() => { if (active) setLoadingDetail(false); });
     return () => { active = false; };
   }, [transport, review, selected, offset, context, detailTick]);
   useEffect(() => {
@@ -199,7 +199,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, onClose, loc
         <div className="dv-toolbar" aria-label={t.batch}>{(['stage', 'unstage', 'revert', 'reapply'] as Action[]).map(action => { const files = visibleFiles.filter(file => file.actions.includes(action)).slice(0, 20); return files.length > 1 && <button key={action} disabled={busy || loadingReview} onClick={() => { if (review) { setError(''); setBatchResults([]); setConfirmation({ kind: 'batch', action, files, review }); } }}>{t[action]} · {files.length}</button>; })}</div>
         <nav className="dv-file-list" aria-label={t.files}>{visibleFiles.map(file => <button className="dv-file" key={file.id} aria-current={file.id === selected ? 'true' : undefined} disabled={busy} onClick={() => { resetPage(); setSelected(file.id); setEditor(null); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.path}`}>
           <span className="dv-file-name">{file.path.split('/').pop()}</span><span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">−{file.deletions}</span></span>
-          <span className="dv-file-path">{file.path}{file.oldPath && <><br />← {file.oldPath}</>}</span><span className="dv-file-status">{t[file.status]}{file.kind !== 'text' ? ` · ${kindLabel(file.kind, locale)}` : ''}{file.state === 'reverted' ? ` · ${t.reverted}` : ''}</span>
+          <span className="dv-file-path">{file.path}{file.oldPath && <><br />← {file.oldPath}</>}</span><span className="dv-file-status">{t[file.status]}{file.origin === 'external' ? locale.startsWith('zh') ? ' · 工作区外 · 只读' : ' · Outside workspace · read-only' : ''}{file.kind !== 'text' ? ` · ${kindLabel(file.kind, locale)}` : ''}{file.state === 'reverted' ? ` · ${t.reverted}` : ''}</span>
         </button>)}</nav>
         {!visibleFiles.length && !loadingReview && <p className="dv-rail-empty">{query ? t.noMatches : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
       </aside>

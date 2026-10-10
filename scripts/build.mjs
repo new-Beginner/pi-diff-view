@@ -23,6 +23,7 @@ await fs.copyFile('THIRD_PARTY_NOTICES.md', 'plugin/THIRD_PARTY_NOTICES.md');
 await fs.mkdir('plugin/docs', { recursive: true });
 await fs.copyFile('docs/compatibility.md', 'plugin/docs/compatibility.md');
 await fs.copyFile('docs/native-preflight.md', 'plugin/docs/native-preflight.md');
+await fs.copyFile('docs/task-summary.md', 'plugin/docs/task-summary.md');
 await fs.mkdir('plugin/docs/screenshots', { recursive: true });
-for (const name of ['review-wide.png', 'review-narrow.png']) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
+for (const name of ['review-wide.png', 'review-narrow.png', 'task-summary-sidebar.png']) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
 try { await fs.copyFile('docs/verification.md', 'plugin/docs/verification.md'); } catch (e) { if (e.code !== 'ENOENT') throw e; }

@@ -1,0 +1,20 @@
+import { it, expect, vi } from 'vitest';
+import { ReviewNavigationStore } from '../../src/core/review-navigation';
+it('isolates volatile selections, replaces session tokens and enforces expiry/capacity', () => {
+  const store = new ReviewNavigationStore();
+  const first = store.set({ scope: 'turn', sessionId: 'a', runId: 'run-a' }, 'file-a');
+  const other = store.set({ scope: 'turn', sessionId: 'b', runId: 'run-b' });
+  expect(store.get(first.nonce)?.fileId).toBe('file-a'); expect(store.get(other.nonce)?.sessionId).toBe('b');
+  store.setActiveSession('a'); expect(store.get(other.nonce)).toBeNull();
+  store.setActiveSession('b'); expect(store.get(first.nonce)).toBeNull(); expect(store.get(other.nonce)?.sessionId).toBe('b');
+  store.setActiveSession('a'); expect(store.get(first.nonce)?.fileId).toBe('file-a');
+  const replaced = store.set({ scope: 'turn', sessionId: 'a', runId: 'run-next' });
+  expect(store.get(first.nonce)).toBeNull(); expect(store.get(replaced.nonce)?.request.runId).toBe('run-next');
+  for (let i = 0; i < 33; i++) store.set({ scope: 'turn', sessionId: `s-${i}`, runId: 'r' });
+  expect(store.get(other.nonce)).toBeNull();
+  const latest = store.set({ scope: 'turn', sessionId: 'last', runId: 'r' });
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(latest.at + 31 * 60 * 1000);
+  expect(store.get(latest.nonce)).toBeNull(); clock.mockRestore();
+  expect(() => store.set({ scope: 'unstaged' })).toThrow('recorded');
+  store.clear(); expect(store.get(replaced.nonce)).toBeNull();
+});

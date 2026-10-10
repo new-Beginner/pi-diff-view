@@ -15,6 +15,9 @@
     makeFile('missing', 'src/historical.ts', { kind: 'unavailable', actions: [], note: 'Demo: snapshot missing / 演示：快照缺失' }),
     ...['large', 'symlink', 'submodule', 'conflict'].map(kind => makeFile(kind, `special/${kind}`, { kind, actions: [] }))
   ];
+  const external = makeFile('external', 'D:/notes/review-summary.md', { origin: 'external', absolutePath: 'D:/notes/review-summary.md', actions: [], additions: 2, deletions: 1 });
+  if (scenario === 'renderer') files.push(external);
+  const turnFiles = [files[0], files[1], files[3], external];
   const line = (kind, text, oldLine, newLine) => ({ kind, text, oldLine, newLine });
   const hunk = (id, oldStart, newStart, lines) => ({ id, oldStart, newStart, oldLines: lines.filter(l => l.oldLine != null).length, newLines: lines.filter(l => l.newLine != null).length, header: `@@ -${oldStart},3 +${newStart},4 @@`, lines });
   const hunksFor = (fileId, context) => {
@@ -31,11 +34,14 @@
     return [first, second];
   };
   const state = window.__demo = { calls: [], comments: [], failFile: scenario === 'file-error', conflict: scenario === 'conflict', stale: scenario === 'stale', settings: { layout: 'unified', wordWrap: true }, review: null, runs: [run], appearance: { locale: params.get('lang') || 'en', base: params.get('base') || 'light' }, changeAppearance(value) { this.appearance = value; listeners.get('appearance:changed')?.(value); } };
+  state.navigation = new Map();
+  state.openLocation = path => listeners.get('view:open')?.({ path });
   const jobs = new Map();
   window.pluginBridge = {
     on(event, callback) { listeners.set(event, callback); return () => listeners.delete(event); },
     async invoke(method, args = {}, internal = false) {
       if (!internal) state.calls.push({ method, args, at: Date.now() });
+      if (method === 'diff.activeReviewSession') { state.activeSession = args.sessionId; return { ok: true }; }
       if (method === 'app.getAppearance') return state.appearance;
       if (method === 'diff.rendererReport') return { ok: true };
       if (method === 'diff.jobStart') {
@@ -52,7 +58,9 @@
         return { repositories: scenario === 'no-roots' ? [] : [{ root, name: 'diff-view', git: true, branch: 'main' }], runs: scenario === 'no-roots' ? [] : state.runs, locale: state.appearance.locale, base: state.appearance.base, settings: state.settings };
       }
       if (method === 'diff.review') {
-        const mapped = args.scope === 'staged' || scenario === 'empty' ? [] : files.map(file => ({ ...file, fingerprint: state.stale ? `${file.fingerprint}-changed` : file.fingerprint, actions: ['turn', 'lastTurn'].includes(args.scope) ? file.kind === 'text' ? ['revert'] : [] : ['commit', 'branch'].includes(args.scope) ? [] : file.actions }));
+        if (args.focusFileId) { const index = files.findIndex(file => file.id === args.focusFileId); if (index > 0) files.unshift(...files.splice(index, 1)); }
+        const listed = scenario === 'renderer' && ['turn', 'lastTurn'].includes(args.scope) ? turnFiles : files;
+        const mapped = args.scope === 'staged' || scenario === 'empty' ? [] : listed.map(file => ({ ...file, fingerprint: state.stale ? `${file.fingerprint}-changed` : file.fingerprint, actions: file.origin === 'external' ? [] : ['turn', 'lastTurn'].includes(args.scope) ? file.kind === 'text' ? ['revert'] : [] : ['commit', 'branch'].includes(args.scope) ? [] : file.actions }));
         state.review = { id: `review-${state.calls.length}`, root, scope: args.scope, sessionId: args.sessionId, runId: args.runId, files: mapped, notice: 'Demo data · mocked backend / 演示数据 · 模拟后端' }; return state.review;
       }
       if (method === 'diff.file') {
@@ -71,6 +79,9 @@
       if (method === 'diff.copyPatch') return { ok: true };
       if (method === 'diff.settings') { Object.assign(state.settings, args); return; }
       if (method === 'diff.clearHistory') { if (!args.confirmed) throw new Error('Confirmation required'); state.runs = []; state.comments = []; return; }
+      if (method === 'diff.turnSummary') { const offset = args.offset || 0, limit = args.limit || 3; return { runId: run.id, sessionId: run.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(offset, offset + limit), offset, nextOffset: offset + limit < turnFiles.length ? offset + limit : null }; }
+      if (method === 'diff.selectTurn') { const nonce = `00000000-0000-4000-8000-${String(state.navigation.size + 1).padStart(12, '0')}`; const selection = { nonce, sessionId: run.sessionId, request: { scope: 'turn', root, sessionId: run.sessionId, runId: run.id }, fileId: args.fileId, at: Date.now() }; state.navigation.set(nonce, selection); return selection; }
+      if (method === 'diff.readTurnSelection') { const selections = window.parent !== window ? window.parent.__demo.navigation : state.navigation; const selected = selections.get(args.nonce); if (!selected) throw new Error('Demo selection expired'); return selected; }
       if (method === 'diff.card') return { run: args.messageId === 'reply-demo' ? run : null };
       if (method === 'diff.openPanel') return;
       throw new Error(`Unexpected mocked method: ${method}`);

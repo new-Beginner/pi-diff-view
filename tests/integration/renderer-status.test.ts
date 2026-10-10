@@ -15,11 +15,11 @@ it('built main records only bounded renderer startup stages and rejects arbitrar
     await plugin.onLoad(); loaded = true;
     expect(JSON.parse(await fs.readFile(path.join(data, 'renderer-status.json'), 'utf8')).stages).toEqual({});
     await plugin.onRendererCall('rendererReport', { stage: 'entry-loaded', content: 'should never be recorded', sessionId: 'not stored' });
-    await plugin.onRendererCall('rendererReport', { stage: 'composer-mounted' });
+    await plugin.onRendererCall('rendererReport', { stage: 'sidebar-opened' });
     await expect(plugin.onRendererCall('rendererReport', { stage: '../outside' })).rejects.toThrow('Unknown');
     await expect(plugin.onRendererCall('rendererReport', null)).rejects.toThrow('Unknown');
     const text = await fs.readFile(path.join(data, 'renderer-status.json'), 'utf8'), value = JSON.parse(text);
-    expect(Object.keys(value.stages)).toEqual(['entry-loaded', 'composer-mounted']);
+    expect(Object.keys(value.stages)).toEqual(['entry-loaded', 'sidebar-opened']);
     expect(Object.values(value.stages).every(timestamp => Number.isFinite(timestamp))).toBe(true);
     expect(text).not.toContain('should never'); expect(text).not.toContain('not stored');
     await plugin.onUnload(); loaded = false;

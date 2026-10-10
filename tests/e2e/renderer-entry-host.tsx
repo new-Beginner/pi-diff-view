@@ -26,6 +26,7 @@ const host = {
     if (action !== 'plugin.call') throw new Error('Only plugin calls in this startup test');
     state.calls.push(payload.method);
     if (payload.method === 'rendererReport') { state.reports.push(payload.args.stage); return { ok: true }; }
+    if (payload.method === 'activeReviewSession') return { ok: true };
     if (payload.method === 'jobStart') { const id = `job-${jobs.size}`; jobs.set(id, failBoot ? { state: 'error', error: { code: 'TEST_BOOT_ERROR', message: 'Injected boot failure' } } : { state: 'done', result: boot }); return { jobId: id }; }
     if (payload.method === 'jobPoll') return jobs.get(payload.args.jobId);
     if (payload.method === 'nativeProbeInfo') return { version: '0.18.0', hashes: {}, supported: false, reason: 'Test host is intentionally not native' };
@@ -33,15 +34,14 @@ const host = {
   },
   ui: {
     injectStyle(css: string) { const style = document.createElement('style'); style.textContent = css; document.head.append(style); state.styles++; const dispose = () => { style.remove(); state.styles--; }; disposers.push(dispose); return dispose; },
-    openLayer() { throw new Error('No custom layer should be opened by a preflight startup test'); }
+    openLayer() { throw new Error('No review surface should open automatically during startup'); }
   },
   slots: { register(options: any) {
-    if (!['entryExtra', 'composerControl'].includes(options.slot)) throw new Error('Wrong slot');
-    if (options.slot === 'composerControl' && JSON.stringify(options.positions) !== '["right"]') throw new Error('Wrong position');
+    if (options.slot !== 'entryExtra') throw new Error('Input-area controls must not be registered');
     state.slots.push(options.slot);
     const container = document.createElement('div'); container.setAttribute('data-pi-plugin', 'local.diff-view'); container.dataset.testSlot = options.slot;
     document.body.append(container); const root = ReactDomClient.createRoot(container); roots.push(root);
-    root.render(React.createElement(options.component, options.slot === 'composerControl' ? { position: 'right', disabled: false } : { sessionId: 's', messageId: 'reply', message: { content: 'No recorded capture', createdAt: new Date().toISOString() } }));
+    root.render(React.createElement(options.component, { sessionId: 's', messageId: 'reply', message: { content: 'No recorded capture', createdAt: new Date().toISOString() } }));
     return () => { root.unmount(); container.remove(); state.slots = state.slots.filter(slot => slot !== options.slot); };
   } },
   composer: { subscribeDraft(listener: (data: any) => void) { state.listeners++; listener({ sessionId: 's', text: 'Existing draft', generation: 1 }); return () => { state.listeners--; }; } }

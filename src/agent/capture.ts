@@ -2,12 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import type { CaptureRun, FileSnapshot } from '../core/contracts';
-import { canonical, digest, readSnapshot, sameSnapshot, safeResolve } from '../core/path-policy';
+import type { CaptureIdentity, CaptureRun, FileSnapshot } from '../core/contracts';
+import { digest, readCapturedSnapshot, resolveCapturePath, sameSnapshot } from '../core/path-policy';
 import { locatorPath, resolveLocator, SnapshotStore } from '../core/storage';
 interface Context { cwd: string; sessionManager: { getSessionId(): string }; ui?: { notify(message: string, level?: string): void }; }
 interface Extension { on(event: string, handler: (event: any, ctx: Context) => unknown): void; }
 interface Options { pluginRoot: string; locator?: string; }
+const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
 function textContent(message: any): string {
   if (typeof message?.content === 'string') return message.content;
   return Array.isArray(message?.content) ? message.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('') : '';
@@ -16,61 +17,83 @@ function toolPaths(name: string, input: any): string[] {
   const p = input?.path ?? input?.file_path;
   if (typeof p !== 'string' || !['Write', 'Edit', 'write', 'edit'].includes(name)) return [];
   const paths = [p];
-  if (typeof input.ops === 'string') for (const line of input.ops.split('\n')) if (line.startsWith('MV ')) paths.push(line.slice(3).trim());
+  if (/^edit$/i.test(name) && typeof input.ops === 'string') for (const line of input.ops.split('\n')) if (line.startsWith('MV ')) { paths.push(line.slice(3).trim()); if (paths.length > 256) break; }
   return [...new Set(paths)];
 }
-/** One closure per runner, no process-global session state. All writes serialize. */
+/** One closure per runner; no filesystem discovery and no replacement tool results. */
 export function createCaptureExtension(options: Options): (pi: Extension) => void {
   return pi => {
     let run: CaptureRun | null = null, store: SnapshotStore | null = null;
-    let pending = new Map<string, { run: CaptureRun; paths: { path: string; before: FileSnapshot }[] }>();
-    let seen = new Set<string>(), warned = false, disposed = false, tail = Promise.resolve();
+    let pending = new Map<string, { run: CaptureRun; paths: { capture: CaptureIdentity; before: FileSnapshot }[] }>();
+    let seen = new Set<string>(), retired = new Set<string>(), warned = false, disposed = false, tail = Promise.resolve();
+    let lastReply: CaptureRun['finalReply'], privatePaths: string[] = [], observed = new Set<string>();
     const serial = (fn: () => Promise<void>, ctx: Context): Promise<void> => {
-      tail = tail.then(fn).catch(error => { if (run) run.incomplete = true; if (!warned) { warned = true; ctx.ui?.notify(`Diff view: ${error.message}`, 'warning'); } });
+      tail = tail.then(fn).catch(async error => {
+        lastReply = undefined;
+        if (run) { run.incomplete = true; delete run.finalReply; await persist(run).catch(() => {}); }
+        if (!warned) { warned = true; ctx.ui?.notify(`Diff view: ${error.message}`, 'warning'); }
+      });
       return tail;
     };
-    const bridge = async () => {
-      const file = options.locator ?? await locatorPath(options.pluginRoot);
-      return resolveLocator(file, options.pluginRoot);
-    };
-    const persist = async (target: CaptureRun) => {
+    const bridge = async () => resolveLocator(options.locator ?? await locatorPath(options.pluginRoot), options.pluginRoot);
+    const check = async (target: CaptureRun) => {
       const locator = await bridge();
       if (locator.generation !== target.generation) throw new Error('Capture generation changed; reload the Agent session');
-      target.fileCount = Object.keys(target.changes).length;
+      return locator;
+    };
+    const persist = async (target: CaptureRun) => {
+      await check(target);
+      target.fileCount = Object.values(target.changes).filter(c => !sameSnapshot(c.before, c.after)).length;
+      target.contentVersion = (target.contentVersion ?? 0) + 1;
       await store!.writeRun(target, true);
     };
-    const begin = async (ctx: Context, prompt?: string, uncertain = false) => {
+    const bounded = (snapshot: FileSnapshot, extra: FileSnapshot[] = []): FileSnapshot => {
+      const retained = new Set([...Object.values(run!.changes).flatMap(c => [c.before, c.after]), ...[...pending.values()].flatMap(p => p.paths.map(e => e.before)), ...extra]);
+      const used = [...retained].reduce((n, s) => n + (s.text === null ? 0 : s.size), 0);
+      if (snapshot.text !== null && used + snapshot.size > MAX_CAPTURE_BYTES) {
+        run!.incomplete = true; return { ...snapshot, kind: 'unavailable', text: null };
+      }
+      return snapshot;
+    };
+    const begin = async (ctx: Context, uncertain = false) => {
       if (disposed) return;
       const locator = await bridge();
+      if (run?.state === 'running') { run.state = 'incomplete'; run.incomplete = true; delete run.finalReply; run.endedAt = Date.now(); await persist(run); }
       store = new SnapshotStore(locator.dataPath); await store.init();
-      if (run && (run.state === 'running' || uncertain)) { run.state = 'incomplete'; run.incomplete = true; run.endedAt = Date.now(); await persist(run); }
-      // Do not retain raw user prompts in the snapshot store.
-      run = { version: 1, id: randomUUID(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root: await fs.realpath(ctx.cwd), startedAt: Date.now(), state: 'running', fileCount: 0, incomplete: uncertain, changes: {}, replies: [], bindings: {} };
-      pending = new Map(); seen = new Set(); warned = false;
-      void prompt; await persist(run);
+      privatePaths = [await fs.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)];
+      // User-task boundary, not a model/tool-loop turn; prompts are never retained.
+      run = { version: 2, contentVersion: 0, boundary: uncertain ? 'uncertain' : 'user', id: randomUUID(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root: await fs.realpath(ctx.cwd), startedAt: Date.now(), state: 'running', fileCount: 0, incomplete: uncertain, changes: Object.create(null), replies: [], bindings: {} };
+      for (const id of seen) retired.add(id);
+      while (retired.size > 4096) retired.delete(retired.keys().next().value!);
+      pending.clear(); seen.clear(); observed.clear(); warned = false; lastReply = undefined;
+      await persist(run);
     };
-    pi.on('before_agent_start', (event, ctx) => serial(() => begin(ctx, event.prompt), ctx));
+    pi.on('before_agent_start', (_event, ctx) => serial(() => begin(ctx), ctx));
     pi.on('tool_call', (event, ctx) => serial(async () => {
-      if (disposed || seen.has(event.toolCallId)) return;
-      if (!run || run.state !== 'running') await begin(ctx, undefined, run !== null);
-      if (!run) return;
-      const name = String(event.toolName), inputs = event.input ?? event.args;
-      const targets = toolPaths(name, inputs);
+      if (disposed || typeof event.toolCallId !== 'string' || seen.has(event.toolCallId)) return;
+      lastReply = undefined;
+      if (!run || run.state !== 'running') await begin(ctx, true);
+      if (!run || run.sessionId !== ctx.sessionManager.getSessionId()) return;
+      if (retired.has(event.toolCallId)) { if (run) { run.incomplete = true; await persist(run); } return; }
+      if (seen.size >= 4096 || pending.size >= 256 || event.toolCallId.length > 256) { run.incomplete = true; await persist(run); return; }
+      await check(run); seen.add(event.toolCallId);
+      const name = String(event.toolName), targets = toolPaths(name, event.input ?? event.args);
       if (!targets.length) {
-        if (/^(Bash|bash|Task|task)$/.test(name) || name.startsWith('plugin_')) { run.incomplete = true; await persist(run); }
+        if (/^(Bash|bash|Task|task|Write|write|Edit|edit)$/.test(name) || name.startsWith('plugin_')) { run.incomplete = true; await persist(run); }
         return;
       }
-      const captures: { path: string; before: FileSnapshot }[] = [];
-      for (const target of targets) {
+      if (targets.length > 256) run.incomplete = true;
+      const captures: { capture: CaptureIdentity; before: FileSnapshot }[] = [];
+      for (const [index, target] of targets.slice(0, 256).entries()) {
         try {
-          const abs = await safeResolve(run.root, target);
-          const rel = path.relative(run.root, abs).split(path.sep).join('/');
-          const before = await readSnapshot(run.root, rel);
+          const capture = await resolveCapturePath(run.root, target, privatePaths, /^write$/i.test(name) || index > 0);
+          if (!observed.has(capture.identity) && observed.size >= 256) throw new Error('Turn exceeds 256 explicitly captured files');
+          observed.add(capture.identity);
+          const before = bounded(await readCapturedSnapshot(run.root, capture, privatePaths), captures.map(e => e.before));
           if (before.kind !== 'text') run.incomplete = true;
-          captures.push({ path: rel, before });
+          captures.push({ capture, before });
         } catch { run.incomplete = true; }
       }
-      seen.add(event.toolCallId);
       pending.set(event.toolCallId, { run, paths: captures });
       await persist(run);
     }, ctx));
@@ -79,41 +102,64 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       if (!captured || disposed) return;
       pending.delete(event.toolCallId);
       const target = captured.run;
+      if (target !== run || target.state !== 'running' || target.sessionId !== ctx.sessionManager.getSessionId()) return;
+      await check(target);
+      lastReply = undefined;
       for (const entry of captured.paths) {
         try {
-          const after = await readSnapshot(target.root, entry.path);
+          const after = bounded(await readCapturedSnapshot(target.root, entry.capture, privatePaths), captured.paths.map(e => e.before));
           if (event.isError || after.kind !== 'text') target.incomplete = true;
-          if (sameSnapshot(entry.before, after)) continue;
-          const key = process.platform === 'win32' ? entry.path.toLowerCase() : entry.path;
-          const prior = Object.keys(target.changes).find(p => (process.platform === 'win32' ? p.toLowerCase() : p) === key);
-          if (prior && !sameSnapshot(target.changes[prior].after, entry.before)) target.incomplete = true;
-          target.changes[prior ?? entry.path] = { before: prior ? target.changes[prior].before : entry.before, after };
+          const priorKey = Object.keys(target.changes).find(p => target.changes[p].capture?.identity === entry.capture.identity);
+          const prior = priorKey ? target.changes[priorKey] : undefined;
+          if (prior && !sameSnapshot(prior.after, entry.before)) target.incomplete = true;
+          target.changes[priorKey ?? entry.capture.path] = { capture: prior?.capture ?? entry.capture, before: prior?.before ?? entry.before, after };
         } catch { target.incomplete = true; }
       }
       await persist(target);
-      return undefined; // Never replace the original tool result.
+      return undefined;
     }, ctx));
     pi.on('message_end', (event, ctx) => serial(async () => {
-      if (!run || event.message?.role !== 'assistant') return;
-      const message = event.message;
-      if (Array.isArray(message.content) && message.content.some((b: any) => b.type === 'toolCall')) return;
-      const text = textContent(message); if (!text.trim()) return;
-      const timestamp = typeof message.timestamp === 'number' ? message.timestamp : Date.now();
-      const hash = digest(text);
-      if (!run.replies.some(r => r.hash === hash && r.timestamp === timestamp)) run.replies.push({ hash, timestamp });
-      run.replies = run.replies.slice(-20); await persist(run);
+      if (!run || run.state !== 'running' || run.sessionId !== ctx.sessionManager.getSessionId() || event.message?.role !== 'assistant') return;
+      const message = event.message, text = textContent(message);
+      lastReply = undefined;
+      const tools = Array.isArray(message.content) && message.content.some((b: any) => b.type === 'toolCall' || b.type === 'tool_use');
+      if (tools || !text.trim()) return;
+      // A missing timestamp cannot safely bind a host message later.
+      if (!Number.isFinite(message.timestamp)) { run.incomplete = true; await persist(run); return; }
+      if (message.timestamp < run.startedAt || message.timestamp > Date.now() + 3000) { run.incomplete = true; await persist(run); return; }
+      const reply = { hash: digest(text), timestamp: message.timestamp as number };
+      if (!run.replies.some(r => r.hash === reply.hash && r.timestamp === reply.timestamp)) run.replies.push(reply);
+      run.replies = run.replies.slice(-20);
+      if (!pending.size && !['error', 'aborted', 'toolUse', 'tool_use', 'length'].includes(message.stopReason)) lastReply = reply;
+      else if (['error', 'aborted', 'length'].includes(message.stopReason)) run.incomplete = true;
+      await persist(run);
     }, ctx));
-    pi.on('agent_end', (_event, ctx) => serial(async () => {
-      if (!run) return;
-      if (pending.size) { run.incomplete = true; pending.clear(); }
-      run.state = run.incomplete ? 'incomplete' : 'completed'; run.endedAt = Date.now(); await persist(run);
+    pi.on('agent_end', (event, ctx) => serial(async () => {
+      if (!run || run.state !== 'running' || run.sessionId !== ctx.sessionManager.getSessionId()) return;
+      await check(run);
+      if (pending.size) { run.incomplete = true; pending.clear(); lastReply = undefined; }
+      // Read only the exact authorized paths again; never infer changes from Git or a directory.
+      for (const change of Object.values(run.changes)) if (change.capture) {
+        try {
+          const after = bounded(await readCapturedSnapshot(run.root, change.capture, privatePaths));
+          if (!sameSnapshot(change.after, after)) run.incomplete = true;
+          change.after = after;
+        } catch { run.incomplete = true; change.after = { ...change.after, kind: 'unavailable', text: null }; }
+      }
+      const messages = Array.isArray(event.messages) ? event.messages : undefined;
+      if (messages) {
+        const last = [...messages].reverse().find((m: any) => m.role === 'assistant');
+        if (!last || !lastReply || digest(textContent(last)) !== lastReply.hash || last.timestamp !== lastReply.timestamp || (Array.isArray(last.content) && last.content.some((b: any) => b.type === 'toolCall' || b.type === 'tool_use'))) lastReply = undefined;
+      }
+      const aborted = event.aborted === true || event.isError === true;
+      if (aborted) { run.incomplete = true; lastReply = undefined; }
+      if (run.boundary === 'user' && lastReply && !aborted) run.finalReply = lastReply;
+      run.state = aborted ? 'aborted' : run.incomplete ? 'incomplete' : 'completed'; run.endedAt = Date.now(); await persist(run);
     }, ctx));
     pi.on('session_shutdown', (_event, ctx) => serial(async () => {
-      if (run?.state === 'running') { run.incomplete = true; run.state = 'aborted'; run.endedAt = Date.now(); await persist(run).catch(() => {}); }
-      disposed = true; pending.clear(); seen.clear(); run = null;
+      if (run?.state === 'running') { run.incomplete = true; run.state = 'aborted'; delete run.finalReply; run.endedAt = Date.now(); await persist(run).catch(() => {}); }
+      disposed = true; pending.clear(); seen.clear(); observed.clear(); run = null;
     }, ctx));
-    // A delayed result stays bound to its captured run, never whichever run is current.
-    void canonical;
   };
 }
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
