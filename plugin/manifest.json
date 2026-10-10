@@ -13,7 +13,7 @@
   "ui": { "panel": "views/index.html", "title": "Diff view", "width": 1180, "height": 800 },
   "renderer": "renderer/index.mjs",
   "rendererActions": ["plugin.call", "composer.insertText", "composer.readDraft"],
-  "rendererCallMethods": ["nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "openPanel"],
+  "rendererCallMethods": ["rendererReport", "nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "openPanel"],
   "contributes": {
     "commands": [{ "id": "diff-view.open", "title": "Diff view: Open review", "keywords": ["diff", "review", "变更", "审查"] }],
     "views": [{ "id": "review", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "icon": "diff", "entry": "views/index.html", "order": 45 }],

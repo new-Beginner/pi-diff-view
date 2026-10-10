@@ -37,6 +37,7 @@
     async invoke(method, args = {}, internal = false) {
       if (!internal) state.calls.push({ method, args, at: Date.now() });
       if (method === 'app.getAppearance') return state.appearance;
+      if (method === 'diff.rendererReport') return { ok: true };
       if (method === 'diff.jobStart') {
         const jobId = `job-${jobs.size + 1}`, job = { state: 'pending' }; jobs.set(jobId, job);
         // Background work is intentionally not part of the short bridge round trip.

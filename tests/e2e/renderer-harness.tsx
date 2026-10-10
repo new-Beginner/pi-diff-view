@@ -7,7 +7,7 @@ let draftListener: ((value: { sessionId: string; text: string }) => void) | null
 const host: RendererHost = {
   dispatch<T>(action: string, payload?: any): Promise<T> {
     if (action === 'plugin.call') {
-      const methods = ['jobStart', 'jobPoll', 'bootstrap', 'review', 'file', 'action', 'batchAction', 'comments', 'saveComment', 'deleteComment', 'feedback', 'copyPatch', 'settings', 'clearHistory', 'card', 'openPanel'];
+      const methods = ['rendererReport', 'jobStart', 'jobPoll', 'bootstrap', 'review', 'file', 'action', 'batchAction', 'comments', 'saveComment', 'deleteComment', 'feedback', 'copyPatch', 'settings', 'clearHistory', 'card', 'openPanel'];
       if (!methods.includes(payload.method)) return Promise.reject(new Error('Method not declared in renderer whitelist'));
       return window.pluginBridge!.invoke<T>(`diff.${payload.method}`, payload.args);
     }

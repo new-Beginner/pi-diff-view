@@ -14,6 +14,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let turnEnded: ((event: { sessionId?: string; turnId?: string; reason?: string }) => void) | undefined;
 let tail: Promise<unknown> = Promise.resolve();
 let disposed = false;
+let rendererStages: Record<string, number> = {};
 function serial<T>(work: () => Promise<T>): Promise<T> { const result = tail.then(work); tail = result.catch(() => {}); return result; }
 async function heartbeat(): Promise<void> {
   if (disposed || !store) return;
@@ -22,6 +23,8 @@ async function heartbeat(): Promise<void> {
 export async function onLoad(): Promise<void> {
   disposed = false; generation = randomUUID(); pluginRoot = await fs.realpath(__dirname);
   const dataPath = await pi.plugin.getDataPath(); store = new SnapshotStore(dataPath); await store.init();
+  rendererStages = {};
+  await atomicJson(path.join(store.directory, 'renderer-status.json'), { version: 1, generation, mainLoadedAt: Date.now(), stages: rendererStages });
   locatorFile = await locatorPath(pluginRoot); await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: v => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: text => pi.clipboard.writeText(text), openPanel: () => pi.ui.openPanel({ title: 'Diff view' }) }, generation);
   const currentService = service;
@@ -55,6 +58,11 @@ export async function onRendererCall(method: string, args: unknown): Promise<unk
 async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (!service || disposed) fail('PLUGIN_UNLOADED', 'Diff view is not loaded');
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
+  if (method === 'rendererReport') {
+    const stage = (args as { stage?: unknown } | null)?.stage;
+    if (typeof stage !== 'string' || !['entry-loaded', 'composer-mounted', 'bootstrap-ok', 'bootstrap-error'].includes(stage)) fail('INVALID_STAGE', 'Unknown renderer diagnostic stage');
+    return serial(async () => { if (disposed || !store) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); rendererStages[stage] = Date.now(); await atomicJson(path.join(store.directory, 'renderer-status.json'), { version: 1, generation, stages: rendererStages }); return { ok: true }; });
+  }
   if (method === 'jobStart') { const a = args as { method: string; args?: unknown }; return jobs!.start(a.method, a.args ?? {}); }
   if (method === 'jobPoll') return jobs!.poll((args as { jobId: string }).jobId);
   const s = service;

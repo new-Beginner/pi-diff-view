@@ -23,6 +23,7 @@ interface Hub {
   bootstrap: Bootstrap | null; listeners: Set<(boot: Bootstrap | null) => void>; cards: Map<string, CardItem>; cursor: number;
   activeSession?: string; unsubscribeDraft?: Disposer;
   native?: NativeReviewAdapter;
+  reported: Set<string>; bootstrapError?: string;
 }
 let hub: Hub | null = null;
 const realm = globalThis as typeof globalThis & { __piDiffRenderer?: { hub: Hub; dispose: Disposer } };
@@ -30,11 +31,19 @@ const disposers: Disposer[] = [];
 const layers = new Set<Disposer>();
 const css = `${reviewStyle}\n.dv-reply{display:flex;align-items:center;flex-wrap:wrap;gap:8px;border-top:1px solid color-mix(in srgb,currentColor 16%,transparent);padding:8px 0;font:12px/1.45 system-ui}.dv-reply button,.dv-composer{font:inherit;color:inherit;background:transparent;border:1px solid color-mix(in srgb,currentColor 24%,transparent);border-radius:4px;padding:4px 8px;cursor:pointer}.dv-reply button:hover,.dv-composer:hover{background:color-mix(in srgb,currentColor 8%,transparent)}.dv-reply button:focus-visible,.dv-composer:focus-visible{outline:2px solid #8cb9ff;outline-offset:2px}.dv-composer:disabled{opacity:.5;cursor:not-allowed}.dv-layer{position:fixed;inset:0;padding:24px;background:rgb(0 0 0 / .4);display:grid;place-items:stretch;z-index:1}.dv-layer-inner{min-width:0;min-height:0;border:1px solid #616b77;border-radius:8px;box-shadow:0 8px 32px rgb(0 0 0 / .2)}.dv-layer .dv-app{height:100%;min-height:0;border-radius:8px}.dv-layer-error{color:#b02c35;padding:8px;font:12px system-ui}@media(max-width:720px){.dv-layer{padding:8px}}`;
 function same(current: Hub | null): current is Hub { return Boolean(current && current === hub && !current.disposed); }
+function report(current: Hub, stage: string): void {
+  if (!same(current) || current.reported.has(stage)) return;
+  current.reported.add(stage);
+  void current.transport.invoke('rendererReport', { stage }).catch(() => {}); // Bounded plugin-private startup markers only.
+}
 async function poll(current: Hub) {
+  let bootstrapSucceeded = false;
   if (!same(current)) return;
   try {
     const data = await current.transport.invoke<Bootstrap>('bootstrap');
     if (!same(current)) return;
+    current.bootstrapError = ''; report(current, 'bootstrap-ok');
+    bootstrapSucceeded = true;
     current.bootstrap = data; current.listeners.forEach(listener => listener(data));
     const items = [...current.cards.values()].filter(item => item.listeners.size && (!item.checked || !item.run || item.run.state === 'running'));
     // At most two reply lookups per 6s cycle, regardless of mounted reply count.
@@ -45,12 +54,14 @@ async function poll(current: Hub) {
       item.run = response.run; item.checked = true; item.listeners.forEach(listener => listener(response.run));
     }
     current.cursor += 2;
-  } catch { /* Polling is passive; independent panel surfaces actionable backend errors. */ }
+  } catch (error) {
+    if (same(current) && !bootstrapSucceeded) { current.bootstrapError = String((error as Error).message ?? error).slice(0, 240); report(current, 'bootstrap-error'); current.listeners.forEach(listener => listener(current.bootstrap)); }
+  }
   finally { if (same(current)) current.timer = setTimeout(() => void poll(current), 6000); }
 }
 function useBootstrap(current: Hub | null) {
-  const [boot, setBoot] = useState(current?.bootstrap ?? null);
-  useEffect(() => { if (!same(current)) return; setBoot(current.bootstrap); current.listeners.add(setBoot); return () => { current.listeners.delete(setBoot); }; }, [current]);
+  const [boot, setBoot] = useState(current?.bootstrap ?? null); const [, force] = useState(0);
+  useEffect(() => { if (!same(current)) return; const listener = (data: Bootstrap | null) => { setBoot(data); force(n => n + 1); }; setBoot(current.bootstrap); current.listeners.add(listener); return () => { current.listeners.delete(listener); }; }, [current]);
   return boot;
 }
 function openReview(current: Hub, run?: RunSummary) {
@@ -100,7 +111,7 @@ function EntryExtra(props: ReplyProps) {
 function ComposerControl() {
   const current = hub; const boot = useBootstrap(current); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const mounted = useRef(true);
   const [probeStatus, setProbeStatus] = useState('');
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { mounted.current = true; if (same(current)) report(current, 'composer-mounted'); return () => { mounted.current = false; }; }, [current]);
   const t = messages(boot?.locale ?? 'zh-CN');
   return <><button className="dv-composer" disabled={busy || !same(current)} title={t.title} onClick={() => {
     if (!same(current)) return;
@@ -112,12 +123,12 @@ function ComposerControl() {
     current.native.probe(sessionId, 'docs/native-preflight-fixture.txt', { id: 'preflight-demo', path: '[外部文件演示 / render-only] native-preflight-external.txt', origin: 'external', demo: true, additions: 1, deletions: 1, hunks: [{ header: '@@ -1,1 +1,1 @@', lines: [{ type: 'del', text: 'native preflight before' }, { type: 'add', text: 'native preflight after' }] }] }).then(result => {
       if (mounted.current && same(current) && current.activeSession === sessionId) setProbeStatus(`原生预检 / Native preflight: ${JSON.stringify(result)}。请人工核对侧栏；演示不是实际采集。`);
     }).catch(err => { if (mounted.current && same(current)) setProbeStatus(`原生预检未通过 / Failed: ${String(err?.code ?? 'NATIVE_IMPORT')} ${err instanceof Error ? err.message : String(err)}`); }).finally(() => { if (mounted.current && same(current)) setBusy(false); });
-  }}>原生审阅预检 / Native preflight</button>}{probeStatus && <span className="dv-layer-error" role="status" style={{ whiteSpace: 'pre-wrap' }}>{probeStatus}</span>}{error && <span className="dv-layer-error" role="alert">{error}</span>}</>;
+  }}>原生审阅预检 / Native preflight</button>}{probeStatus && <span className="dv-layer-error" role="status" style={{ whiteSpace: 'pre-wrap' }}>{probeStatus}</span>}{current?.bootstrapError && <span className="dv-layer-error" role="alert">无法加载预检设置 / Cannot load preflight settings: {current.bootstrapError}</span>}{error && <span className="dv-layer-error" role="alert">{error}</span>}</>;
 }
 export function onLoad(pi: RendererHost) {
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
-  const current: Hub = { host: pi, transport, disposed: false, bootstrap: null, listeners: new Set(), cards: new Map(), cursor: 0 };
+  const current: Hub = { host: pi, transport, disposed: false, bootstrap: null, listeners: new Set(), cards: new Map(), cursor: 0, reported: new Set() };
   hub = current;
   current.native = createNativeReviewAdapter({ info: () => transport.invoke<NativeBuildInfo>('nativeProbeInfo') });
   realm.__piDiffRenderer = { hub: current, dispose: onUnload };
@@ -129,6 +140,7 @@ export function onLoad(pi: RendererHost) {
   disposers.push(pi.ui.injectStyle(css));
   disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
   disposers.push(pi.slots.register({ slot: 'composerControl', component: ComposerControl, positions: ['right'] }));
+  report(current, 'entry-loaded');
   void poll(current);
 }
 export function onUnload() {

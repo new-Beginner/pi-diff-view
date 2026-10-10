@@ -1563,14 +1563,14 @@ var require_core = __commonJS({
 });
 
 // src/renderer/index.tsx
-import { useEffect as useEffect2, useRef as useRef2, useState as useState2 } from "react";
+import React4, { useEffect as useEffect2, useRef as useRef2, useState as useState2 } from "react";
 import { createRoot as createRoot2 } from "react-dom/client";
 
 // src/view/ReviewApp.tsx
-import { useCallback, useEffect, useMemo as useMemo2, useRef, useState } from "react";
+import React2, { useCallback, useEffect, useMemo as useMemo2, useRef, useState } from "react";
 
 // src/view/DiffRows.tsx
-import { useMemo } from "react";
+import React, { useMemo } from "react";
 
 // node_modules/highlight.js/es/core.js
 var import_core = __toESM(require_core(), 1);
@@ -5974,7 +5974,6 @@ function diffWordsWithSpace(oldStr, newStr, options) {
 }
 
 // src/view/DiffRows.tsx
-import { jsx, jsxs } from "react/jsx-runtime";
 for (const [name, language2] of Object.entries({ javascript, typescript, python, json, css, xml, bash, markdown, yaml })) core_default.registerLanguage(name, language2);
 function ranges(before, after) {
   if (before.length + after.length > 4e3) return [[], []];
@@ -6037,48 +6036,30 @@ function Code({ text, path, changes = [] }) {
         const points = [...cuts].sort((a, b) => a - b);
         return points.slice(0, -1).map((a, i) => {
           const segment = value.slice(a, points[i + 1]);
-          return changes.some(([lo, hi]) => start + a >= lo && start + a < hi) ? /* @__PURE__ */ jsx("mark", { className: "dv-word", children: segment }, key++) : segment;
+          return changes.some(([lo, hi]) => start + a >= lo && start + a < hi) ? /* @__PURE__ */ React.createElement("mark", { className: "dv-word", key: key++ }, segment) : segment;
         });
       }
       const el = node;
-      return /* @__PURE__ */ jsx("span", { className: el.getAttribute("class") ?? void 0, children: Array.from(node.childNodes).map(walk) }, key++);
+      return /* @__PURE__ */ React.createElement("span", { className: el.getAttribute("class") ?? void 0, key: key++ }, Array.from(node.childNodes).map(walk));
     }
     return Array.from(template.content.childNodes).map(walk);
   }, [text, path, changes]);
-  return /* @__PURE__ */ jsx("code", { className: "dv-code", children: nodes.length ? nodes : " " });
+  return /* @__PURE__ */ React.createElement("code", { className: "dv-code" }, nodes.length ? nodes : " ");
 }
 function DiffRows({ lines, path, layout, onLine, t, disabled }) {
   const pairs = useMemo(() => alignLines(lines), [lines]);
   const button = (line, side) => {
     const number = side === "old" ? line?.oldLine : line?.newLine;
-    return number == null ? /* @__PURE__ */ jsx("span", { className: "dv-number" }) : /* @__PURE__ */ jsx("button", { className: "dv-number", disabled, "aria-label": `${t.addComment}: ${t[side]} ${number}`, onClick: () => onLine(line, side), children: number });
+    return number == null ? /* @__PURE__ */ React.createElement("span", { className: "dv-number" }) : /* @__PURE__ */ React.createElement("button", { className: "dv-number", disabled, "aria-label": `${t.addComment}: ${t[side]} ${number}`, onClick: () => onLine(line, side) }, number);
   };
-  const cell = (line, side, changes2) => /* @__PURE__ */ jsxs("div", { className: `dv-side dv-${line?.kind ?? "blank"}`, children: [
-    button(line, side),
-    /* @__PURE__ */ jsx("span", { className: "dv-sign", "aria-hidden": "true", children: line?.kind === "add" ? "+" : line?.kind === "del" ? "\u2212" : " " }),
-    line ? /* @__PURE__ */ jsx(Code, { text: line.text, path, changes: changes2 }) : /* @__PURE__ */ jsx("span", { className: "dv-code" })
-  ] });
-  if (layout === "split") return /* @__PURE__ */ jsxs("div", { className: "dv-rows dv-split", role: "group", "aria-label": `${t.old} / ${t.new}`, style: { "--dv-code-width": `${Math.max(240, ...lines.map((line) => [...line.text].reduce((width, char) => width + (char === "	" ? 4 : char.charCodeAt(0) > 255 ? 2 : 1), 0) * 8 + 72))}px` }, children: [
-    /* @__PURE__ */ jsxs("div", { className: "dv-side-labels", children: [
-      /* @__PURE__ */ jsx("span", { children: t.old }),
-      /* @__PURE__ */ jsx("span", { children: t.new })
-    ] }),
-    pairs.map((pair, index) => pair.left?.kind === "notice" ? /* @__PURE__ */ jsx("div", { className: "dv-notice-line", children: pair.left.text }, index) : /* @__PURE__ */ jsxs("div", { className: "dv-pair", children: [
-      cell(pair.left, "old", pair.oldRanges),
-      cell(pair.right, "new", pair.newRanges)
-    ] }, index))
-  ] });
+  const cell = (line, side, changes2) => /* @__PURE__ */ React.createElement("div", { className: `dv-side dv-${line?.kind ?? "blank"}` }, button(line, side), /* @__PURE__ */ React.createElement("span", { className: "dv-sign", "aria-hidden": "true" }, line?.kind === "add" ? "+" : line?.kind === "del" ? "\u2212" : " "), line ? /* @__PURE__ */ React.createElement(Code, { text: line.text, path, changes: changes2 }) : /* @__PURE__ */ React.createElement("span", { className: "dv-code" }));
+  if (layout === "split") return /* @__PURE__ */ React.createElement("div", { className: "dv-rows dv-split", role: "group", "aria-label": `${t.old} / ${t.new}`, style: { "--dv-code-width": `${Math.max(240, ...lines.map((line) => [...line.text].reduce((width, char) => width + (char === "	" ? 4 : char.charCodeAt(0) > 255 ? 2 : 1), 0) * 8 + 72))}px` } }, /* @__PURE__ */ React.createElement("div", { className: "dv-side-labels" }, /* @__PURE__ */ React.createElement("span", null, t.old), /* @__PURE__ */ React.createElement("span", null, t.new)), pairs.map((pair, index) => pair.left?.kind === "notice" ? /* @__PURE__ */ React.createElement("div", { key: index, className: "dv-notice-line" }, pair.left.text) : /* @__PURE__ */ React.createElement("div", { key: index, className: "dv-pair" }, cell(pair.left, "old", pair.oldRanges), cell(pair.right, "new", pair.newRanges))));
   const changes = /* @__PURE__ */ new Map();
   for (const pair of pairs) {
     if (pair.left) changes.set(pair.left, pair.oldRanges ?? []);
     if (pair.right) changes.set(pair.right, pair.newRanges ?? []);
   }
-  return /* @__PURE__ */ jsx("div", { className: "dv-rows dv-unified", children: lines.map((line, index) => line.kind === "notice" ? /* @__PURE__ */ jsx("div", { className: "dv-notice-line", children: line.text }, index) : /* @__PURE__ */ jsxs("div", { className: `dv-row dv-${line.kind}`, children: [
-    button(line, "old"),
-    button(line, "new"),
-    /* @__PURE__ */ jsx("span", { className: "dv-sign", "aria-hidden": "true", children: line.kind === "add" ? "+" : line.kind === "del" ? "\u2212" : " " }),
-    /* @__PURE__ */ jsx(Code, { text: line.text, path, changes: changes.get(line) })
-  ] }, index)) });
+  return /* @__PURE__ */ React.createElement("div", { className: "dv-rows dv-unified" }, lines.map((line, index) => line.kind === "notice" ? /* @__PURE__ */ React.createElement("div", { key: index, className: "dv-notice-line" }, line.text) : /* @__PURE__ */ React.createElement("div", { className: `dv-row dv-${line.kind}`, key: index }, button(line, "old"), button(line, "new"), /* @__PURE__ */ React.createElement("span", { className: "dv-sign", "aria-hidden": "true" }, line.kind === "add" ? "+" : line.kind === "del" ? "\u2212" : " "), /* @__PURE__ */ React.createElement(Code, { text: line.text, path, changes: changes.get(line) }))));
 }
 
 // src/view/i18n.ts
@@ -6378,7 +6359,6 @@ function ensureBounded(transport) {
 }
 
 // src/view/ReviewApp.tsx
-import { Fragment, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 function Modal({ title, children, onClose, busy }) {
   const ref = useRef(null);
@@ -6386,13 +6366,10 @@ function Modal({ title, children, onClose, busy }) {
     ref.current?.showModal();
     return () => ref.current?.close();
   }, []);
-  return /* @__PURE__ */ jsxs2("dialog", { className: "dv-dialog", ref, "aria-label": title, onCancel: (event) => {
+  return /* @__PURE__ */ React2.createElement("dialog", { className: "dv-dialog", ref, "aria-label": title, onCancel: (event) => {
     event.preventDefault();
     if (!busy) onClose();
-  }, children: [
-    /* @__PURE__ */ jsx2("h2", { children: title }),
-    children
-  ] });
+  } }, /* @__PURE__ */ React2.createElement("h2", null, title), children);
 }
 function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: hostLocale, base: hostBase }) {
   const transport = useMemo2(() => ensureBounded(source), [source]);
@@ -6641,412 +6618,91 @@ function ReviewApp({ transport: source, initialRequest = {}, onClose, locale: ho
     await transport.invoke("copyPatch", { reviewId: review.id, fileId: currentFile?.id });
     if (live.current) setStatus(t.copied);
   });
-  const actionButtons = (file, hunk) => file.actions.map((action) => /* @__PURE__ */ jsx2("button", { disabled: busy || loadingReview || loadingDetail, onClick: () => {
+  const actionButtons = (file, hunk) => file.actions.map((action) => /* @__PURE__ */ React2.createElement("button", { key: action, disabled: busy || loadingReview || loadingDetail, onClick: () => {
     setError("");
     if (review) setConfirmation({ kind: "action", action, file, hunk, review });
-  }, children: t[action] }, action));
+  } }, t[action]));
   const runLabel = (id) => {
     const run = boot?.runs.find((item) => item.id === id);
     return run ? `${new Date(run.startedAt).toLocaleString(locale)} \xB7 ${run.prompt?.slice(0, 60) ?? run.id} \xB7 ${t[run.state]}${run.incomplete ? ` \xB7 ${t.incomplete}` : ""}` : id;
   };
-  return /* @__PURE__ */ jsxs2("section", { className: "dv-app", "data-base": base, lang: locale, "aria-label": t.title, onKeyDown: (event) => {
+  return /* @__PURE__ */ React2.createElement("section", { className: "dv-app", "data-base": base, lang: locale, "aria-label": t.title, onKeyDown: (event) => {
     if (event.altKey && (event.key === "ArrowDown" || event.key === "ArrowUp") && !editor && !confirmation) {
       event.preventDefault();
       navigateHunk(event.key === "ArrowDown" ? 1 : -1);
     }
-  }, children: [
-    /* @__PURE__ */ jsxs2("header", { className: "dv-top", children: [
-      /* @__PURE__ */ jsxs2("div", { className: "dv-heading", children: [
-        /* @__PURE__ */ jsx2("h1", { children: t.title }),
-        review && /* @__PURE__ */ jsxs2("span", { className: "dv-counts", children: [
-          /* @__PURE__ */ jsxs2("span", { className: "dv-added", children: [
-            "+",
-            review.files.reduce((sum, file) => sum + file.additions, 0)
-          ] }),
-          /* @__PURE__ */ jsxs2("span", { className: "dv-deleted", children: [
-            "\u2212",
-            review.files.reduce((sum, file) => sum + file.deletions, 0)
-          ] })
-        ] }),
-        /* @__PURE__ */ jsxs2("div", { className: "dv-toolbar", children: [
-          /* @__PURE__ */ jsxs2("label", { children: [
-            t.language,
-            /* @__PURE__ */ jsxs2("select", { "aria-label": t.language, value: locale.startsWith("zh") ? "zh-CN" : "en", onChange: (event) => setLocale(event.target.value), children: [
-              /* @__PURE__ */ jsx2("option", { value: "zh-CN", children: "\u4E2D\u6587" }),
-              /* @__PURE__ */ jsx2("option", { value: "en", children: "English" })
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs2("label", { children: [
-            t.theme,
-            /* @__PURE__ */ jsxs2("select", { "aria-label": t.theme, value: base, onChange: (event) => setBase(event.target.value), children: [
-              /* @__PURE__ */ jsx2("option", { value: "light", children: t.light }),
-              /* @__PURE__ */ jsx2("option", { value: "dark", children: t.dark })
-            ] })
-          ] }),
-          onClose && /* @__PURE__ */ jsx2("button", { onClick: onClose, disabled: busy, children: t.close })
-        ] })
-      ] }),
-      /* @__PURE__ */ jsxs2("div", { className: "dv-toolbar dv-repo-toolbar", children: [
-        /* @__PURE__ */ jsxs2("label", { className: "dv-repository", children: [
-          t.repository,
-          /* @__PURE__ */ jsxs2("select", { "aria-label": t.repository, value: request.root ?? "", disabled: !boot || busy, onChange: (event) => {
-            setRequest((value) => ({ ...value, root: event.target.value, runId: void 0, sessionId: initialRequest.sessionId }));
-            setQuery("");
-          }, children: [
-            /* @__PURE__ */ jsx2("option", { value: "", disabled: true, children: "\u2014" }),
-            roots.map((root) => /* @__PURE__ */ jsxs2("option", { value: root, children: [
-              boot?.repositories.find((repo) => repo.root === root)?.name ?? root,
-              " \u2014 ",
-              root
-            ] }, root))
-          ] })
-        ] }),
-        /* @__PURE__ */ jsxs2("label", { children: [
-          t.scope,
-          /* @__PURE__ */ jsx2("select", { "aria-label": t.scope, value: request.scope, disabled: !boot || busy, onChange: (event) => {
-            const scope = event.target.value;
-            const run = sessionRuns.find((item) => item.root === request.root) ?? sessionRuns[0];
-            setRequest((value) => ({ root: value.root, scope, sessionId: initialRequest.sessionId, ...scope === "turn" || scope === "lastTurn" ? { root: run?.root ?? value.root, sessionId: initialRequest.sessionId ?? run?.sessionId, runId: scope === "turn" ? run?.id : void 0 } : {}, ref: scope === "commit" || scope === "branch" ? refDraft : void 0 }));
-          }, children: ["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].map((scope) => /* @__PURE__ */ jsx2("option", { value: scope, children: t[scope] }, scope)) })
-        ] }),
-        request.scope === "turn" && /* @__PURE__ */ jsxs2("label", { className: "dv-run", children: [
-          t.run,
-          /* @__PURE__ */ jsxs2("select", { "aria-label": t.run, disabled: busy, value: request.runId ?? "", onChange: (event) => {
-            const run = boot?.runs.find((item) => item.id === event.target.value);
-            if (run) setRequest((value) => ({ ...value, root: run.root, runId: run.id, sessionId: run.sessionId }));
-          }, children: [
-            /* @__PURE__ */ jsx2("option", { value: "", disabled: true, children: "\u2014" }),
-            sessionRuns.map((run) => /* @__PURE__ */ jsx2("option", { value: run.id, children: runLabel(run.id) }, run.id))
-          ] })
-        ] }),
-        (request.scope === "commit" || request.scope === "branch") && /* @__PURE__ */ jsxs2("form", { className: "dv-toolbar", onSubmit: (event) => {
-          event.preventDefault();
-          setRequest((value) => ({ ...value, ref: refDraft.trim() }));
-        }, children: [
-          /* @__PURE__ */ jsxs2("label", { children: [
-            t.ref,
-            /* @__PURE__ */ jsx2("input", { "aria-label": t.ref, value: refDraft, onChange: (event) => setRefDraft(event.target.value), maxLength: 250 })
-          ] }),
-          /* @__PURE__ */ jsx2("button", { disabled: busy || !refDraft.trim(), children: t.applyRef })
-        ] }),
-        /* @__PURE__ */ jsx2("button", { disabled: busy || loadingReview, onClick: () => setBootTick((value) => value + 1), children: t.refresh }),
-        /* @__PURE__ */ jsx2("button", { disabled: !boot?.runs.length || busy, onClick: () => {
-          setError("");
-          setConfirmation({ kind: "history" });
-        }, children: t.clearHistory })
-      ] }),
-      review?.notice && /* @__PURE__ */ jsx2("p", { className: "dv-notice", children: review.notice }),
-      request.runId && boot?.runs.find((run) => run.id === request.runId)?.incomplete && /* @__PURE__ */ jsx2("p", { className: "dv-notice", children: t.incomplete })
-    ] }),
-    (error || status) && /* @__PURE__ */ jsx2("div", { className: `dv-message ${error ? "dv-error" : ""}`, role: error ? "alert" : "status", children: error || status }),
-    batchResults.length > 0 && /* @__PURE__ */ jsxs2("details", { className: "dv-message", open: true, children: [
-      /* @__PURE__ */ jsx2("summary", { children: t.batch }),
-      /* @__PURE__ */ jsx2("pre", { style: { whiteSpace: "pre-wrap" }, children: batchResults.map((result) => `${result.ok ? "\u2713" : "\u2717"} ${result.path}: ${result.message}`).join("\n") })
-    ] }),
-    bootError ? /* @__PURE__ */ jsxs2("div", { className: "dv-empty dv-error", role: "alert", children: [
-      bootError,
-      /* @__PURE__ */ jsx2("button", { onClick: () => setBootTick((value) => value + 1), children: t.retry })
-    ] }) : !boot ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", role: "status", children: t.loading }) : /* @__PURE__ */ jsxs2("div", { className: "dv-workspace", children: [
-      /* @__PURE__ */ jsxs2("aside", { className: "dv-files", "aria-label": t.files, children: [
-        /* @__PURE__ */ jsxs2("div", { className: "dv-file-search", children: [
-          /* @__PURE__ */ jsxs2("strong", { children: [
-            t.files,
-            " ",
-            /* @__PURE__ */ jsx2("span", { className: "dv-muted", children: review?.files.length ?? 0 })
-          ] }),
-          /* @__PURE__ */ jsx2("input", { type: "search", "aria-label": t.search, placeholder: t.search, value: query, onChange: (event) => setQuery(event.target.value) })
-        ] }),
-        /* @__PURE__ */ jsx2("div", { className: "dv-toolbar", "aria-label": t.batch, children: ["stage", "unstage", "revert", "reapply"].map((action) => {
-          const files = visibleFiles.filter((file) => file.actions.includes(action)).slice(0, 20);
-          return files.length > 1 && /* @__PURE__ */ jsxs2("button", { disabled: busy || loadingReview, onClick: () => {
-            if (review) {
-              setError("");
-              setBatchResults([]);
-              setConfirmation({ kind: "batch", action, files, review });
-            }
-          }, children: [
-            t[action],
-            " \xB7 ",
-            files.length
-          ] }, action);
-        }) }),
-        /* @__PURE__ */ jsx2("nav", { className: "dv-file-list", "aria-label": t.files, children: visibleFiles.map((file) => /* @__PURE__ */ jsxs2("button", { className: "dv-file", "aria-current": file.id === selected ? "true" : void 0, disabled: busy, onClick: () => {
-          resetPage();
-          setSelected(file.id);
-          setEditor(null);
-        }, title: `${file.oldPath ? `${file.oldPath} \u2192 ` : ""}${file.path}`, children: [
-          /* @__PURE__ */ jsx2("span", { className: "dv-file-name", children: file.path.split("/").pop() }),
-          /* @__PURE__ */ jsxs2("span", { className: "dv-counts", children: [
-            /* @__PURE__ */ jsxs2("span", { className: "dv-added", children: [
-              "+",
-              file.additions
-            ] }),
-            /* @__PURE__ */ jsxs2("span", { className: "dv-deleted", children: [
-              "\u2212",
-              file.deletions
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs2("span", { className: "dv-file-path", children: [
-            file.path,
-            file.oldPath && /* @__PURE__ */ jsxs2(Fragment, { children: [
-              /* @__PURE__ */ jsx2("br", {}),
-              "\u2190 ",
-              file.oldPath
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs2("span", { className: "dv-file-status", children: [
-            t[file.status],
-            file.kind !== "text" ? ` \xB7 ${kindLabel(file.kind, locale)}` : "",
-            file.state === "reverted" ? ` \xB7 ${t.reverted}` : ""
-          ] })
-        ] }, file.id)) }),
-        !visibleFiles.length && !loadingReview && /* @__PURE__ */ jsxs2("p", { className: "dv-rail-empty", children: [
-          query ? t.noMatches : t.noFiles,
-          query && /* @__PURE__ */ jsx2("button", { onClick: () => setQuery(""), children: t.clearSearch })
-        ] })
-      ] }),
-      /* @__PURE__ */ jsx2("main", { className: "dv-review", "aria-busy": loadingReview || loadingDetail, children: loadingReview ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", role: "status", children: t.loading }) : reviewError ? /* @__PURE__ */ jsxs2("div", { className: "dv-empty dv-error", role: "alert", children: [
-        reviewError,
-        /* @__PURE__ */ jsx2("button", { onClick: () => setRefreshTick((value) => value + 1), children: t.retry })
-      ] }) : !review ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", children: t.noRoots }) : !currentFile ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", children: review.files.length ? t.chooseFile : t.noFiles }) : /* @__PURE__ */ jsxs2(Fragment, { children: [
-        /* @__PURE__ */ jsxs2("div", { className: "dv-file-heading", children: [
-          /* @__PURE__ */ jsxs2("div", { children: [
-            /* @__PURE__ */ jsx2("h2", { children: currentFile.path }),
-            currentFile.oldPath && /* @__PURE__ */ jsxs2("p", { className: "dv-muted", children: [
-              "\u2190 ",
-              currentFile.oldPath
-            ] }),
-            /* @__PURE__ */ jsxs2("span", { className: "dv-added", children: [
-              "+",
-              currentFile.additions
-            ] }),
-            " ",
-            /* @__PURE__ */ jsxs2("span", { className: "dv-deleted", children: [
-              "\u2212",
-              currentFile.deletions
-            ] }),
-            " ",
-            /* @__PURE__ */ jsx2("span", { className: "dv-muted", children: t[currentFile.status] })
-          ] }),
-          /* @__PURE__ */ jsxs2("div", { className: "dv-toolbar", children: [
-            actionButtons(currentFile),
-            /* @__PURE__ */ jsx2("button", { disabled: busy, onClick: copyPatch, children: t.copy })
-          ] })
-        ] }),
-        /* @__PURE__ */ jsxs2("div", { className: "dv-display-toolbar dv-toolbar", "aria-label": t.settings, children: [
-          /* @__PURE__ */ jsxs2("div", { className: "dv-segment", role: "group", "aria-label": t.settings, children: [
-            /* @__PURE__ */ jsx2("button", { "aria-pressed": layout === "unified", onClick: () => saveSettings({ layout: "unified" }), children: t.unified }),
-            /* @__PURE__ */ jsx2("button", { "aria-pressed": layout === "split", onClick: () => saveSettings({ layout: "split" }), children: t.split })
-          ] }),
-          /* @__PURE__ */ jsxs2("label", { className: "dv-check", children: [
-            /* @__PURE__ */ jsx2("input", { type: "checkbox", checked: wrap, onChange: (event) => saveSettings({ wordWrap: event.target.checked }) }),
-            t.wrap
-          ] }),
-          /* @__PURE__ */ jsxs2("label", { children: [
-            t.context,
-            /* @__PURE__ */ jsxs2("select", { "aria-label": t.context, value: context, disabled: busy, onChange: (event) => {
-              resetPage();
-              setContext(Number(event.target.value));
-            }, children: [
-              /* @__PURE__ */ jsx2("option", { value: 3, children: "3" }),
-              /* @__PURE__ */ jsx2("option", { value: 20, children: "20" }),
-              /* @__PURE__ */ jsx2("option", { value: -1, children: t.full })
-            ] })
-          ] }),
-          /* @__PURE__ */ jsx2("button", { onClick: () => navigateHunk(-1), disabled: !detail?.hunks.length, title: t.keyboard, children: t.previousHunk }),
-          /* @__PURE__ */ jsx2("button", { onClick: () => navigateHunk(1), disabled: !detail?.hunks.length, title: t.keyboard, children: t.nextHunk })
-        ] }),
-        context !== 3 && /* @__PURE__ */ jsx2("p", { className: "dv-notice", children: t.expandedHint }),
-        currentFile.note && /* @__PURE__ */ jsx2("p", { className: "dv-notice", children: currentFile.note }),
-        /* @__PURE__ */ jsx2("div", { className: `dv-diff-pane ${wrap ? "dv-wrap" : "dv-nowrap"}`, ref: diffPane, tabIndex: 0, "aria-label": `${currentFile.path} ${t.title}`, children: loadingDetail ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", role: "status", children: t.loading }) : detailError ? /* @__PURE__ */ jsxs2("div", { className: "dv-empty dv-error", role: "alert", children: [
-          detailError,
-          /* @__PURE__ */ jsx2("button", { onClick: () => setDetailTick((value) => value + 1), children: t.retry })
-        ] }) : currentFile.kind !== "text" ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", children: t[currentFile.kind] }) : detail && !detail.hunks.length ? /* @__PURE__ */ jsx2("div", { className: "dv-empty", children: currentFile.status === "mode" ? t.mode : t.noHunks }) : detail?.hunks.map((hunk, index) => /* @__PURE__ */ jsxs2("section", { className: "dv-hunk", style: { "--dv-stagger": `${Math.min(index, 4) * 20}ms` }, children: [
-          /* @__PURE__ */ jsxs2("div", { className: "dv-hunk-heading", children: [
-            /* @__PURE__ */ jsxs2("button", { "data-hunk-nav": true, "aria-expanded": !collapsed.has(hunk.id), onClick: () => setCollapsed((value) => {
-              const next = new Set(value);
-              next.has(hunk.id) ? next.delete(hunk.id) : next.add(hunk.id);
-              return next;
-            }), "aria-label": `${collapsed.has(hunk.id) ? t.collapsed : t.expanded} ${hunk.header}`, children: [
-              /* @__PURE__ */ jsx2("span", { "aria-hidden": "true", children: collapsed.has(hunk.id) ? "\u25B8" : "\u25BE" }),
-              " ",
-              /* @__PURE__ */ jsx2("code", { children: hunk.header })
-            ] }),
-            /* @__PURE__ */ jsx2("div", { className: "dv-toolbar", children: context === 3 && !currentFile.oldPath && review.scope !== "turn" && review.scope !== "lastTurn" && actionButtons(currentFile, hunk) })
-          ] }),
-          !collapsed.has(hunk.id) && /* @__PURE__ */ jsx2(DiffRows, { path: currentFile.path, lines: hunk.lines, layout, t, disabled: busy, onLine: (line, side) => openComment(line, side, hunk) })
-        ] }, `${context}:${offset}:${hunk.id}`)) }),
-        detail && detail.totalRows > 0 && /* @__PURE__ */ jsxs2("footer", { className: "dv-pagination", children: [
-          /* @__PURE__ */ jsxs2("span", { children: [
-            t.page,
-            " ",
-            detail.offset + 1,
-            "\u2013",
-            detail.offset + detail.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0),
-            " ",
-            t.of,
-            " ",
-            detail.totalRows
-          ] }),
-          /* @__PURE__ */ jsxs2("div", { className: "dv-toolbar", children: [
-            /* @__PURE__ */ jsx2("button", { disabled: !pageStack.length || busy || loadingDetail, onClick: () => {
-              const pages = [...pageStack];
-              setOffset(pages.pop() ?? 0);
-              setPageStack(pages);
-              diffPane.current?.scrollTo(0, 0);
-            }, children: t.previous }),
-            /* @__PURE__ */ jsx2("button", { disabled: detail.nextOffset == null || busy || loadingDetail, onClick: () => {
-              if (detail.nextOffset != null) {
-                setPageStack((value) => [...value, offset]);
-                setOffset(detail.nextOffset);
-                diffPane.current?.scrollTo(0, 0);
-              }
-            }, children: t.next })
-          ] }),
-          detail.totalRows > 80 && /* @__PURE__ */ jsx2("small", { children: t.continuation })
-        ] }),
-        /* @__PURE__ */ jsxs2("details", { className: "dv-comments", open: true, children: [
-          /* @__PURE__ */ jsxs2("summary", { children: [
-            t.summary,
-            " (",
-            comments.length,
-            ")"
-          ] }),
-          commentsError && /* @__PURE__ */ jsxs2("p", { className: "dv-error", role: "alert", children: [
-            t.commentsFailed,
-            ": ",
-            commentsError,
-            /* @__PURE__ */ jsx2("button", { onClick: () => setCommentsTick((value) => value + 1), children: t.retry })
-          ] }),
-          loadingComments ? /* @__PURE__ */ jsx2("p", { role: "status", children: t.loading }) : !comments.length && !commentsError && /* @__PURE__ */ jsx2("p", { className: "dv-muted", children: t.noComments }),
-          /* @__PURE__ */ jsx2("div", { className: "dv-comment-list", children: comments.map((comment) => /* @__PURE__ */ jsxs2("article", { className: "dv-comment", children: [
-            /* @__PURE__ */ jsxs2("header", { children: [
-              /* @__PURE__ */ jsx2("strong", { children: comment.anchor.path }),
-              /* @__PURE__ */ jsxs2("span", { children: [
-                t[comment.anchor.side],
-                ":",
-                comment.anchor.line
-              ] }),
-              /* @__PURE__ */ jsxs2("div", { className: "dv-toolbar", children: [
-                /* @__PURE__ */ jsx2("button", { disabled: busy, onClick: () => {
-                  setError("");
-                  setEditor({ id: comment.id, body: comment.body, anchor: comment.anchor });
-                }, children: t.edit }),
-                /* @__PURE__ */ jsx2("button", { disabled: busy, onClick: () => {
-                  setError("");
-                  setConfirmation({ kind: "comment", comment });
-                }, children: t.delete })
-              ] })
-            ] }),
-            comment.stale && /* @__PURE__ */ jsx2("p", { className: "dv-stale", children: t.stale }),
-            /* @__PURE__ */ jsx2("p", { className: "dv-comment-body", children: comment.body }),
-            /* @__PURE__ */ jsxs2("details", { children: [
-              /* @__PURE__ */ jsx2("summary", { children: t.deletedExcerpt }),
-              /* @__PURE__ */ jsx2("pre", { children: comment.anchor.excerpt })
-            ] })
-          ] }, comment.id)) }),
-          /* @__PURE__ */ jsxs2("details", { className: "dv-feedback", children: [
-            /* @__PURE__ */ jsx2("summary", { children: t.feedback }),
-            feedbackLoading ? /* @__PURE__ */ jsx2("p", { role: "status", children: t.loading }) : feedbackError ? /* @__PURE__ */ jsxs2("p", { className: "dv-error", role: "alert", children: [
-              t.feedbackFailed,
-              ": ",
-              feedbackError
-            ] }) : feedback ? /* @__PURE__ */ jsx2("textarea", { readOnly: true, "aria-label": t.feedbackCopy, value: feedback, rows: 5 }) : /* @__PURE__ */ jsx2("p", { className: "dv-muted", children: t.feedbackEmpty }),
-            canInsert ? /* @__PURE__ */ jsxs2(Fragment, { children: [
-              /* @__PURE__ */ jsx2("button", { disabled: !feedback || feedbackLoading || busy, onClick: () => {
-                if (!live.current || !feedback || !canInsert) return;
-                setError("");
-                transport.insertText(feedback).catch((err) => {
-                  if (live.current) setError(errorText(err));
-                });
-              }, children: t.insert }),
-              /* @__PURE__ */ jsx2("p", { className: "dv-muted", children: t.feedbackHint })
-            ] }) : /* @__PURE__ */ jsx2("p", { className: "dv-muted", children: t.feedbackNoSession })
-          ] })
-        ] })
-      ] }) })
-    ] }),
-    editor && /* @__PURE__ */ jsx2(Modal, { title: editor.id ? t.edit : t.addComment, busy, onClose: () => setEditor(null), children: /* @__PURE__ */ jsxs2("form", { onSubmit: (event) => {
-      event.preventDefault();
-      const draft = editor;
-      const key = scopeRef.current;
-      void perform(async () => {
-        if (!draft.body.trim() || draft.body.length > 4e3) throw new Error(t.commentLimit);
-        await transport.invoke("saveComment", { id: draft.id, anchor: draft.anchor, body: draft.body.trim(), sessionId });
-        if (!live.current || scopeRef.current !== key) return;
-        setEditor(null);
-        setStatus(t.commentSaved);
-        setCommentsTick((value) => value + 1);
-      });
-    }, children: [
-      /* @__PURE__ */ jsxs2("p", { className: "dv-anchor", children: [
-        editor.anchor.path,
-        " \xB7 ",
-        t[editor.anchor.side],
-        ":",
-        editor.anchor.line
-      ] }),
-      /* @__PURE__ */ jsx2("pre", { children: editor.anchor.excerpt }),
-      /* @__PURE__ */ jsxs2("label", { className: "dv-editor-label", children: [
-        t.commentBody,
-        /* @__PURE__ */ jsx2("textarea", { "aria-label": t.commentBody, autoFocus: true, value: editor.body, maxLength: 4e3, rows: 5, onChange: (event) => setEditor((value) => value && { ...value, body: event.target.value }) })
-      ] }),
-      error && /* @__PURE__ */ jsx2("p", { className: "dv-error", role: "alert", children: error }),
-      /* @__PURE__ */ jsxs2("div", { className: "dv-dialog-actions", children: [
-        /* @__PURE__ */ jsx2("button", { type: "button", disabled: busy, onClick: () => setEditor(null), children: t.cancel }),
-        /* @__PURE__ */ jsx2("button", { className: "dv-primary", disabled: busy || !editor.body.trim(), children: busy ? t.loading : t.save })
-      ] })
-    ] }) }),
-    confirmation && /* @__PURE__ */ jsxs2(Modal, { title: confirmation.kind === "action" || confirmation.kind === "batch" ? `${t.confirm}: ${t[confirmation.action]}` : confirmation.kind === "history" ? t.clearHistory : t.delete, busy, onClose: () => setConfirmation(null), children: [
-      /* @__PURE__ */ jsx2("p", { children: confirmation.kind === "batch" ? t.batchHint : confirmation.kind === "action" ? t.confirmHint : confirmation.kind === "history" ? t.clearHint : t.deleteHint }),
-      confirmation.kind === "batch" && /* @__PURE__ */ jsxs2(Fragment, { children: [
-        /* @__PURE__ */ jsxs2("p", { children: [
-          confirmation.review.root,
-          " \xB7 ",
-          t[confirmation.review.scope]
-        ] }),
-        /* @__PURE__ */ jsx2("pre", { style: { whiteSpace: "pre-wrap" }, children: confirmation.files.map((file) => file.path).join("\n") })
-      ] }),
-      confirmation.kind === "action" ? /* @__PURE__ */ jsxs2("dl", { className: "dv-target", children: [
-        /* @__PURE__ */ jsx2("dt", { children: t.repository }),
-        /* @__PURE__ */ jsx2("dd", { children: confirmation.review.root }),
-        /* @__PURE__ */ jsx2("dt", { children: t.scope }),
-        /* @__PURE__ */ jsx2("dd", { children: t[confirmation.review.scope] }),
-        /* @__PURE__ */ jsx2("dt", { children: t.target }),
-        /* @__PURE__ */ jsxs2("dd", { children: [
-          confirmation.file.path,
-          confirmation.file.oldPath && /* @__PURE__ */ jsxs2(Fragment, { children: [
-            " \u2190 ",
-            confirmation.file.oldPath
-          ] })
-        ] }),
-        /* @__PURE__ */ jsx2("dt", { children: t.action }),
-        /* @__PURE__ */ jsxs2("dd", { children: [
-          t[confirmation.action],
-          " \xB7 ",
-          confirmation.hunk ? `${t.hunk} ${confirmation.hunk.header}` : t.wholeFile
-        ] })
-      ] }) : confirmation.kind === "comment" ? /* @__PURE__ */ jsxs2(Fragment, { children: [
-        /* @__PURE__ */ jsxs2("p", { className: "dv-anchor", children: [
-          confirmation.comment.anchor.path,
-          " \xB7 ",
-          t[confirmation.comment.anchor.side],
-          ":",
-          confirmation.comment.anchor.line
-        ] }),
-        /* @__PURE__ */ jsx2("p", { children: confirmation.comment.body })
-      ] }) : confirmation.kind === "history" ? /* @__PURE__ */ jsxs2("p", { children: [
-        t.history,
-        ": ",
-        boot?.runs.length ?? 0
-      ] }) : null,
-      error && /* @__PURE__ */ jsx2("p", { className: "dv-error", role: "alert", children: error }),
-      /* @__PURE__ */ jsxs2("div", { className: "dv-dialog-actions", children: [
-        /* @__PURE__ */ jsx2("button", { disabled: busy, onClick: () => setConfirmation(null), autoFocus: true, children: t.cancel }),
-        /* @__PURE__ */ jsx2("button", { className: "dv-primary", disabled: busy, onClick: confirmOperation, children: busy ? t.loading : t.confirm })
-      ] })
-    ] })
-  ] });
+  } }, /* @__PURE__ */ React2.createElement("header", { className: "dv-top" }, /* @__PURE__ */ React2.createElement("div", { className: "dv-heading" }, /* @__PURE__ */ React2.createElement("h1", null, t.title), review && /* @__PURE__ */ React2.createElement("span", { className: "dv-counts" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-added" }, "+", review.files.reduce((sum, file) => sum + file.additions, 0)), /* @__PURE__ */ React2.createElement("span", { className: "dv-deleted" }, "\u2212", review.files.reduce((sum, file) => sum + file.deletions, 0))), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar" }, /* @__PURE__ */ React2.createElement("label", null, t.language, /* @__PURE__ */ React2.createElement("select", { "aria-label": t.language, value: locale.startsWith("zh") ? "zh-CN" : "en", onChange: (event) => setLocale(event.target.value) }, /* @__PURE__ */ React2.createElement("option", { value: "zh-CN" }, "\u4E2D\u6587"), /* @__PURE__ */ React2.createElement("option", { value: "en" }, "English"))), /* @__PURE__ */ React2.createElement("label", null, t.theme, /* @__PURE__ */ React2.createElement("select", { "aria-label": t.theme, value: base, onChange: (event) => setBase(event.target.value) }, /* @__PURE__ */ React2.createElement("option", { value: "light" }, t.light), /* @__PURE__ */ React2.createElement("option", { value: "dark" }, t.dark))), onClose && /* @__PURE__ */ React2.createElement("button", { onClick: onClose, disabled: busy }, t.close))), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar dv-repo-toolbar" }, /* @__PURE__ */ React2.createElement("label", { className: "dv-repository" }, t.repository, /* @__PURE__ */ React2.createElement("select", { "aria-label": t.repository, value: request.root ?? "", disabled: !boot || busy, onChange: (event) => {
+    setRequest((value) => ({ ...value, root: event.target.value, runId: void 0, sessionId: initialRequest.sessionId }));
+    setQuery("");
+  } }, /* @__PURE__ */ React2.createElement("option", { value: "", disabled: true }, "\u2014"), roots.map((root) => /* @__PURE__ */ React2.createElement("option", { key: root, value: root }, boot?.repositories.find((repo) => repo.root === root)?.name ?? root, " \u2014 ", root)))), /* @__PURE__ */ React2.createElement("label", null, t.scope, /* @__PURE__ */ React2.createElement("select", { "aria-label": t.scope, value: request.scope, disabled: !boot || busy, onChange: (event) => {
+    const scope = event.target.value;
+    const run = sessionRuns.find((item) => item.root === request.root) ?? sessionRuns[0];
+    setRequest((value) => ({ root: value.root, scope, sessionId: initialRequest.sessionId, ...scope === "turn" || scope === "lastTurn" ? { root: run?.root ?? value.root, sessionId: initialRequest.sessionId ?? run?.sessionId, runId: scope === "turn" ? run?.id : void 0 } : {}, ref: scope === "commit" || scope === "branch" ? refDraft : void 0 }));
+  } }, ["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].map((scope) => /* @__PURE__ */ React2.createElement("option", { value: scope, key: scope }, t[scope])))), request.scope === "turn" && /* @__PURE__ */ React2.createElement("label", { className: "dv-run" }, t.run, /* @__PURE__ */ React2.createElement("select", { "aria-label": t.run, disabled: busy, value: request.runId ?? "", onChange: (event) => {
+    const run = boot?.runs.find((item) => item.id === event.target.value);
+    if (run) setRequest((value) => ({ ...value, root: run.root, runId: run.id, sessionId: run.sessionId }));
+  } }, /* @__PURE__ */ React2.createElement("option", { value: "", disabled: true }, "\u2014"), sessionRuns.map((run) => /* @__PURE__ */ React2.createElement("option", { key: run.id, value: run.id }, runLabel(run.id))))), (request.scope === "commit" || request.scope === "branch") && /* @__PURE__ */ React2.createElement("form", { className: "dv-toolbar", onSubmit: (event) => {
+    event.preventDefault();
+    setRequest((value) => ({ ...value, ref: refDraft.trim() }));
+  } }, /* @__PURE__ */ React2.createElement("label", null, t.ref, /* @__PURE__ */ React2.createElement("input", { "aria-label": t.ref, value: refDraft, onChange: (event) => setRefDraft(event.target.value), maxLength: 250 })), /* @__PURE__ */ React2.createElement("button", { disabled: busy || !refDraft.trim() }, t.applyRef)), /* @__PURE__ */ React2.createElement("button", { disabled: busy || loadingReview, onClick: () => setBootTick((value) => value + 1) }, t.refresh), /* @__PURE__ */ React2.createElement("button", { disabled: !boot?.runs.length || busy, onClick: () => {
+    setError("");
+    setConfirmation({ kind: "history" });
+  } }, t.clearHistory)), review?.notice && /* @__PURE__ */ React2.createElement("p", { className: "dv-notice" }, review.notice), request.runId && boot?.runs.find((run) => run.id === request.runId)?.incomplete && /* @__PURE__ */ React2.createElement("p", { className: "dv-notice" }, t.incomplete)), (error || status) && /* @__PURE__ */ React2.createElement("div", { className: `dv-message ${error ? "dv-error" : ""}`, role: error ? "alert" : "status" }, error || status), batchResults.length > 0 && /* @__PURE__ */ React2.createElement("details", { className: "dv-message", open: true }, /* @__PURE__ */ React2.createElement("summary", null, t.batch), /* @__PURE__ */ React2.createElement("pre", { style: { whiteSpace: "pre-wrap" } }, batchResults.map((result) => `${result.ok ? "\u2713" : "\u2717"} ${result.path}: ${result.message}`).join("\n"))), bootError ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty dv-error", role: "alert" }, bootError, /* @__PURE__ */ React2.createElement("button", { onClick: () => setBootTick((value) => value + 1) }, t.retry)) : !boot ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty", role: "status" }, t.loading) : /* @__PURE__ */ React2.createElement("div", { className: "dv-workspace" }, /* @__PURE__ */ React2.createElement("aside", { className: "dv-files", "aria-label": t.files }, /* @__PURE__ */ React2.createElement("div", { className: "dv-file-search" }, /* @__PURE__ */ React2.createElement("strong", null, t.files, " ", /* @__PURE__ */ React2.createElement("span", { className: "dv-muted" }, review?.files.length ?? 0)), /* @__PURE__ */ React2.createElement("input", { type: "search", "aria-label": t.search, placeholder: t.search, value: query, onChange: (event) => setQuery(event.target.value) })), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar", "aria-label": t.batch }, ["stage", "unstage", "revert", "reapply"].map((action) => {
+    const files = visibleFiles.filter((file) => file.actions.includes(action)).slice(0, 20);
+    return files.length > 1 && /* @__PURE__ */ React2.createElement("button", { key: action, disabled: busy || loadingReview, onClick: () => {
+      if (review) {
+        setError("");
+        setBatchResults([]);
+        setConfirmation({ kind: "batch", action, files, review });
+      }
+    } }, t[action], " \xB7 ", files.length);
+  })), /* @__PURE__ */ React2.createElement("nav", { className: "dv-file-list", "aria-label": t.files }, visibleFiles.map((file) => /* @__PURE__ */ React2.createElement("button", { className: "dv-file", key: file.id, "aria-current": file.id === selected ? "true" : void 0, disabled: busy, onClick: () => {
+    resetPage();
+    setSelected(file.id);
+    setEditor(null);
+  }, title: `${file.oldPath ? `${file.oldPath} \u2192 ` : ""}${file.path}` }, /* @__PURE__ */ React2.createElement("span", { className: "dv-file-name" }, file.path.split("/").pop()), /* @__PURE__ */ React2.createElement("span", { className: "dv-counts" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-added" }, "+", file.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-deleted" }, "\u2212", file.deletions)), /* @__PURE__ */ React2.createElement("span", { className: "dv-file-path" }, file.path, file.oldPath && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("br", null), "\u2190 ", file.oldPath)), /* @__PURE__ */ React2.createElement("span", { className: "dv-file-status" }, t[file.status], file.kind !== "text" ? ` \xB7 ${kindLabel(file.kind, locale)}` : "", file.state === "reverted" ? ` \xB7 ${t.reverted}` : "")))), !visibleFiles.length && !loadingReview && /* @__PURE__ */ React2.createElement("p", { className: "dv-rail-empty" }, query ? t.noMatches : t.noFiles, query && /* @__PURE__ */ React2.createElement("button", { onClick: () => setQuery("") }, t.clearSearch))), /* @__PURE__ */ React2.createElement("main", { className: "dv-review", "aria-busy": loadingReview || loadingDetail }, loadingReview ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty", role: "status" }, t.loading) : reviewError ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty dv-error", role: "alert" }, reviewError, /* @__PURE__ */ React2.createElement("button", { onClick: () => setRefreshTick((value) => value + 1) }, t.retry)) : !review ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty" }, t.noRoots) : !currentFile ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty" }, review.files.length ? t.chooseFile : t.noFiles) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { className: "dv-file-heading" }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("h2", null, currentFile.path), currentFile.oldPath && /* @__PURE__ */ React2.createElement("p", { className: "dv-muted" }, "\u2190 ", currentFile.oldPath), /* @__PURE__ */ React2.createElement("span", { className: "dv-added" }, "+", currentFile.additions), " ", /* @__PURE__ */ React2.createElement("span", { className: "dv-deleted" }, "\u2212", currentFile.deletions), " ", /* @__PURE__ */ React2.createElement("span", { className: "dv-muted" }, t[currentFile.status])), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar" }, actionButtons(currentFile), /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: copyPatch }, t.copy))), /* @__PURE__ */ React2.createElement("div", { className: "dv-display-toolbar dv-toolbar", "aria-label": t.settings }, /* @__PURE__ */ React2.createElement("div", { className: "dv-segment", role: "group", "aria-label": t.settings }, /* @__PURE__ */ React2.createElement("button", { "aria-pressed": layout === "unified", onClick: () => saveSettings({ layout: "unified" }) }, t.unified), /* @__PURE__ */ React2.createElement("button", { "aria-pressed": layout === "split", onClick: () => saveSettings({ layout: "split" }) }, t.split)), /* @__PURE__ */ React2.createElement("label", { className: "dv-check" }, /* @__PURE__ */ React2.createElement("input", { type: "checkbox", checked: wrap, onChange: (event) => saveSettings({ wordWrap: event.target.checked }) }), t.wrap), /* @__PURE__ */ React2.createElement("label", null, t.context, /* @__PURE__ */ React2.createElement("select", { "aria-label": t.context, value: context, disabled: busy, onChange: (event) => {
+    resetPage();
+    setContext(Number(event.target.value));
+  } }, /* @__PURE__ */ React2.createElement("option", { value: 3 }, "3"), /* @__PURE__ */ React2.createElement("option", { value: 20 }, "20"), /* @__PURE__ */ React2.createElement("option", { value: -1 }, t.full))), /* @__PURE__ */ React2.createElement("button", { onClick: () => navigateHunk(-1), disabled: !detail?.hunks.length, title: t.keyboard }, t.previousHunk), /* @__PURE__ */ React2.createElement("button", { onClick: () => navigateHunk(1), disabled: !detail?.hunks.length, title: t.keyboard }, t.nextHunk)), context !== 3 && /* @__PURE__ */ React2.createElement("p", { className: "dv-notice" }, t.expandedHint), currentFile.note && /* @__PURE__ */ React2.createElement("p", { className: "dv-notice" }, currentFile.note), /* @__PURE__ */ React2.createElement("div", { className: `dv-diff-pane ${wrap ? "dv-wrap" : "dv-nowrap"}`, ref: diffPane, tabIndex: 0, "aria-label": `${currentFile.path} ${t.title}` }, loadingDetail ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty", role: "status" }, t.loading) : detailError ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty dv-error", role: "alert" }, detailError, /* @__PURE__ */ React2.createElement("button", { onClick: () => setDetailTick((value) => value + 1) }, t.retry)) : currentFile.kind !== "text" ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty" }, t[currentFile.kind]) : detail && !detail.hunks.length ? /* @__PURE__ */ React2.createElement("div", { className: "dv-empty" }, currentFile.status === "mode" ? t.mode : t.noHunks) : detail?.hunks.map((hunk, index) => /* @__PURE__ */ React2.createElement("section", { className: "dv-hunk", key: `${context}:${offset}:${hunk.id}`, style: { "--dv-stagger": `${Math.min(index, 4) * 20}ms` } }, /* @__PURE__ */ React2.createElement("div", { className: "dv-hunk-heading" }, /* @__PURE__ */ React2.createElement("button", { "data-hunk-nav": true, "aria-expanded": !collapsed.has(hunk.id), onClick: () => setCollapsed((value) => {
+    const next = new Set(value);
+    next.has(hunk.id) ? next.delete(hunk.id) : next.add(hunk.id);
+    return next;
+  }), "aria-label": `${collapsed.has(hunk.id) ? t.collapsed : t.expanded} ${hunk.header}` }, /* @__PURE__ */ React2.createElement("span", { "aria-hidden": "true" }, collapsed.has(hunk.id) ? "\u25B8" : "\u25BE"), " ", /* @__PURE__ */ React2.createElement("code", null, hunk.header)), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar" }, context === 3 && !currentFile.oldPath && review.scope !== "turn" && review.scope !== "lastTurn" && actionButtons(currentFile, hunk))), !collapsed.has(hunk.id) && /* @__PURE__ */ React2.createElement(DiffRows, { path: currentFile.path, lines: hunk.lines, layout, t, disabled: busy, onLine: (line, side) => openComment(line, side, hunk) })))), detail && detail.totalRows > 0 && /* @__PURE__ */ React2.createElement("footer", { className: "dv-pagination" }, /* @__PURE__ */ React2.createElement("span", null, t.page, " ", detail.offset + 1, "\u2013", detail.offset + detail.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0), " ", t.of, " ", detail.totalRows), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar" }, /* @__PURE__ */ React2.createElement("button", { disabled: !pageStack.length || busy || loadingDetail, onClick: () => {
+    const pages = [...pageStack];
+    setOffset(pages.pop() ?? 0);
+    setPageStack(pages);
+    diffPane.current?.scrollTo(0, 0);
+  } }, t.previous), /* @__PURE__ */ React2.createElement("button", { disabled: detail.nextOffset == null || busy || loadingDetail, onClick: () => {
+    if (detail.nextOffset != null) {
+      setPageStack((value) => [...value, offset]);
+      setOffset(detail.nextOffset);
+      diffPane.current?.scrollTo(0, 0);
+    }
+  } }, t.next)), detail.totalRows > 80 && /* @__PURE__ */ React2.createElement("small", null, t.continuation)), /* @__PURE__ */ React2.createElement("details", { className: "dv-comments", open: true }, /* @__PURE__ */ React2.createElement("summary", null, t.summary, " (", comments.length, ")"), commentsError && /* @__PURE__ */ React2.createElement("p", { className: "dv-error", role: "alert" }, t.commentsFailed, ": ", commentsError, /* @__PURE__ */ React2.createElement("button", { onClick: () => setCommentsTick((value) => value + 1) }, t.retry)), loadingComments ? /* @__PURE__ */ React2.createElement("p", { role: "status" }, t.loading) : !comments.length && !commentsError && /* @__PURE__ */ React2.createElement("p", { className: "dv-muted" }, t.noComments), /* @__PURE__ */ React2.createElement("div", { className: "dv-comment-list" }, comments.map((comment) => /* @__PURE__ */ React2.createElement("article", { className: "dv-comment", key: comment.id }, /* @__PURE__ */ React2.createElement("header", null, /* @__PURE__ */ React2.createElement("strong", null, comment.anchor.path), /* @__PURE__ */ React2.createElement("span", null, t[comment.anchor.side], ":", comment.anchor.line), /* @__PURE__ */ React2.createElement("div", { className: "dv-toolbar" }, /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => {
+    setError("");
+    setEditor({ id: comment.id, body: comment.body, anchor: comment.anchor });
+  } }, t.edit), /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => {
+    setError("");
+    setConfirmation({ kind: "comment", comment });
+  } }, t.delete))), comment.stale && /* @__PURE__ */ React2.createElement("p", { className: "dv-stale" }, t.stale), /* @__PURE__ */ React2.createElement("p", { className: "dv-comment-body" }, comment.body), /* @__PURE__ */ React2.createElement("details", null, /* @__PURE__ */ React2.createElement("summary", null, t.deletedExcerpt), /* @__PURE__ */ React2.createElement("pre", null, comment.anchor.excerpt))))), /* @__PURE__ */ React2.createElement("details", { className: "dv-feedback" }, /* @__PURE__ */ React2.createElement("summary", null, t.feedback), feedbackLoading ? /* @__PURE__ */ React2.createElement("p", { role: "status" }, t.loading) : feedbackError ? /* @__PURE__ */ React2.createElement("p", { className: "dv-error", role: "alert" }, t.feedbackFailed, ": ", feedbackError) : feedback ? /* @__PURE__ */ React2.createElement("textarea", { readOnly: true, "aria-label": t.feedbackCopy, value: feedback, rows: 5 }) : /* @__PURE__ */ React2.createElement("p", { className: "dv-muted" }, t.feedbackEmpty), canInsert ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("button", { disabled: !feedback || feedbackLoading || busy, onClick: () => {
+    if (!live.current || !feedback || !canInsert) return;
+    setError("");
+    transport.insertText(feedback).catch((err) => {
+      if (live.current) setError(errorText(err));
+    });
+  } }, t.insert), /* @__PURE__ */ React2.createElement("p", { className: "dv-muted" }, t.feedbackHint)) : /* @__PURE__ */ React2.createElement("p", { className: "dv-muted" }, t.feedbackNoSession)))))), editor && /* @__PURE__ */ React2.createElement(Modal, { title: editor.id ? t.edit : t.addComment, busy, onClose: () => setEditor(null) }, /* @__PURE__ */ React2.createElement("form", { onSubmit: (event) => {
+    event.preventDefault();
+    const draft = editor;
+    const key = scopeRef.current;
+    void perform(async () => {
+      if (!draft.body.trim() || draft.body.length > 4e3) throw new Error(t.commentLimit);
+      await transport.invoke("saveComment", { id: draft.id, anchor: draft.anchor, body: draft.body.trim(), sessionId });
+      if (!live.current || scopeRef.current !== key) return;
+      setEditor(null);
+      setStatus(t.commentSaved);
+      setCommentsTick((value) => value + 1);
+    });
+  } }, /* @__PURE__ */ React2.createElement("p", { className: "dv-anchor" }, editor.anchor.path, " \xB7 ", t[editor.anchor.side], ":", editor.anchor.line), /* @__PURE__ */ React2.createElement("pre", null, editor.anchor.excerpt), /* @__PURE__ */ React2.createElement("label", { className: "dv-editor-label" }, t.commentBody, /* @__PURE__ */ React2.createElement("textarea", { "aria-label": t.commentBody, autoFocus: true, value: editor.body, maxLength: 4e3, rows: 5, onChange: (event) => setEditor((value) => value && { ...value, body: event.target.value }) })), error && /* @__PURE__ */ React2.createElement("p", { className: "dv-error", role: "alert" }, error), /* @__PURE__ */ React2.createElement("div", { className: "dv-dialog-actions" }, /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: busy, onClick: () => setEditor(null) }, t.cancel), /* @__PURE__ */ React2.createElement("button", { className: "dv-primary", disabled: busy || !editor.body.trim() }, busy ? t.loading : t.save)))), confirmation && /* @__PURE__ */ React2.createElement(Modal, { title: confirmation.kind === "action" || confirmation.kind === "batch" ? `${t.confirm}: ${t[confirmation.action]}` : confirmation.kind === "history" ? t.clearHistory : t.delete, busy, onClose: () => setConfirmation(null) }, /* @__PURE__ */ React2.createElement("p", null, confirmation.kind === "batch" ? t.batchHint : confirmation.kind === "action" ? t.confirmHint : confirmation.kind === "history" ? t.clearHint : t.deleteHint), confirmation.kind === "batch" && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("p", null, confirmation.review.root, " \xB7 ", t[confirmation.review.scope]), /* @__PURE__ */ React2.createElement("pre", { style: { whiteSpace: "pre-wrap" } }, confirmation.files.map((file) => file.path).join("\n"))), confirmation.kind === "action" ? /* @__PURE__ */ React2.createElement("dl", { className: "dv-target" }, /* @__PURE__ */ React2.createElement("dt", null, t.repository), /* @__PURE__ */ React2.createElement("dd", null, confirmation.review.root), /* @__PURE__ */ React2.createElement("dt", null, t.scope), /* @__PURE__ */ React2.createElement("dd", null, t[confirmation.review.scope]), /* @__PURE__ */ React2.createElement("dt", null, t.target), /* @__PURE__ */ React2.createElement("dd", null, confirmation.file.path, confirmation.file.oldPath && /* @__PURE__ */ React2.createElement(React2.Fragment, null, " \u2190 ", confirmation.file.oldPath)), /* @__PURE__ */ React2.createElement("dt", null, t.action), /* @__PURE__ */ React2.createElement("dd", null, t[confirmation.action], " \xB7 ", confirmation.hunk ? `${t.hunk} ${confirmation.hunk.header}` : t.wholeFile)) : confirmation.kind === "comment" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("p", { className: "dv-anchor" }, confirmation.comment.anchor.path, " \xB7 ", t[confirmation.comment.anchor.side], ":", confirmation.comment.anchor.line), /* @__PURE__ */ React2.createElement("p", null, confirmation.comment.body)) : confirmation.kind === "history" ? /* @__PURE__ */ React2.createElement("p", null, t.history, ": ", boot?.runs.length ?? 0) : null, error && /* @__PURE__ */ React2.createElement("p", { className: "dv-error", role: "alert" }, error), /* @__PURE__ */ React2.createElement("div", { className: "dv-dialog-actions" }, /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => setConfirmation(null), autoFocus: true }, t.cancel), /* @__PURE__ */ React2.createElement("button", { className: "dv-primary", disabled: busy, onClick: confirmOperation }, busy ? t.loading : t.confirm))));
 }
 var ReviewApp_default = ReviewApp;
 
@@ -7298,7 +6954,6 @@ function createNativeReviewAdapter(options) {
 }
 
 // src/renderer/index.tsx
-import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 var hub = null;
 var realm2 = globalThis;
 var disposers = [];
@@ -7308,11 +6963,21 @@ var css2 = `${styles_default}
 function same(current) {
   return Boolean(current && current === hub && !current.disposed);
 }
+function report(current, stage) {
+  if (!same(current) || current.reported.has(stage)) return;
+  current.reported.add(stage);
+  void current.transport.invoke("rendererReport", { stage }).catch(() => {
+  });
+}
 async function poll(current) {
+  let bootstrapSucceeded = false;
   if (!same(current)) return;
   try {
     const data = await current.transport.invoke("bootstrap");
     if (!same(current)) return;
+    current.bootstrapError = "";
+    report(current, "bootstrap-ok");
+    bootstrapSucceeded = true;
     current.bootstrap = data;
     current.listeners.forEach((listener) => listener(data));
     const items = [...current.cards.values()].filter((item) => item.listeners.size && (!item.checked || !item.run || item.run.state === "running"));
@@ -7325,19 +6990,29 @@ async function poll(current) {
       item.listeners.forEach((listener) => listener(response.run));
     }
     current.cursor += 2;
-  } catch {
+  } catch (error) {
+    if (same(current) && !bootstrapSucceeded) {
+      current.bootstrapError = String(error.message ?? error).slice(0, 240);
+      report(current, "bootstrap-error");
+      current.listeners.forEach((listener) => listener(current.bootstrap));
+    }
   } finally {
     if (same(current)) current.timer = setTimeout(() => void poll(current), 6e3);
   }
 }
 function useBootstrap(current) {
   const [boot, setBoot] = useState2(current?.bootstrap ?? null);
+  const [, force] = useState2(0);
   useEffect2(() => {
     if (!same(current)) return;
+    const listener = (data) => {
+      setBoot(data);
+      force((n) => n + 1);
+    };
     setBoot(current.bootstrap);
-    current.listeners.add(setBoot);
+    current.listeners.add(listener);
     return () => {
-      current.listeners.delete(setBoot);
+      current.listeners.delete(listener);
     };
   }, [current]);
   return boot;
@@ -7367,7 +7042,7 @@ function openReview(current, run) {
     useEffect2(() => {
       shell.current?.querySelector("button,select")?.focus();
     }, []);
-    return /* @__PURE__ */ jsx3("div", { className: "dv-layer", ref: shell, role: "dialog", "aria-modal": "true", "aria-label": messages(boot?.locale ?? "zh-CN").title, onKeyDown: (event) => {
+    return /* @__PURE__ */ React4.createElement("div", { className: "dv-layer", ref: shell, role: "dialog", "aria-modal": "true", "aria-label": messages(boot?.locale ?? "zh-CN").title, onKeyDown: (event) => {
       if (event.defaultPrevented || event.target.closest("dialog")) return;
       if (event.key === "Escape") {
         event.preventDefault();
@@ -7384,11 +7059,11 @@ function openReview(current, run) {
           first?.focus();
         }
       }
-    }, children: /* @__PURE__ */ jsx3("div", { className: "dv-layer-inner", children: /* @__PURE__ */ jsx3(ReviewApp_default, { transport, initialRequest: run ? { scope: "turn", root: run.root, sessionId, runId: run.id } : { scope: "unstaged", sessionId }, locale: boot?.locale, base: boot?.base, onClose: close }) }) });
+    } }, /* @__PURE__ */ React4.createElement("div", { className: "dv-layer-inner" }, /* @__PURE__ */ React4.createElement(ReviewApp_default, { transport, initialRequest: run ? { scope: "turn", root: run.root, sessionId, runId: run.id } : { scope: "unstaged", sessionId }, locale: boot?.locale, base: boot?.base, onClose: close })));
   }
   layers.add(close);
   root = createRoot2(layer.element);
-  root.render(/* @__PURE__ */ jsx3(Layer, {}));
+  root.render(/* @__PURE__ */ React4.createElement(Layer, null));
 }
 function EntryExtra(props) {
   const current = hub;
@@ -7413,18 +7088,7 @@ function EntryExtra(props) {
     };
   }, [current, props.sessionId, props.messageId, contentKey, props.message?.createdAt]);
   if (!run || !same(current)) return null;
-  return /* @__PURE__ */ jsxs3("div", { className: "dv-reply", children: [
-    /* @__PURE__ */ jsxs3("span", { children: [
-      t.files,
-      ": ",
-      run.fileCount
-    ] }),
-    /* @__PURE__ */ jsxs3("span", { children: [
-      t[run.state],
-      run.incomplete ? ` \xB7 ${t.incomplete}` : ""
-    ] }),
-    /* @__PURE__ */ jsx3("button", { onClick: () => openReview(current, run), children: t.title })
-  ] });
+  return /* @__PURE__ */ React4.createElement("div", { className: "dv-reply" }, /* @__PURE__ */ React4.createElement("span", null, t.files, ": ", run.fileCount), /* @__PURE__ */ React4.createElement("span", null, t[run.state], run.incomplete ? ` \xB7 ${t.incomplete}` : ""), /* @__PURE__ */ React4.createElement("button", { onClick: () => openReview(current, run) }, t.title));
 }
 function ComposerControl() {
   const current = hub;
@@ -7435,40 +7099,36 @@ function ComposerControl() {
   const [probeStatus, setProbeStatus] = useState2("");
   useEffect2(() => {
     mounted.current = true;
+    if (same(current)) report(current, "composer-mounted");
     return () => {
       mounted.current = false;
     };
-  }, []);
+  }, [current]);
   const t = messages(boot?.locale ?? "zh-CN");
-  return /* @__PURE__ */ jsxs3(Fragment2, { children: [
-    /* @__PURE__ */ jsx3("button", { className: "dv-composer", disabled: busy || !same(current), title: t.title, onClick: () => {
-      if (!same(current)) return;
-      setBusy(true);
-      setError("");
-      try {
-        openReview(current);
-      } catch (err) {
-        if (mounted.current) setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (mounted.current) setBusy(false);
-      }
-    }, children: busy ? t.loading : t.title }),
-    boot?.settings.nativePreflight && /* @__PURE__ */ jsx3("button", { className: "dv-composer", disabled: busy || !same(current) || !current.activeSession, onClick: () => {
-      if (!same(current) || !current.native || !current.activeSession) return;
-      const sessionId = current.activeSession;
-      setBusy(true);
-      setProbeStatus("\u9A8C\u8BC1\u4E2D / Checking native integration\u2026");
-      current.native.probe(sessionId, "docs/native-preflight-fixture.txt", { id: "preflight-demo", path: "[\u5916\u90E8\u6587\u4EF6\u6F14\u793A / render-only] native-preflight-external.txt", origin: "external", demo: true, additions: 1, deletions: 1, hunks: [{ header: "@@ -1,1 +1,1 @@", lines: [{ type: "del", text: "native preflight before" }, { type: "add", text: "native preflight after" }] }] }).then((result) => {
-        if (mounted.current && same(current) && current.activeSession === sessionId) setProbeStatus(`\u539F\u751F\u9884\u68C0 / Native preflight: ${JSON.stringify(result)}\u3002\u8BF7\u4EBA\u5DE5\u6838\u5BF9\u4FA7\u680F\uFF1B\u6F14\u793A\u4E0D\u662F\u5B9E\u9645\u91C7\u96C6\u3002`);
-      }).catch((err) => {
-        if (mounted.current && same(current)) setProbeStatus(`\u539F\u751F\u9884\u68C0\u672A\u901A\u8FC7 / Failed: ${String(err?.code ?? "NATIVE_IMPORT")} ${err instanceof Error ? err.message : String(err)}`);
-      }).finally(() => {
-        if (mounted.current && same(current)) setBusy(false);
-      });
-    }, children: "\u539F\u751F\u5BA1\u9605\u9884\u68C0 / Native preflight" }),
-    probeStatus && /* @__PURE__ */ jsx3("span", { className: "dv-layer-error", role: "status", style: { whiteSpace: "pre-wrap" }, children: probeStatus }),
-    error && /* @__PURE__ */ jsx3("span", { className: "dv-layer-error", role: "alert", children: error })
-  ] });
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("button", { className: "dv-composer", disabled: busy || !same(current), title: t.title, onClick: () => {
+    if (!same(current)) return;
+    setBusy(true);
+    setError("");
+    try {
+      openReview(current);
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  } }, busy ? t.loading : t.title), boot?.settings.nativePreflight && /* @__PURE__ */ React4.createElement("button", { className: "dv-composer", disabled: busy || !same(current) || !current.activeSession, onClick: () => {
+    if (!same(current) || !current.native || !current.activeSession) return;
+    const sessionId = current.activeSession;
+    setBusy(true);
+    setProbeStatus("\u9A8C\u8BC1\u4E2D / Checking native integration\u2026");
+    current.native.probe(sessionId, "docs/native-preflight-fixture.txt", { id: "preflight-demo", path: "[\u5916\u90E8\u6587\u4EF6\u6F14\u793A / render-only] native-preflight-external.txt", origin: "external", demo: true, additions: 1, deletions: 1, hunks: [{ header: "@@ -1,1 +1,1 @@", lines: [{ type: "del", text: "native preflight before" }, { type: "add", text: "native preflight after" }] }] }).then((result) => {
+      if (mounted.current && same(current) && current.activeSession === sessionId) setProbeStatus(`\u539F\u751F\u9884\u68C0 / Native preflight: ${JSON.stringify(result)}\u3002\u8BF7\u4EBA\u5DE5\u6838\u5BF9\u4FA7\u680F\uFF1B\u6F14\u793A\u4E0D\u662F\u5B9E\u9645\u91C7\u96C6\u3002`);
+    }).catch((err) => {
+      if (mounted.current && same(current)) setProbeStatus(`\u539F\u751F\u9884\u68C0\u672A\u901A\u8FC7 / Failed: ${String(err?.code ?? "NATIVE_IMPORT")} ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => {
+      if (mounted.current && same(current)) setBusy(false);
+    });
+  } }, "\u539F\u751F\u5BA1\u9605\u9884\u68C0 / Native preflight"), probeStatus && /* @__PURE__ */ React4.createElement("span", { className: "dv-layer-error", role: "status", style: { whiteSpace: "pre-wrap" } }, probeStatus), current?.bootstrapError && /* @__PURE__ */ React4.createElement("span", { className: "dv-layer-error", role: "alert" }, "\u65E0\u6CD5\u52A0\u8F7D\u9884\u68C0\u8BBE\u7F6E / Cannot load preflight settings: ", current.bootstrapError), error && /* @__PURE__ */ React4.createElement("span", { className: "dv-layer-error", role: "alert" }, error));
 }
 function onLoad(pi) {
   realm2.__piDiffRenderer?.dispose();
@@ -7477,7 +7137,7 @@ function onLoad(pi) {
     if (!same(current)) return Promise.reject(new Error("Renderer unloaded / \u6E32\u67D3\u6269\u5C55\u5DF2\u5378\u8F7D\u3002"));
     return pi.dispatch("plugin.call", { method, args });
   } });
-  const current = { host: pi, transport, disposed: false, bootstrap: null, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cursor: 0 };
+  const current = { host: pi, transport, disposed: false, bootstrap: null, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cursor: 0, reported: /* @__PURE__ */ new Set() };
   hub = current;
   current.native = createNativeReviewAdapter({ info: () => transport.invoke("nativeProbeInfo") });
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
@@ -7490,6 +7150,7 @@ function onLoad(pi) {
   disposers.push(pi.ui.injectStyle(css2));
   disposers.push(pi.slots.register({ slot: "entryExtra", component: EntryExtra }));
   disposers.push(pi.slots.register({ slot: "composerControl", component: ComposerControl, positions: ["right"] }));
+  report(current, "entry-loaded");
   void poll(current);
 }
 function onUnload() {

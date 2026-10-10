@@ -37,6 +37,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_node_path8 = __toESM(require("node:path"), 1);
 var import_node_crypto7 = require("node:crypto");
 
 // src/core/storage.ts
@@ -474,16 +475,16 @@ var Diff = class {
       }
     }
   }
-  addToPath(path8, added, removed, oldPosInc, options) {
-    const last = path8.lastComponent;
+  addToPath(path9, added, removed, oldPosInc, options) {
+    const last = path9.lastComponent;
     if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
       return {
-        oldPos: path8.oldPos + oldPosInc,
+        oldPos: path9.oldPos + oldPosInc,
         lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
       };
     } else {
       return {
-        oldPos: path8.oldPos + oldPosInc,
+        oldPos: path9.oldPos + oldPosInc,
         lastComponent: { count: 1, added, removed, previousComponent: last }
       };
     }
@@ -1867,6 +1868,7 @@ var timer;
 var turnEnded;
 var tail = Promise.resolve();
 var disposed = false;
+var rendererStages = {};
 function serial(work) {
   const result = tail.then(work);
   tail = result.catch(() => {
@@ -1884,6 +1886,8 @@ async function onLoad() {
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
+  rendererStages = {};
+  await atomicJson(import_node_path8.default.join(store.directory, "renderer-status.json"), { version: 1, generation, mainLoadedAt: Date.now(), stages: rendererStages });
   locatorFile = await locatorPath(pluginRoot);
   await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: (v) => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: (text) => pi.clipboard.writeText(text), openPanel: () => pi.ui.openPanel({ title: "Diff view" }) }, generation);
@@ -1939,6 +1943,16 @@ async function onRendererCall(method, args) {
 async function dispatch(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
+  if (method === "rendererReport") {
+    const stage = args?.stage;
+    if (typeof stage !== "string" || !["entry-loaded", "composer-mounted", "bootstrap-ok", "bootstrap-error"].includes(stage)) fail("INVALID_STAGE", "Unknown renderer diagnostic stage");
+    return serial(async () => {
+      if (disposed || !store) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+      rendererStages[stage] = Date.now();
+      await atomicJson(import_node_path8.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages });
+      return { ok: true };
+    });
+  }
   if (method === "jobStart") {
     const a = args;
     return jobs.start(a.method, a.args ?? {});

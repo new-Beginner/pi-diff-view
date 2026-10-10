@@ -41,6 +41,8 @@ Git 重命名只支持整文件索引暂存/取消暂存；不提供重命名 hu
 
 重操作通过 jobStart/jobPoll 执行，每个短请求共享限速队列，写操作不自动重试。2 秒 renderer 超时与 64 KiB 合并请求/响应限制已按本机安装包实现核对。renderer 方法名逐项匹配白名单，审查层使用公开 openLayer().close；React 通过宿主 import map 导入。
 
+0.17.0 import map 只含 `react`、`react-dom`、`react-dom/client`，**不含 react/jsx-runtime**。聊天 renderer 使用经典 JSX并覆盖该入口的 tsconfig；构建检查禁止其他外部模块，浏览器回归直接加载最终 ESM 产物。插件主进程 ready 不代表 renderer 就绪，启动阶段存储为插件私有诊断，不采集聊天内容。
+
 宿主 session:turnEnded 没有 captureRunId/时间戳，仅触发 inbox 导入并记录审计，不据此猜测回合绑定。POSIX 权限保留与 FIFO 防阻塞实现存在，但本次本机为 Windows，未宣称 Linux/macOS 原生兼容验证通过。
 
 ## 原生授权与生命周期
