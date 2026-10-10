@@ -16,11 +16,12 @@ export function assertPublicPath(value: string): void {
 }
 /** Check every existing ancestor, refusing symlinks/junctions rather than following them. */
 export async function safeResolve(root: string, value: string): Promise<string> {
-  assertPublicPath(value);
+  if (typeof value !== 'string' || !value || value.length > 4096 || /[\0\r\n]/.test(value) || value.replace(/\\/g, '/').split('/').includes('..')) fail('INVALID_PATH', 'Invalid or escaping file path');
   const realRoot = await fs.realpath(root);
   const target = path.resolve(realRoot, value);
   if (!inside(realRoot, target) || canonical(target) === canonical(realRoot)) fail('PATH_ESCAPE', 'File is outside the authorized project root');
   const rel = path.relative(realRoot, target);
+  assertPublicPath(rel);
   let cursor = realRoot;
   for (const segment of rel.split(path.sep)) {
     cursor = path.join(cursor, segment);
@@ -37,7 +38,7 @@ export function snapshotFromBytes(bytes: Uint8Array, mode = 0o100644): FileSnaps
   let kind: FileSnapshot['kind'] = bytes.length > MAX_TEXT_BYTES ? 'large' : 'text';
   let text: string | null = null;
   if (kind === 'text') {
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (text.includes('\0')) { kind = 'binary'; text = null; } }
+    try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); if (text.includes('\0')) { kind = 'binary'; text = null; } }
     catch { kind = 'binary'; }
   }
   return { exists: true, text, hash: digest(bytes), size: bytes.length, mode, kind };
@@ -52,7 +53,10 @@ export async function readSnapshot(root: string, value: string): Promise<FileSna
     const stat = await handle.stat();
     if (!stat.isFile()) fail('NOT_FILE', 'Only regular files can be captured');
     if (stat.size > MAX_TEXT_BYTES) return { exists: true, text: null, hash: `large:${stat.size}:${stat.mtimeMs}`, size: stat.size, mode: stat.mode, kind: 'large' };
-    const bytes = await handle.readFile();
+    const buffer = Buffer.alloc(MAX_TEXT_BYTES + 1); let length = 0;
+    while (length < buffer.length) { const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length); if (!bytesRead) break; length += bytesRead; }
+    if (length > MAX_TEXT_BYTES) fail('FILE_CHANGED', 'File grew beyond the snapshot limit during capture');
+    const bytes = buffer.subarray(0, length);
     const after = await handle.stat();
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) fail('FILE_CHANGED', 'File changed during capture');
     await safeResolve(root, value);
