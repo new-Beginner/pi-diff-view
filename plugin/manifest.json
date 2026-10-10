@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "local.diff-view",
+  "name": "Diff view",
+  "version": "0.1.0",
+  "description": "Diff view — generated from the panel-basic template.",
+  "main": "main.js",
+  "ui": {
+    "panel": "renderer/index.html",
+    "title": "Diff view"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "plugin.open",
+        "title": "Diff view: Open Panel",
+        "keywords": [
+          "plugin"
+        ]
+      }
+    ]
+  },
+  "permissions": [
+    "ui.panel"
+  ],
+  "engines": {
+    "piDesktop": ">=0.1.0"
+  },
+  "activationEvents": [
+    "onCommand:plugin.open",
+    "onStartup"
+  ]
+}

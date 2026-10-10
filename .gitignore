@@ -1,0 +1,8 @@
+.pi/
+node_modules/
+plugin/dist/
+coverage/
+test-results/
+playwright-report/
+output/
+*.log

@@ -1,0 +1,23 @@
+export const PROTOCOL = 1;
+export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+export type GitScope = 'unstaged' | 'staged' | 'commit' | 'branch';
+export type Scope = GitScope | 'lastTurn' | 'turn';
+export type FileKind = 'text' | 'binary' | 'large' | 'symlink' | 'submodule' | 'conflict' | 'unavailable';
+export type Action = 'stage' | 'unstage' | 'revert' | 'reapply';
+export interface FileSnapshot { exists: boolean; text: string | null; hash: string; size: number; mode: number; kind: FileKind; }
+export interface DiffLine { kind: 'context' | 'add' | 'del' | 'notice'; text: string; oldLine: number | null; newLine: number | null; }
+export interface DiffHunk { id: string; header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLine[]; }
+export interface ReviewFile { id: string; path: string; oldPath?: string; status: 'added' | 'modified' | 'deleted' | 'renamed' | 'mode'; kind: FileKind; additions: number; deletions: number; fingerprint: string; actions: Action[]; note?: string; state?: 'active' | 'reverted'; }
+export interface InternalFile extends ReviewFile { before: FileSnapshot; after: FileSnapshot; indexFingerprint?: string; }
+export interface ReviewRequest { scope: Scope; root?: string; ref?: string; sessionId?: string; runId?: string; }
+export interface ReviewSummary { id: string; scope: Scope; root: string; files: ReviewFile[]; notice?: string; sessionId?: string; runId?: string; }
+export interface ReviewDetail { file: ReviewFile; hunks: DiffHunk[]; offset: number; totalRows: number; nextOffset: number | null; }
+export interface RepositoryInfo { root: string; name: string; git: boolean; branch?: string; }
+export interface RunSummary { id: string; sessionId: string; root: string; startedAt: number; endedAt?: number; state: 'running' | 'completed' | 'aborted' | 'incomplete'; fileCount: number; incomplete: boolean; prompt?: string; }
+export interface CaptureRun extends RunSummary { version: 1; generation: string; changes: Record<string, { before: FileSnapshot; after: FileSnapshot }>; replies: { hash: string; timestamp: number }[]; bindings: Record<string, string>; }
+export interface LineAnchor { path: string; fingerprint: string; scope: Scope; root: string; side: 'old' | 'new'; line: number; text: string; excerpt: string; runId?: string; }
+export interface ReviewComment { id: string; sessionId?: string; anchor: LineAnchor; body: string; createdAt: number; updatedAt: number; stale?: boolean; }
+export interface Bootstrap { repositories: RepositoryInfo[]; runs: RunSummary[]; locale: string; base: 'light' | 'dark'; settings: { layout: 'unified' | 'split'; wordWrap: boolean }; }
+export interface ReviewActionRequest { reviewId: string; fileId: string; action: Action; hunkId?: string; fingerprint: string; confirmed: boolean; }
+export interface ActionResult { ok: boolean; message: string; }
+export interface UiTransport { invoke<T = unknown>(method: string, args?: unknown): Promise<T>; insertText?: (text: string) => Promise<void>; }
