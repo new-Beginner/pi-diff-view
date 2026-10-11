@@ -52,8 +52,8 @@ E2E_BROWSER='C:/Users/32057/AppData/Local/ms-playwright/chromium-1228/chrome-win
 | 检查 | 实际结果 |
 |---|---|
 | TypeScript / 离线构建 | 通过；生产 renderer 无不支持的 JSX runtime 导入 |
-| 后端 | 98 通过、1 个 Windows 不适用的 POSIX FIFO 测试跳过 |
-| Chromium | 31/31 通过，含原有 diff/评论/操作回归 |
+| 后端 | 102 通过、1 个 Windows 不适用的 POSIX FIFO 测试跳过 |
+| Chromium | 32/32 通过，含组装回复、长进度和最新卡片优先回归 |
 | 第 120 个文件 / 后续定位事件 | 真实构建 main 的捕获记录定位通过；浏览器 view:open 更新通过 |
 | 官方 PluginCheck | 23 个文件，无错误和警告 |
 | 开发宿主启动 | 注册表 dev / ready / enabled；真实 entry-loaded、bootstrap-ok 阶段已收到 |
@@ -62,3 +62,13 @@ E2E_BROWSER='C:/Users/32057/AppData/Local/ms-playwright/chromium-1228/chrome-win
 
 
 真实验收仍需：新版任务最终回复卡片出现；点击第二个文件，右侧打开本插件页签并显示该文件的 diff；关闭或切换会话后无串任务；工作区外记录只读。当前任务正在开发过程中，不能保证热重载前的旧采集会产生新版卡片。
+
+### 卡片不出现修复（2026-10-10）
+
+只读诊断发现：采集已有两个文件和最终回复，renderer 插槽已挂载，真实查询却未绑定。核对本机 0.17.0 实现后确认，`entryExtra` 的 `message.content` 是任务内所有助手文本各自 trim 后以两个换行连接的内容，不能拿整段哈希与单条最终回复哈希相等比较。
+
+修复仅匹配段落边界后的完整最终回复末尾，保留原有会话、3 秒时间窗口、唯一任务及唯一界面消息绑定校验。不用包含关键词或模糊匹配，不回填聊天正文。renderer 只传序列化后不超过 24 KB 的末尾，避免长进度令整张卡片被跳过；最终回复本身超限或候选段落超过预算时仍保守拒绝。每轮优先查询最新回复，再轮询旧回复。
+
+新增复现用例在旧代码上失败、修复后通过。开发宿主自身记录确认：上轮两文件记录的 bindings 从空变为对应最终界面消息 ID；未读取宿主数据库，未手动修改采集或绑定数据。临时逐条查询诊断已移除，保留 `reply-slot-mounted`、`card-bound`、`card-query-error` 阶段标记，不存聊天正文。
+
+这证明真实匹配已恢复，不等同于 GUI 显示和侧栏点击验收。仍需回看上轮最终回复卡片，点击第二个样本文件，核对右侧 diff。

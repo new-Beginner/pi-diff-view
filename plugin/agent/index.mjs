@@ -344,7 +344,8 @@ var SnapshotStore = class {
           const run = await this.getRun(id, true, false);
           if (!run) continue;
           const current = await this.getRun(id, false, false);
-          run.bindings = current?.bindings ?? {};
+          const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
+          run.bindings = sameReply ? current?.bindings ?? {} : {};
           if (run.generation !== generation && run.state === "running") {
             run.state = "incomplete";
             run.incomplete = true;
@@ -442,7 +443,7 @@ function createCaptureExtension(options) {
     let run = null, store = null;
     let pending = /* @__PURE__ */ new Map();
     let seen = /* @__PURE__ */ new Set(), retired = /* @__PURE__ */ new Set(), warned = false, disposed = false, tail = Promise.resolve();
-    let lastReply, privatePaths = [], observed = /* @__PURE__ */ new Set();
+    let lastReply, privatePaths = [], observed = /* @__PURE__ */ new Set(), settled = false;
     const serial = (fn, ctx) => {
       tail = tail.then(fn).catch(async (error) => {
         lastReply = void 0;
@@ -501,9 +502,21 @@ function createCaptureExtension(options) {
       observed.clear();
       warned = false;
       lastReply = void 0;
+      settled = false;
       await persist(run);
     };
     pi.on("before_agent_start", (_event, ctx) => serial(() => begin(ctx), ctx));
+    pi.on("agent_start", (_event, ctx) => serial(async () => {
+      if (disposed || settled || !run || run.state === "running" || run.state === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs3.realpath(ctx.cwd)) return;
+      await check(run);
+      run.state = "running";
+      delete run.endedAt;
+      delete run.finalReply;
+      delete run.cardPreview;
+      run.bindings = {};
+      lastReply = void 0;
+      await persist(run);
+    }, ctx));
     pi.on("tool_call", (event, ctx) => serial(async () => {
       if (disposed || typeof event.toolCallId !== "string" || seen.has(event.toolCallId)) return;
       lastReply = void 0;
@@ -587,7 +600,7 @@ function createCaptureExtension(options) {
         await persist(run);
         return;
       }
-      const reply = { hash: digest(text), timestamp: message.timestamp };
+      const reply = { hash: digest(text.trim()), timestamp: message.timestamp };
       if (!run.replies.some((r) => r.hash === reply.hash && r.timestamp === reply.timestamp)) run.replies.push(reply);
       run.replies = run.replies.slice(-20);
       if (!pending.size && !["error", "aborted", "toolUse", "tool_use", "length"].includes(message.stopReason)) lastReply = reply;
@@ -615,7 +628,7 @@ function createCaptureExtension(options) {
       const messages = Array.isArray(event.messages) ? event.messages : void 0;
       if (messages) {
         const last = [...messages].reverse().find((m) => m.role === "assistant");
-        if (!last || !lastReply || digest(textContent(last)) !== lastReply.hash || last.timestamp !== lastReply.timestamp || Array.isArray(last.content) && last.content.some((b) => b.type === "toolCall" || b.type === "tool_use")) lastReply = void 0;
+        if (!last || !lastReply || digest(textContent(last).trim()) !== lastReply.hash || last.timestamp !== lastReply.timestamp || Array.isArray(last.content) && last.content.some((b) => b.type === "toolCall" || b.type === "tool_use")) lastReply = void 0;
       }
       const aborted = event.aborted === true || event.isError === true;
       if (aborted) {
@@ -626,6 +639,9 @@ function createCaptureExtension(options) {
       run.state = aborted ? "aborted" : run.incomplete ? "incomplete" : "completed";
       run.endedAt = Date.now();
       await persist(run);
+    }, ctx));
+    pi.on("agent_settled", (_event, ctx) => serial(async () => {
+      if (run?.sessionId === ctx.sessionManager.getSessionId()) settled = true;
     }, ctx));
     pi.on("session_shutdown", (_event, ctx) => serial(async () => {
       if (run?.state === "running") {

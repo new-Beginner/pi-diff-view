@@ -72,15 +72,14 @@ function Code({ text, path, changes = [] }: { text: string; path: string; change
   }, [text, path, changes]);
   return <code className="dv-code">{nodes.length ? nodes : ' '}</code>;
 }
-export function DiffRows({ lines, path, layout, onLine, t, disabled }: { lines: DiffLine[]; path: string; layout: 'unified' | 'split'; onLine: (line: DiffLine, side: 'old' | 'new') => void; t: Messages; disabled?: boolean }) {
+export function DiffRows({ lines, path, layout, t }: { lines: DiffLine[]; path: string; layout: 'unified' | 'split'; t: Messages }) {
   const pairs = useMemo(() => alignLines(lines), [lines]);
-  const button = (line: DiffLine | undefined, side: 'old' | 'new') => {
-    const number = side === 'old' ? line?.oldLine : line?.newLine;
-    return number == null ? <span className="dv-number" /> : <button className="dv-number" disabled={disabled} aria-label={`${t.addComment}: ${t[side]} ${number}`} onClick={() => onLine(line!, side)}>{number}</button>;
+  const number = (line: DiffLine | undefined, side: 'old' | 'new') => {
+    const value = side === 'old' ? line?.oldLine : line?.newLine;
+    return <span className="dv-number" data-side={side} aria-label={value == null ? undefined : `${t[side]} ${value}`}>{value}</span>;
   };
   const cell = (line: DiffLine | undefined, side: 'old' | 'new', changes?: Range[]) => <div className={`dv-side dv-${line?.kind ?? 'blank'}`}>
-    {button(line, side)}<span className="dv-sign" aria-hidden="true">{line?.kind === 'add' ? '+' : line?.kind === 'del' ? '−' : ' '}</span>
-    {line ? <Code text={line.text} path={path} changes={changes} /> : <span className="dv-code" />}
+    {number(line, side)}{line ? <Code text={line.text} path={path} changes={changes} /> : <span className="dv-code" />}
   </div>;
   if (layout === 'split') return <div className="dv-rows dv-split" role="group" aria-label={`${t.old} / ${t.new}`} style={{ '--dv-code-width': `${Math.max(240, ...lines.map(line => [...line.text].reduce((width, char) => width + (char === '\t' ? 4 : char.charCodeAt(0) > 255 ? 2 : 1), 0) * 8 + 72))}px` } as React.CSSProperties}>
     <div className="dv-side-labels"><span>{t.old}</span><span>{t.new}</span></div>
@@ -89,6 +88,6 @@ export function DiffRows({ lines, path, layout, onLine, t, disabled }: { lines: 
   const changes = new Map<DiffLine, Range[]>();
   for (const pair of pairs) { if (pair.left) changes.set(pair.left, pair.oldRanges ?? []); if (pair.right) changes.set(pair.right, pair.newRanges ?? []); }
   return <div className="dv-rows dv-unified">{lines.map((line, index) => line.kind === 'notice' ? <div key={index} className="dv-notice-line">{line.text}</div> : <div className={`dv-row dv-${line.kind}`} key={index}>
-    {button(line, 'old')}{button(line, 'new')}<span className="dv-sign" aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' '}</span><Code text={line.text} path={path} changes={changes.get(line)} />
+    {number(line, line.kind === 'del' ? 'old' : 'new')}<Code text={line.text} path={path} changes={changes.get(line)} />
   </div>)}</div>;
 }

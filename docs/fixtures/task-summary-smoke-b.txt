@@ -1,0 +1,7 @@
+Diff view chat-summary acceptance fixture B.
+Purpose: verify clicking the second file targets its diff.
+Marker: SECOND_FILE_TARGET
+Retest marker: SECOND_FILE_TARGET_V2
+Acceptance run: TASK_SUMMARY_FOLLOWUP_B_SECOND_FILE
+Card smoke test: SECOND_FILE_20261010
+Persistent card retest: CARD_RECHECK_B_SECOND

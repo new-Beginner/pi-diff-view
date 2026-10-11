@@ -1,6 +1,7 @@
+import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Bootstrap, CapturedChange, CaptureRun, GitScope, InternalFile, LineAnchor, RepositoryInfo, ReviewActionRequest, ReviewComment, ReviewDetail, ReviewFile, ReviewRequest, ReviewSummary, RunSummary, TurnSummary } from './contracts';
+import type { Bootstrap, CapturedChange, CaptureRun, GitScope, InternalFile, LineAnchor, RepositoryInfo, ReplyCard, ReplyCardsPage, ReviewActionRequest, ReviewComment, ReviewDetail, ReviewFile, ReviewRequest, ReviewSummary, RunSummary, TurnSummary } from './contracts';
 import { assertPublicPath, canonical, digest, fail, sameSnapshot } from './path-policy';
 import { buildHunks, patchText, publicFile, stats } from './diff';
 import { SnapshotStore, atomicJson, readJson } from './storage';
@@ -60,9 +61,12 @@ export class ReviewService {
     if (!run || run.sessionId !== args.sessionId) fail('RUN_NOT_FOUND', 'Recorded run not found in this session');
     await this.bootstrap(args.sessionId);
     if (!this.allowed.has(canonical(run.root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
-    const states = await readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {});
-    const { bindings: _bindings, ...content } = run;
-    const key = digest(JSON.stringify([content, states, [...this.mutableRoots].sort()]));
+    return this.summarizeRun(run, args);
+  }
+  private async summarizeRun(run: CaptureRun, args: { offset?: number; limit?: number }, readOnly = false): Promise<TurnSummary> {
+    const states = readOnly ? {} : await readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {});
+    const { bindings: _bindings, cardPreview: _preview, ...content } = run;
+    const key = digest(JSON.stringify([content, states, readOnly ? [] : [...this.mutableRoots].sort(), readOnly]));
     let cached = this.summaries.get(run.id);
     if (!cached || cached.key !== key || Date.now() - cached.createdAt > 30000) {
       const files: ReviewFile[] = []; let additions = 0, deletions = 0, incomplete = run.incomplete || run.state !== 'completed' || run.version === 1 || run.boundary !== 'user';
@@ -72,6 +76,7 @@ export class ReviewService {
         if (Date.now() - started > 4000) fail('DIFF_LIMIT', 'Turn summary exceeds computation budget');
         const hydrated = { ...change, before: await this.store.hydrate(change.before), after: await this.store.hydrate(change.after) };
         const file = publicFile(this.turnFile(run, value, hydrated, states));
+        if (readOnly) file.actions = [];
         if (file.kind !== 'text') incomplete = true;
         additions += file.additions; deletions += file.deletions; files.push(file);
       }
@@ -233,16 +238,51 @@ export class ReviewService {
     if (Buffer.byteLength(JSON.stringify({ text })) > 28000) fail('FEEDBACK_LIMIT', 'Feedback exceeds chat bridge limit; copy comments in smaller groups');
     return { text };
   }
-  async card(args: { sessionId: string; messageId: string; content: string; createdAt?: string }): Promise<{ run: RunSummary | null }> {
+  private cardEligible(run: CaptureRun): boolean {
+    return run.version === 2 && run.boundary === 'user' && run.state !== 'running' && run.state !== 'aborted' && Number.isFinite(run.endedAt) && !!run.finalReply && run.replies.filter(reply => reply.hash === run.finalReply!.hash && reply.timestamp === run.finalReply!.timestamp).length === 1 && Object.values(run.changes).some(change => !sameSnapshot(change.before, change.after));
+  }
+  private async cardPreview(run: CaptureRun): Promise<TurnSummary> {
+    const key = digest(JSON.stringify([run.contentVersion, run.state, run.incomplete, run.changes]));
+    if (run.cardPreview?.key === key && run.cardPreview.summary.runId === run.id && run.cardPreview.summary.sessionId === run.sessionId) return run.cardPreview.summary;
+    const summary = await this.summarizeRun(run, { limit: 3 }, true);
+    run.cardPreview = { key, summary }; return summary;
+  }
+  async replyCards(args: { sessionId: string; offset?: number; revision?: string }): Promise<ReplyCardsPage> {
+    this.validateTurn(args, false);
+    const runs = (await this.store.listRuns(false)).filter(run => run.sessionId === args.sessionId && this.cardEligible(run));
+    const revision = digest(JSON.stringify(runs.map(run => [run.id, run.contentVersion, run.state, run.incomplete, run.finalReply, run.bindings, run.changes])));
+    const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string }));
+    const pending = runs.filter(run => !Object.keys(run.bindings).length).map(run => run.finalReply!.timestamp);
+    const page: ReplyCardsPage = { cards: [], revision, pending, nextOffset: null, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark' };
+    if (args.revision === revision) return { ...page, unchanged: true };
+    const bound = runs.filter(run => typeof run.bindings[run.finalReply!.hash] === 'string' && run.bindings[run.finalReply!.hash].length <= 256 && Object.values(run.bindings).every(id => id === run.bindings[run.finalReply!.hash]));
+    const unique = bound.filter(run => bound.filter(other => other.bindings[other.finalReply!.hash] === run.bindings[run.finalReply!.hash]).length === 1);
+    const offset = Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset!)) : 0;
+    for (const run of unique.slice(offset, offset + 20)) {
+      const previousKey = run.cardPreview?.key, summary = await this.cardPreview(run);
+      const card: ReplyCard = { messageId: run.bindings[run.finalReply!.hash], run: runSummary(run), summary };
+      page.cards.push(card); page.nextOffset = offset + page.cards.length < unique.length ? offset + page.cards.length : null;
+      if (Buffer.byteLength(JSON.stringify(page)) > 28 * 1024) {
+        page.cards.pop(); page.nextOffset = offset + page.cards.length;
+        if (!page.cards.length) fail('SUMMARY_LIMIT', 'Reply card exceeds bridge budget');
+        break;
+      }
+      if (previousKey !== run.cardPreview?.key) await this.store.writeRun(run);
+    }
+    return page;
+  }
+  async card(args: { sessionId: string; messageId: string; content: string; createdAt?: string }): Promise<{ run: RunSummary | null; summary?: TurnSummary }> {
     if (!args.sessionId || !args.messageId || !args.createdAt) return { run: null };
     const timestamp = Date.parse(args.createdAt); if (!Number.isFinite(timestamp)) return { run: null };
-    const hash = digest(args.content);
+    const hashes = new Set(finalReplyCandidates(args.content).map(digest));
     const runs = await this.store.listRuns(false);
-    const matches = runs.filter(r => r.version === 2 && r.boundary === 'user' && r.state !== 'running' && r.state !== 'aborted' && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.values(r.changes).some(c => !sameSnapshot(c.before, c.after)) && r.finalReply?.hash === hash && Math.abs(r.finalReply.timestamp - timestamp) < 3000 && r.replies.filter(p => p.hash === hash && Math.abs(p.timestamp - timestamp) < 3000).length === 1);
+    const matches = runs.filter(r => r.version === 2 && r.boundary === 'user' && r.state !== 'running' && r.state !== 'aborted' && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.values(r.changes).some(c => !sameSnapshot(c.before, c.after)) && r.finalReply && hashes.has(r.finalReply.hash) && Math.abs(r.finalReply.timestamp - timestamp) < 3000 && r.replies.filter(p => p.hash === r.finalReply!.hash && Math.abs(p.timestamp - timestamp) < 3000).length === 1);
     if (matches.length !== 1) return { run: null };
     const run = matches[0];
     if (Object.values(run.bindings).some(id => id !== args.messageId)) return { run: null };
-    run.bindings[hash] = args.messageId; await this.store.writeRun(run); return { run: runSummary(run) };
+    run.bindings[run.finalReply!.hash] = args.messageId;
+    const summary = await this.cardPreview(run); await this.store.writeRun(run);
+    return { run: runSummary(run), summary };
   }
   async invoke(method: string, args: any = {}): Promise<unknown> {
     switch (method) {
@@ -257,6 +297,7 @@ export class ReviewService {
       case 'deleteComment': { const p = this.mutations.then(async () => this.store.saveComments((await this.store.comments()).filter(c => c.id !== args.id))); this.mutations = p.then(() => {}, () => {}); return p; }
       case 'feedback': return this.feedback(args);
       case 'card': return this.card(args);
+      case 'replyCards': return this.replyCards(args);
       case 'copyPatch': { const r = this.get(args.reviewId), files = r.files.filter(f => !args.fileId || f.id === args.fileId); if (!files.length || files.some(f => f.kind === 'unavailable')) fail('FILE_NOT_FOUND', 'No validated captured content for this file'); await this.host.clipboard(files.map(patchText).join('\n')); return { ok: true }; }
       case 'settings': { const settings: Record<string, unknown> = {}; if (['split', 'unified'].includes(args.layout)) settings.layout = args.layout; if (typeof args.wordWrap === 'boolean') settings.wordWrap = args.wordWrap; await this.host.setSettings(settings); return; }
       case 'openPanel': return this.host.openPanel();

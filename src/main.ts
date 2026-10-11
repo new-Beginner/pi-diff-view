@@ -63,7 +63,7 @@ async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'rendererReport') {
     const stage = (args as { stage?: unknown } | null)?.stage;
-    if (typeof stage !== 'string' || !['entry-loaded', 'sidebar-opened', 'view-targeted', 'bootstrap-ok', 'bootstrap-error'].includes(stage)) fail('INVALID_STAGE', 'Unknown renderer diagnostic stage');
+    if (typeof stage !== 'string' || !['entry-loaded', 'reply-slot-mounted', 'card-bound', 'session-ready', 'session-source-error', 'sidebar-opened', 'view-targeted', 'bootstrap-ok', 'bootstrap-error', 'card-query-error'].includes(stage)) fail('INVALID_STAGE', 'Unknown renderer diagnostic stage');
     return serial(async () => { if (disposed || !store) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); rendererStages[stage] = Date.now(); await atomicJson(path.join(store.directory, 'renderer-status.json'), { version: 1, generation, stages: rendererStages }); return { ok: true }; });
   }
   if (method === 'jobStart') { const a = args as { method: string; args?: unknown }; return jobs!.start(a.method, a.args ?? {}); }

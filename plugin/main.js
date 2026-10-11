@@ -334,7 +334,8 @@ var SnapshotStore = class {
           const run = await this.getRun(id, true, false);
           if (!run) continue;
           const current = await this.getRun(id, false, false);
-          run.bindings = current?.bindings ?? {};
+          const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
+          run.bindings = sameReply ? current?.bindings ?? {} : {};
           if (run.generation !== generation2 && run.state === "running") {
             run.state = "incomplete";
             run.incomplete = true;
@@ -408,6 +409,22 @@ var SnapshotStore = class {
     });
   }
 };
+
+// src/core/reply-content.ts
+var MAX_REPLY_PAYLOAD = 24e3;
+var encoder = new TextEncoder();
+function finalReplyCandidates(content) {
+  if (encoder.encode(JSON.stringify(content)).length > MAX_REPLY_PAYLOAD) return [];
+  const candidates = /* @__PURE__ */ new Set([content.trim()]);
+  let end = content.length;
+  for (let count = 0; count < 256; count++) {
+    const boundary = content.lastIndexOf("\n\n", end - 1);
+    if (boundary < 0) break;
+    candidates.add(content.slice(boundary + 2).trim());
+    end = boundary;
+  }
+  return [...candidates].filter(Boolean);
+}
 
 // src/core/review-service.ts
 var import_node_path6 = __toESM(require("node:path"), 1);
@@ -1559,9 +1576,12 @@ var ReviewService = class {
     if (!run || run.sessionId !== args.sessionId) fail("RUN_NOT_FOUND", "Recorded run not found in this session");
     await this.bootstrap(args.sessionId);
     if (!this.allowed.has(canonical(run.root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
-    const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
-    const { bindings: _bindings, ...content } = run;
-    const key = digest(JSON.stringify([content, states2, [...this.mutableRoots].sort()]));
+    return this.summarizeRun(run, args);
+  }
+  async summarizeRun(run, args, readOnly = false) {
+    const states2 = readOnly ? {} : await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+    const { bindings: _bindings, cardPreview: _preview, ...content } = run;
+    const key = digest(JSON.stringify([content, states2, readOnly ? [] : [...this.mutableRoots].sort(), readOnly]));
     let cached = this.summaries.get(run.id);
     if (!cached || cached.key !== key || Date.now() - cached.createdAt > 3e4) {
       const files = [];
@@ -1572,6 +1592,7 @@ var ReviewService = class {
         if (Date.now() - started > 4e3) fail("DIFF_LIMIT", "Turn summary exceeds computation budget");
         const hydrated = { ...change, before: await this.store.hydrate(change.before), after: await this.store.hydrate(change.after) };
         const file = publicFile(this.turnFile(run, value, hydrated, states2));
+        if (readOnly) file.actions = [];
         if (file.kind !== "text") incomplete = true;
         additions += file.additions;
         deletions += file.deletions;
@@ -1790,19 +1811,56 @@ ${text}`;
     if (Buffer.byteLength(JSON.stringify({ text })) > 28e3) fail("FEEDBACK_LIMIT", "Feedback exceeds chat bridge limit; copy comments in smaller groups");
     return { text };
   }
+  cardEligible(run) {
+    return run.version === 2 && run.boundary === "user" && run.state !== "running" && run.state !== "aborted" && Number.isFinite(run.endedAt) && !!run.finalReply && run.replies.filter((reply) => reply.hash === run.finalReply.hash && reply.timestamp === run.finalReply.timestamp).length === 1 && Object.values(run.changes).some((change) => !sameSnapshot(change.before, change.after));
+  }
+  async cardPreview(run) {
+    const key = digest(JSON.stringify([run.contentVersion, run.state, run.incomplete, run.changes]));
+    if (run.cardPreview?.key === key && run.cardPreview.summary.runId === run.id && run.cardPreview.summary.sessionId === run.sessionId) return run.cardPreview.summary;
+    const summary = await this.summarizeRun(run, { limit: 3 }, true);
+    run.cardPreview = { key, summary };
+    return summary;
+  }
+  async replyCards(args) {
+    this.validateTurn(args, false);
+    const runs = (await this.store.listRuns(false)).filter((run) => run.sessionId === args.sessionId && this.cardEligible(run));
+    const revision = digest(JSON.stringify(runs.map((run) => [run.id, run.contentVersion, run.state, run.incomplete, run.finalReply, run.bindings, run.changes])));
+    const appearance = await this.host.appearance().catch(() => ({}));
+    const pending = runs.filter((run) => !Object.keys(run.bindings).length).map((run) => run.finalReply.timestamp);
+    const page = { cards: [], revision, pending, nextOffset: null, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark" };
+    if (args.revision === revision) return { ...page, unchanged: true };
+    const bound = runs.filter((run) => typeof run.bindings[run.finalReply.hash] === "string" && run.bindings[run.finalReply.hash].length <= 256 && Object.values(run.bindings).every((id) => id === run.bindings[run.finalReply.hash]));
+    const unique = bound.filter((run) => bound.filter((other) => other.bindings[other.finalReply.hash] === run.bindings[run.finalReply.hash]).length === 1);
+    const offset = Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
+    for (const run of unique.slice(offset, offset + 20)) {
+      const previousKey = run.cardPreview?.key, summary = await this.cardPreview(run);
+      const card = { messageId: run.bindings[run.finalReply.hash], run: runSummary(run), summary };
+      page.cards.push(card);
+      page.nextOffset = offset + page.cards.length < unique.length ? offset + page.cards.length : null;
+      if (Buffer.byteLength(JSON.stringify(page)) > 28 * 1024) {
+        page.cards.pop();
+        page.nextOffset = offset + page.cards.length;
+        if (!page.cards.length) fail("SUMMARY_LIMIT", "Reply card exceeds bridge budget");
+        break;
+      }
+      if (previousKey !== run.cardPreview?.key) await this.store.writeRun(run);
+    }
+    return page;
+  }
   async card(args) {
     if (!args.sessionId || !args.messageId || !args.createdAt) return { run: null };
     const timestamp = Date.parse(args.createdAt);
     if (!Number.isFinite(timestamp)) return { run: null };
-    const hash = digest(args.content);
+    const hashes = new Set(finalReplyCandidates(args.content).map(digest));
     const runs = await this.store.listRuns(false);
-    const matches = runs.filter((r) => r.version === 2 && r.boundary === "user" && r.state !== "running" && r.state !== "aborted" && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.values(r.changes).some((c) => !sameSnapshot(c.before, c.after)) && r.finalReply?.hash === hash && Math.abs(r.finalReply.timestamp - timestamp) < 3e3 && r.replies.filter((p) => p.hash === hash && Math.abs(p.timestamp - timestamp) < 3e3).length === 1);
+    const matches = runs.filter((r) => r.version === 2 && r.boundary === "user" && r.state !== "running" && r.state !== "aborted" && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.values(r.changes).some((c) => !sameSnapshot(c.before, c.after)) && r.finalReply && hashes.has(r.finalReply.hash) && Math.abs(r.finalReply.timestamp - timestamp) < 3e3 && r.replies.filter((p) => p.hash === r.finalReply.hash && Math.abs(p.timestamp - timestamp) < 3e3).length === 1);
     if (matches.length !== 1) return { run: null };
     const run = matches[0];
     if (Object.values(run.bindings).some((id) => id !== args.messageId)) return { run: null };
-    run.bindings[hash] = args.messageId;
+    run.bindings[run.finalReply.hash] = args.messageId;
+    const summary = await this.cardPreview(run);
     await this.store.writeRun(run);
-    return { run: runSummary(run) };
+    return { run: runSummary(run), summary };
   }
   async invoke(method, args = {}) {
     switch (method) {
@@ -1838,6 +1896,8 @@ ${text}`;
         return this.feedback(args);
       case "card":
         return this.card(args);
+      case "replyCards":
+        return this.replyCards(args);
       case "copyPatch": {
         const r = this.get(args.reviewId), files = r.files.filter((f) => !args.fileId || f.id === args.fileId);
         if (!files.length || files.some((f) => f.kind === "unavailable")) fail("FILE_NOT_FOUND", "No validated captured content for this file");
@@ -1878,7 +1938,7 @@ var JobQueue = class {
   closed = false;
   start(method, args) {
     if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
-    if (!["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "selectTurn"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
+    if (!["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "selectTurn", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
     if ([...this.jobs.values()].filter((j) => j.state === "pending").length >= 4) fail("JOB_BUSY", "Too many pending review operations");
     for (const [id2, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id2);
     const id = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now() };
@@ -1982,7 +2042,8 @@ var ReviewNavigationStore = class {
   set(request, fileId) {
     if (!request.sessionId || request.scope !== "turn" || !request.runId) fail("NAVIGATION_INVALID", "A recorded task/session is required");
     this.prune();
-    const entry = { nonce: (0, import_node_crypto7.randomUUID)(), sessionId: request.sessionId, request, fileId, at: Date.now() };
+    const previous = this.selections.get(request.sessionId);
+    const entry = { nonce: previous?.nonce ?? (0, import_node_crypto7.randomUUID)(), revision: (previous?.revision ?? 0) + 1, sessionId: request.sessionId, request, fileId, at: Date.now() };
     this.selections.delete(request.sessionId);
     this.selections.set(request.sessionId, entry);
     while (this.selections.size > 32) this.selections.delete(this.selections.keys().next().value);
@@ -2093,7 +2154,7 @@ async function dispatch(method, args) {
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
     const stage = args?.stage;
-    if (typeof stage !== "string" || !["entry-loaded", "sidebar-opened", "view-targeted", "bootstrap-ok", "bootstrap-error"].includes(stage)) fail("INVALID_STAGE", "Unknown renderer diagnostic stage");
+    if (typeof stage !== "string" || !["entry-loaded", "reply-slot-mounted", "card-bound", "session-ready", "session-source-error", "sidebar-opened", "view-targeted", "bootstrap-ok", "bootstrap-error", "card-query-error"].includes(stage)) fail("INVALID_STAGE", "Unknown renderer diagnostic stage");
     return serial(async () => {
       if (disposed || !store) fail("PLUGIN_UNLOADED", "Diff view unloaded");
       rendererStages[stage] = Date.now();

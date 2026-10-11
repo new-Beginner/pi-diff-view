@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.diff-view",
   "name": "Diff view",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "任务最终回复末尾的文件变更汇总，点击定位本插件右侧 diff；保留 Git 审查、逐行反馈和受保护操作。",
   "author": "new-Beginner",
   "license": "MIT",
@@ -13,7 +13,7 @@
   "ui": { "panel": "views/index.html", "title": "Diff view", "width": 1180, "height": 800 },
   "renderer": "renderer/index.mjs",
   "rendererActions": ["plugin.call", "composer.readDraft"],
-  "rendererCallMethods": ["rendererReport", "nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "turnSummary", "selectTurn", "readTurnSelection", "activeReviewSession", "openPanel"],
+  "rendererCallMethods": ["rendererReport", "nativeProbeInfo", "jobStart", "jobPoll", "bootstrap", "review", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "settings", "clearHistory", "card", "replyCards", "turnSummary", "selectTurn", "readTurnSelection", "activeReviewSession", "openPanel"],
   "contributes": {
     "commands": [{ "id": "diff-view.open", "title": "Diff view: Open review", "keywords": ["diff", "review", "变更", "审查"] }],
     "views": [{ "id": "review", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "icon": "diff", "entry": "views/index.html", "order": 45 }],

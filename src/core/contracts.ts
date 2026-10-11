@@ -15,9 +15,11 @@ export interface ReviewDetail { file: ReviewFile; hunks: DiffHunk[]; offset: num
 export interface TurnSummary { runId: string; sessionId: string; fileCount: number; additions: number; deletions: number; incomplete: boolean; files: ReviewFile[]; offset: number; nextOffset: number | null; notice?: string; }
 export interface RepositoryInfo { root: string; name: string; git: boolean; branch?: string; }
 export interface RunSummary { id: string; sessionId: string; root: string; startedAt: number; endedAt?: number; state: 'running' | 'completed' | 'aborted' | 'incomplete'; fileCount: number; incomplete: boolean; prompt?: string; }
+export interface ReplyCard { messageId: string; run: RunSummary; summary: TurnSummary }
+export interface ReplyCardsPage { cards: ReplyCard[]; revision: string; unchanged?: boolean; pending: number[]; nextOffset: number | null; locale: string; base: 'light' | 'dark' }
 export interface CaptureIdentity { id: string; identity: string; path: string; origin: 'workspace' | 'external'; absolutePath: string; }
 export interface CapturedChange { before: FileSnapshot; after: FileSnapshot; capture?: CaptureIdentity; }
-export interface CaptureRun extends RunSummary { version: 1 | 2; generation: string; contentVersion?: number; boundary?: 'user' | 'uncertain'; finalReply?: { hash: string; timestamp: number }; changes: Record<string, CapturedChange>; replies: { hash: string; timestamp: number }[]; bindings: Record<string, string>; }
+export interface CaptureRun extends RunSummary { version: 1 | 2; generation: string; contentVersion?: number; boundary?: 'user' | 'uncertain'; finalReply?: { hash: string; timestamp: number }; changes: Record<string, CapturedChange>; replies: { hash: string; timestamp: number }[]; bindings: Record<string, string>; cardPreview?: { key: string; summary: TurnSummary } }
 export interface LineAnchor { path: string; fingerprint: string; scope: Scope; root: string; side: 'old' | 'new'; line: number; text: string; excerpt: string; runId?: string; }
 export interface ReviewComment { id: string; sessionId?: string; anchor: LineAnchor; body: string; createdAt: number; updatedAt: number; stale?: boolean; }
 export interface Bootstrap { repositories: RepositoryInfo[]; runs: RunSummary[]; locale: string; base: 'light' | 'dark'; settings: { layout: 'unified' | 'split'; wordWrap: boolean; nativePreflight?: boolean }; }

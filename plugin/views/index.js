@@ -1083,7 +1083,7 @@ var require_react_development = __commonJS({
           }
           return dispatcher.useContext(Context);
         }
-        function useState3(initialState) {
+        function useState4(initialState) {
           var dispatcher = resolveDispatcher();
           return dispatcher.useState(initialState);
         }
@@ -1091,11 +1091,11 @@ var require_react_development = __commonJS({
           var dispatcher = resolveDispatcher();
           return dispatcher.useReducer(reducer, initialArg, init);
         }
-        function useRef2(initialValue) {
+        function useRef4(initialValue) {
           var dispatcher = resolveDispatcher();
           return dispatcher.useRef(initialValue);
         }
-        function useEffect3(create, deps) {
+        function useEffect4(create, deps) {
           var dispatcher = resolveDispatcher();
           return dispatcher.useEffect(create, deps);
         }
@@ -1107,7 +1107,7 @@ var require_react_development = __commonJS({
           var dispatcher = resolveDispatcher();
           return dispatcher.useLayoutEffect(create, deps);
         }
-        function useCallback2(callback, deps) {
+        function useCallback3(callback, deps) {
           var dispatcher = resolveDispatcher();
           return dispatcher.useCallback(callback, deps);
         }
@@ -1874,19 +1874,19 @@ var require_react_development = __commonJS({
         exports.memo = memo;
         exports.startTransition = startTransition;
         exports.unstable_act = act;
-        exports.useCallback = useCallback2;
+        exports.useCallback = useCallback3;
         exports.useContext = useContext;
         exports.useDebugValue = useDebugValue;
         exports.useDeferredValue = useDeferredValue;
-        exports.useEffect = useEffect3;
+        exports.useEffect = useEffect4;
         exports.useId = useId;
         exports.useImperativeHandle = useImperativeHandle;
         exports.useInsertionEffect = useInsertionEffect;
         exports.useLayoutEffect = useLayoutEffect;
         exports.useMemo = useMemo4;
         exports.useReducer = useReducer;
-        exports.useRef = useRef2;
-        exports.useState = useState3;
+        exports.useRef = useRef4;
+        exports.useState = useState4;
         exports.useSyncExternalStore = useSyncExternalStore;
         exports.useTransition = useTransition;
         exports.version = ReactVersion;
@@ -2433,7 +2433,7 @@ var require_react_dom_development = __commonJS({
         var HostPortal = 4;
         var HostComponent = 5;
         var HostText = 6;
-        var Fragment2 = 7;
+        var Fragment3 = 7;
         var Mode = 8;
         var ContextConsumer = 9;
         var ContextProvider = 10;
@@ -3590,7 +3590,7 @@ var require_react_dom_development = __commonJS({
               return "DehydratedFragment";
             case ForwardRef:
               return getWrappedName$1(type, type.render, "ForwardRef");
-            case Fragment2:
+            case Fragment3:
               return "Fragment";
             case HostComponent:
               return type;
@@ -12019,7 +12019,7 @@ var require_react_dom_development = __commonJS({
             }
           }
           function updateFragment2(returnFiber, current2, fragment, lanes, key) {
-            if (current2 === null || current2.tag !== Fragment2) {
+            if (current2 === null || current2.tag !== Fragment3) {
               var created = createFiberFromFragment(fragment, returnFiber.mode, lanes, key);
               created.return = returnFiber;
               return created;
@@ -12422,7 +12422,7 @@ var require_react_dom_development = __commonJS({
               if (child.key === key) {
                 var elementType = element2.type;
                 if (elementType === REACT_FRAGMENT_TYPE) {
-                  if (child.tag === Fragment2) {
+                  if (child.tag === Fragment3) {
                     deleteRemainingChildren(returnFiber, child.sibling);
                     var existing = useFiber(child, element2.props.children);
                     existing.return = returnFiber;
@@ -17898,7 +17898,7 @@ var require_react_dom_development = __commonJS({
               var _resolvedProps2 = workInProgress2.elementType === type ? _unresolvedProps2 : resolveDefaultProps(type, _unresolvedProps2);
               return updateForwardRef(current2, workInProgress2, type, _resolvedProps2, renderLanes2);
             }
-            case Fragment2:
+            case Fragment3:
               return updateFragment(current2, workInProgress2, renderLanes2);
             case Mode:
               return updateMode(current2, workInProgress2, renderLanes2);
@@ -18170,7 +18170,7 @@ var require_react_dom_development = __commonJS({
             case SimpleMemoComponent:
             case FunctionComponent:
             case ForwardRef:
-            case Fragment2:
+            case Fragment3:
             case Mode:
             case Profiler:
             case ContextConsumer:
@@ -22431,7 +22431,7 @@ var require_react_dom_development = __commonJS({
           return fiber;
         }
         function createFiberFromFragment(elements, mode, lanes, key) {
-          var fiber = createFiber(Fragment2, elements, key, mode);
+          var fiber = createFiber(Fragment3, elements, key, mode);
           fiber.lanes = lanes;
           return fiber;
         }
@@ -26001,11 +26001,11 @@ var require_react_jsx_runtime_development = __commonJS({
             return jsxWithValidation(type, props, key, false);
           }
         }
-        var jsx4 = jsxWithValidationDynamic;
-        var jsxs3 = jsxWithValidationStatic;
+        var jsx5 = jsxWithValidationDynamic;
+        var jsxs4 = jsxWithValidationStatic;
         exports.Fragment = REACT_FRAGMENT_TYPE;
-        exports.jsx = jsx4;
-        exports.jsxs = jsxs3;
+        exports.jsx = jsx5;
+        exports.jsxs = jsxs4;
       })();
     }
   }
@@ -26024,11 +26024,11 @@ var require_jsx_runtime = __commonJS({
 });
 
 // src/view/index.tsx
-var import_react3 = __toESM(require_react(), 1);
+var import_react4 = __toESM(require_react(), 1);
 var import_client = __toESM(require_client(), 1);
 
 // src/view/ReviewApp.tsx
-var import_react2 = __toESM(require_react(), 1);
+var import_react3 = __toESM(require_react(), 1);
 
 // src/view/DiffRows.tsx
 var import_react = __toESM(require_react(), 1);
@@ -30508,15 +30508,14 @@ function Code({ text, path, changes = [] }) {
   }, [text, path, changes]);
   return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { className: "dv-code", children: nodes.length ? nodes : " " });
 }
-function DiffRows({ lines, path, layout, onLine, t, disabled }) {
+function DiffRows({ lines, path, layout, t }) {
   const pairs = (0, import_react.useMemo)(() => alignLines(lines), [lines]);
-  const button = (line, side) => {
-    const number = side === "old" ? line?.oldLine : line?.newLine;
-    return number == null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dv-number" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "dv-number", disabled, "aria-label": `${t.addComment}: ${t[side]} ${number}`, onClick: () => onLine(line, side), children: number });
+  const number = (line, side) => {
+    const value = side === "old" ? line?.oldLine : line?.newLine;
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dv-number", "data-side": side, "aria-label": value == null ? void 0 : `${t[side]} ${value}`, children: value });
   };
   const cell = (line, side, changes2) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: `dv-side dv-${line?.kind ?? "blank"}`, children: [
-    button(line, side),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dv-sign", "aria-hidden": "true", children: line?.kind === "add" ? "+" : line?.kind === "del" ? "\u2212" : " " }),
+    number(line, side),
     line ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Code, { text: line.text, path, changes: changes2 }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dv-code" })
   ] });
   if (layout === "split") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dv-rows dv-split", role: "group", "aria-label": `${t.old} / ${t.new}`, style: { "--dv-code-width": `${Math.max(240, ...lines.map((line) => [...line.text].reduce((width, char) => width + (char === "	" ? 4 : char.charCodeAt(0) > 255 ? 2 : 1), 0) * 8 + 72))}px` }, children: [
@@ -30535,11 +30534,19 @@ function DiffRows({ lines, path, layout, onLine, t, disabled }) {
     if (pair.right) changes.set(pair.right, pair.newRanges ?? []);
   }
   return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dv-rows dv-unified", children: lines.map((line, index) => line.kind === "notice" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dv-notice-line", children: line.text }, index) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: `dv-row dv-${line.kind}`, children: [
-    button(line, "old"),
-    button(line, "new"),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dv-sign", "aria-hidden": "true", children: line.kind === "add" ? "+" : line.kind === "del" ? "\u2212" : " " }),
+    number(line, line.kind === "del" ? "old" : "new"),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Code, { text: line.text, path, changes: changes.get(line) })
   ] }, index)) });
+}
+
+// src/view/FilePath.tsx
+var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
+function FilePath({ path }) {
+  const split = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1;
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dv-path-directory", children: path.slice(0, split) }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dv-path-basename", children: path.slice(split) })
+  ] });
 }
 
 // src/view/i18n.ts
@@ -30786,7 +30793,7 @@ function kindLabel(kind, locale) {
 // src/view/transport.ts
 var realm = globalThis;
 var queue = realm.__piDiffQueue ??= { tail: Promise.resolve(), last: 0 };
-var background = /* @__PURE__ */ new Set(["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "selectTurn"]);
+var background = /* @__PURE__ */ new Set(["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "selectTurn", "card", "replyCards"]);
 function boundedTransport(invoke) {
   const wire = (method, args) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
@@ -30838,82 +30845,171 @@ function ensureBounded(transport) {
   return result;
 }
 
+// src/view/useDiffDetail.ts
+var import_react2 = __toESM(require_react(), 1);
+function appendDiffPage(previous, page) {
+  if (page.file.id !== previous.file.id || page.file.fingerprint !== previous.file.fingerprint || page.offset !== previous.nextOffset || page.totalRows !== previous.totalRows) throw new Error("\u5DEE\u5F02\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0 / Diff changed; refresh the review");
+  const hunks = previous.hunks.map((hunk) => ({ ...hunk, lines: [...hunk.lines] }));
+  for (const hunk of page.hunks) {
+    const last = hunks.at(-1);
+    if (last?.id === hunk.id) last.lines.push(...hunk.lines);
+    else hunks.push({ ...hunk, lines: [...hunk.lines] });
+  }
+  return { ...page, offset: 0, hunks };
+}
+function useDiffDetail(transport, reviewId, fileId, context, reload) {
+  const [state, setState] = (0, import_react2.useState)({ detail: null, loading: false, loadingMore: false, error: "" });
+  const key = `${reviewId}|${fileId}|${context}|${reload}`;
+  const liveKey = (0, import_react2.useRef)(key);
+  liveKey.current = key;
+  const renderedKey = (0, import_react2.useRef)(key);
+  const loadRef = (0, import_react2.useRef)(null);
+  (0, import_react2.useEffect)(() => {
+    let active = true, pending = false, detail = null;
+    setState({ detail: null, loading: Boolean(reviewId && fileId), loadingMore: false, error: "" });
+    renderedKey.current = key;
+    const load = async () => {
+      if (!active || liveKey.current !== key || pending || !reviewId || !fileId || detail && detail.nextOffset == null) return;
+      pending = true;
+      const offset = detail?.nextOffset ?? 0;
+      setState({ detail, loading: !detail, loadingMore: Boolean(detail), error: "" });
+      try {
+        const page = await transport.invoke("file", { reviewId, fileId, offset, limit: 80, context });
+        if (!active || liveKey.current !== key) return;
+        if (page.file.id !== fileId || page.offset !== offset || page.nextOffset != null && page.nextOffset <= offset) throw new Error("\u65E0\u6548\u7684\u5DEE\u5F02\u5206\u9875 / Invalid diff page");
+        detail = detail ? appendDiffPage(detail, page) : page;
+        setState({ detail, loading: false, loadingMore: false, error: "" });
+      } catch (error) {
+        if (active && liveKey.current === key) setState({ detail, loading: false, loadingMore: false, error: error instanceof Error ? error.message : String(error) });
+      } finally {
+        pending = false;
+      }
+    };
+    loadRef.current = load;
+    void load();
+    return () => {
+      active = false;
+      loadRef.current = null;
+    };
+  }, [transport, key]);
+  const loadMore = (0, import_react2.useCallback)(() => {
+    void loadRef.current?.();
+  }, []);
+  return { ...renderedKey.current === key ? state : { detail: null, loading: Boolean(reviewId && fileId), loadingMore: false, error: "" }, loadMore };
+}
+
 // src/view/ReviewApp.tsx
-var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime3 = __toESM(require_jsx_runtime(), 1);
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 function Modal({ title, children, onClose, busy }) {
-  const ref = (0, import_react2.useRef)(null);
-  (0, import_react2.useEffect)(() => {
+  const ref = (0, import_react3.useRef)(null);
+  (0, import_react3.useEffect)(() => {
     ref.current?.showModal();
     return () => ref.current?.close();
   }, []);
-  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dialog", { className: "dv-dialog", ref, "aria-label": title, onCancel: (event) => {
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("dialog", { className: "dv-dialog", ref, "aria-label": title, onCancel: (event) => {
     event.preventDefault();
     if (!busy) onClose();
   }, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { children: title }),
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h2", { children: title }),
     children
   ] });
 }
-function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onClose, locale: hostLocale, base: hostBase }) {
-  const transport = (0, import_react2.useMemo)(() => ensureBounded(source), [source]);
-  const [boot, setBoot] = (0, import_react2.useState)(null);
-  const [bootError, setBootError] = (0, import_react2.useState)("");
-  const [bootTick, setBootTick] = (0, import_react2.useState)(0);
-  const [locale, setLocale] = (0, import_react2.useState)(hostLocale ?? "zh-CN");
-  const [base, setBase] = (0, import_react2.useState)(hostBase ?? "light");
+function ReviewApp({ transport: source, initialRequest = {}, initialFileId, navigationKey, onClose, locale: hostLocale, base: hostBase }) {
+  const transport = (0, import_react3.useMemo)(() => ensureBounded(source), [source]);
+  const [boot, setBoot] = (0, import_react3.useState)(null);
+  const [bootError, setBootError] = (0, import_react3.useState)("");
+  const [bootTick, setBootTick] = (0, import_react3.useState)(0);
+  const [locale, setLocale] = (0, import_react3.useState)(hostLocale ?? "zh-CN");
+  const [base, setBase] = (0, import_react3.useState)(hostBase ?? "light");
   const t = messages(locale);
-  const [layout, setLayout] = (0, import_react2.useState)("unified");
-  const [wrap, setWrap] = (0, import_react2.useState)(true);
-  const [request, setRequest] = (0, import_react2.useState)({ scope: initialRequest.scope ?? (initialRequest.sessionId ? "lastTurn" : "unstaged"), ...initialRequest });
-  const [refDraft, setRefDraft] = (0, import_react2.useState)(initialRequest.ref ?? "");
-  const [review, setReview] = (0, import_react2.useState)(null);
-  const [reviewError, setReviewError] = (0, import_react2.useState)("");
-  const [loadingReview, setLoadingReview] = (0, import_react2.useState)(false);
-  const [refreshTick, setRefreshTick] = (0, import_react2.useState)(0);
-  const [selected, setSelected] = (0, import_react2.useState)("");
-  const [query, setQuery] = (0, import_react2.useState)("");
-  const [context, setContext] = (0, import_react2.useState)(3);
-  const [offset, setOffset] = (0, import_react2.useState)(0);
-  const [pageStack, setPageStack] = (0, import_react2.useState)([]);
-  const [detail, setDetail] = (0, import_react2.useState)(null);
-  const [detailError, setDetailError] = (0, import_react2.useState)("");
-  const [loadingDetail, setLoadingDetail] = (0, import_react2.useState)(false);
-  const [detailTick, setDetailTick] = (0, import_react2.useState)(0);
-  const [collapsed, setCollapsed] = (0, import_react2.useState)(/* @__PURE__ */ new Set());
-  const [comments, setComments] = (0, import_react2.useState)([]);
-  const [commentsError, setCommentsError] = (0, import_react2.useState)("");
-  const [loadingComments, setLoadingComments] = (0, import_react2.useState)(false);
-  const [commentsTick, setCommentsTick] = (0, import_react2.useState)(0);
-  const [feedback, setFeedback] = (0, import_react2.useState)("");
-  const [feedbackError, setFeedbackError] = (0, import_react2.useState)("");
-  const [feedbackLoading, setFeedbackLoading] = (0, import_react2.useState)(false);
-  const [confirmation, setConfirmation] = (0, import_react2.useState)(null);
-  const [editor, setEditor] = (0, import_react2.useState)(null);
-  const [busy, setBusy] = (0, import_react2.useState)(false);
-  const [error, setError] = (0, import_react2.useState)("");
-  const [status, setStatus] = (0, import_react2.useState)("");
-  const [batchResults, setBatchResults] = (0, import_react2.useState)([]);
-  const live = (0, import_react2.useRef)(true);
+  const [layout, setLayout] = (0, import_react3.useState)("unified");
+  const [wrap, setWrap] = (0, import_react3.useState)(true);
+  const [searchOpen, setSearchOpen] = (0, import_react3.useState)(false);
+  const [fileCollapsed, setFileCollapsed] = (0, import_react3.useState)(false);
+  const appRef = (0, import_react3.useRef)(null);
+  (0, import_react3.useEffect)(() => {
+    const closeMenus = (event) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      appRef.current?.querySelectorAll(".dv-menu[open]").forEach((menu) => {
+        if (event instanceof KeyboardEvent || !menu.contains(event.target)) menu.open = false;
+      });
+    };
+    document.addEventListener("pointerdown", closeMenus);
+    document.addEventListener("keydown", closeMenus);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenus);
+      document.removeEventListener("keydown", closeMenus);
+    };
+  }, []);
+  const [request, setRequest] = (0, import_react3.useState)({ scope: initialRequest.scope ?? (initialRequest.sessionId ? "lastTurn" : "unstaged"), ...initialRequest });
+  const [refDraft, setRefDraft] = (0, import_react3.useState)(initialRequest.ref ?? "");
+  const [review, setReview] = (0, import_react3.useState)(null);
+  const [reviewError, setReviewError] = (0, import_react3.useState)("");
+  const [loadingReview, setLoadingReview] = (0, import_react3.useState)(false);
+  const [refreshTick, setRefreshTick] = (0, import_react3.useState)(0);
+  const [selected, setSelected] = (0, import_react3.useState)("");
+  const [query, setQuery] = (0, import_react3.useState)("");
+  const [context, setContext] = (0, import_react3.useState)(3);
+  const [detailTick, setDetailTick] = (0, import_react3.useState)(0);
+  const [collapsed, setCollapsed] = (0, import_react3.useState)(/* @__PURE__ */ new Set());
+  const [confirmation, setConfirmation] = (0, import_react3.useState)(null);
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [error, setError] = (0, import_react3.useState)("");
+  const [status, setStatus] = (0, import_react3.useState)("");
+  const [batchResults, setBatchResults] = (0, import_react3.useState)([]);
+  const live = (0, import_react3.useRef)(true);
   const scopeKey = `${request.scope}|${request.root}|${request.ref}|${request.sessionId}|${request.runId}`;
-  const scopeRef = (0, import_react2.useRef)(scopeKey);
+  const scopeRef = (0, import_react3.useRef)(scopeKey);
   scopeRef.current = scopeKey;
-  const diffPane = (0, import_react2.useRef)(null);
-  const sessionId = review?.sessionId ?? request.sessionId;
-  const canInsert = Boolean(transport.insertText && sessionId && sessionId === initialRequest.sessionId);
-  (0, import_react2.useEffect)(() => {
+  const diffPane = (0, import_react3.useRef)(null);
+  const workspaceRef = (0, import_react3.useRef)(null), continuationRef = (0, import_react3.useRef)(null);
+  const validReview = review && review.scope === request.scope && review.root === request.root && (request.scope !== "turn" || review.runId === request.runId) && review.files.some((file) => file.id === selected) ? review : null;
+  const { detail, loading: loadingDetail, loadingMore, error: detailError, loadMore } = useDiffDetail(transport, validReview?.id, selected, context, detailTick);
+  (0, import_react3.useEffect)(() => {
+    const target = continuationRef.current;
+    if (!target || !detail || detail.nextOffset == null || loadingDetail || loadingMore || detailError || fileCollapsed || detail.hunks.every((hunk) => collapsed.has(hunk.id))) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMore();
+    }, { root: workspaceRef.current, rootMargin: "120px 0px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [detail, loadingDetail, loadingMore, detailError, fileCollapsed, collapsed, loadMore]);
+  (0, import_react3.useEffect)(() => {
+    if (detail && initialRequest.runId && (!initialFileId || selected === initialFileId)) void transport.invoke("rendererReport", { stage: "view-targeted" }).catch(() => {
+    });
+  }, [transport, detail?.file.id, initialRequest.runId]);
+  (0, import_react3.useEffect)(() => {
     live.current = true;
     return () => {
       live.current = false;
     };
   }, []);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     if (hostLocale) setLocale(hostLocale);
   }, [hostLocale]);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     if (hostBase) setBase(hostBase);
   }, [hostBase]);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
+    if (!navigationKey) return;
+    const next = { ...initialRequest, scope: initialRequest.scope ?? "turn" };
+    const sameReview = review?.scope === next.scope && review?.root === next.root && review?.runId === next.runId && review?.sessionId === next.sessionId;
+    const target = initialFileId ?? (sameReview ? review?.files[0]?.id : void 0) ?? "";
+    setRequest(next);
+    setSelected(target);
+    setFileCollapsed(false);
+    setQuery("");
+    setCollapsed(/* @__PURE__ */ new Set());
+    setConfirmation(null);
+    setError("");
+    if (sameReview && target && !review?.files.some((file) => file.id === target) || !review && boot) setRefreshTick((value) => value + 1);
+  }, [navigationKey]);
+  (0, import_react3.useEffect)(() => {
+    if (!navigationKey || !selected) return;
+    appRef.current?.querySelector('.dv-file[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [navigationKey, selected, review]);
+  (0, import_react3.useEffect)(() => {
     let active = true;
     setBootError("");
     transport.invoke("bootstrap", { sessionId: initialRequest.sessionId }).then((data) => {
@@ -30936,19 +31032,13 @@ function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onCl
       active = false;
     };
   }, [transport, bootTick]);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     if (!boot) return;
     let active = true;
     setLoadingReview(false);
     setReview(null);
-    setDetail(null);
     setReviewError("");
-    setComments([]);
-    setFeedback("");
-    setEditor(null);
     setConfirmation(null);
-    setOffset(0);
-    setPageStack([]);
     setCollapsed(/* @__PURE__ */ new Set());
     if (!request.root && !request.sessionId && !request.runId) return;
     if ((request.scope === "commit" || request.scope === "branch") && !request.ref?.trim()) {
@@ -30969,62 +31059,10 @@ function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onCl
       active = false;
     };
   }, [transport, boot, scopeKey, refreshTick]);
-  (0, import_react2.useEffect)(() => {
-    setLoadingDetail(false);
-    setDetail(null);
-    setDetailError("");
-    if (!review || !selected) return;
-    let active = true;
-    setLoadingDetail(true);
-    transport.invoke("file", { reviewId: review.id, fileId: selected, offset, limit: 80, context }).then((data) => {
-      if (active) {
-        setDetail(data);
-        if (initialRequest.runId && (!initialFileId || selected === initialFileId)) void transport.invoke("rendererReport", { stage: "view-targeted" }).catch(() => {
-        });
-      }
-    }).catch((err) => {
-      if (active) setDetailError(errorText(err));
-    }).finally(() => {
-      if (active) setLoadingDetail(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, [transport, review, selected, offset, context, detailTick]);
-  (0, import_react2.useEffect)(() => {
-    setLoadingComments(false);
-    setFeedbackLoading(false);
-    setCommentsError("");
-    setFeedback("");
-    setFeedbackError("");
-    if (!review) return;
-    let active = true;
-    setLoadingComments(true);
-    transport.invoke("comments", { reviewId: review.id, sessionId }).then((data) => {
-      if (active) setComments(data);
-    }).catch((err) => {
-      if (active) setCommentsError(errorText(err));
-    }).finally(() => {
-      if (active) setLoadingComments(false);
-    });
-    setFeedbackLoading(true);
-    transport.invoke("feedback", { reviewId: review.id, sessionId }).then((data) => {
-      if (active) setFeedback(data.text);
-    }).catch((err) => {
-      if (active) setFeedbackError(errorText(err));
-    }).finally(() => {
-      if (active) setFeedbackLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, [transport, review, sessionId, commentsTick]);
   const resetPage = () => {
-    setOffset(0);
-    setPageStack([]);
     setCollapsed(/* @__PURE__ */ new Set());
   };
-  const currentFile = detail?.file ?? review?.files.find((file) => file.id === selected);
+  const currentFile = detail?.file.id === selected ? detail.file : review?.files.find((file) => file.id === selected);
   const visibleFiles = review?.files.filter((file) => `${file.path} ${file.oldPath ?? ""}`.toLowerCase().includes(query.toLowerCase())) ?? [];
   const sessionRuns = boot?.runs.filter((run) => !initialRequest.sessionId || run.sessionId === initialRequest.sessionId) ?? [];
   const roots = [.../* @__PURE__ */ new Set([...boot?.repositories.map((repo) => repo.root) ?? [], ...boot?.runs.map((run) => run.root) ?? [], ...request.root ? [request.root] : []])];
@@ -31048,16 +31086,7 @@ function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onCl
       if (live.current) setError(errorText(err));
     });
   };
-  const openComment = (line, side, hunk) => {
-    if (!currentFile || !review) return;
-    const lineNumber = side === "old" ? line.oldLine : line.newLine;
-    if (lineNumber == null) return;
-    const sideLines = hunk.lines.filter((item) => side === "old" ? item.oldLine != null : item.newLine != null);
-    const index = sideLines.indexOf(line);
-    setError("");
-    setEditor({ body: "", anchor: { path: currentFile.path, fingerprint: currentFile.fingerprint, scope: review.scope, root: review.root, side, line: lineNumber, text: line.text, excerpt: sideLines.slice(Math.max(0, index - 2), index + 3).map((item) => item.text).join("\n").slice(0, 3e3), runId: review.runId } });
-  };
-  const navigateHunk = (0, import_react2.useCallback)((direction) => {
+  const navigateHunk = (0, import_react3.useCallback)((direction) => {
     const buttons = Array.from(diffPane.current?.querySelectorAll("[data-hunk-nav]") ?? []);
     if (!buttons.length) return;
     const focused = buttons.findIndex((button) => button === document.activeElement || button.closest(".dv-hunk")?.contains(document.activeElement));
@@ -31092,13 +31121,6 @@ function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onCl
       setConfirmation(null);
       setStatus(t.cleared);
       setBootTick((value) => value + 1);
-      setComments([]);
-    } else {
-      await transport.invoke("deleteComment", { id: target.comment.id });
-      if (!live.current) return;
-      setConfirmation(null);
-      setStatus(t.commentDeleted);
-      setCommentsTick((value) => value + 1);
     }
   });
   const copyPatch = () => perform(async () => {
@@ -31106,410 +31128,263 @@ function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onCl
     await transport.invoke("copyPatch", { reviewId: review.id, fileId: currentFile?.id });
     if (live.current) setStatus(t.copied);
   });
-  const actionButtons = (file, hunk) => file.actions.map((action) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy || loadingReview || loadingDetail, onClick: () => {
+  const actionButtons = (file, hunk) => file.actions.map((action) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: busy || loadingReview || loadingDetail, onClick: () => {
     setError("");
     if (review) setConfirmation({ kind: "action", action, file, hunk, review });
   }, children: t[action] }, action));
+  const selectedIndex = visibleFiles.findIndex((file) => file.id === selected);
+  const fileRow = (file) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-file-row", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { className: "dv-file", "aria-current": file.id === selected ? "true" : void 0, "aria-expanded": file.id === selected && !fileCollapsed, disabled: busy, onClick: () => {
+      if (file.id === selected) setFileCollapsed((value) => !value);
+      else {
+        resetPage();
+        setSelected(file.id);
+        setFileCollapsed(false);
+      }
+    }, title: `${file.oldPath ? `${file.oldPath} \u2192 ` : ""}${file.path} \xB7 ${t[file.status]}`, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dv-file-type", "aria-hidden": "true", children: file.path.split(".").pop()?.slice(0, 3).toUpperCase() || "\u25C7" }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dv-file-name", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(FilePath, { path: file.path }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-counts", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-added", children: [
+          "+",
+          file.additions
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-deleted", children: [
+          "\u2212",
+          file.deletions
+        ] })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dv-file-chevron", "aria-hidden": "true", children: file.id === selected && !fileCollapsed ? "\u2303" : "\u2304" })
+    ] }),
+    file.id === selected && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { className: "dv-menu dv-file-menu", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { "aria-label": t.action, title: t.action, children: "\xB7\xB7\xB7" }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-menu-body", children: [
+        actionButtons(file),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: busy, onClick: copyPatch, children: t.copy }),
+        file.oldPath && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
+          "\u2190 ",
+          file.oldPath
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { className: "dv-muted", children: [
+          t[file.status],
+          " \xB7 ",
+          kindLabel(file.kind, locale)
+        ] }),
+        file.note && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "dv-muted", children: file.note })
+      ] })
+    ] })
+  ] }, file.id);
   const runLabel = (id) => {
     const run = boot?.runs.find((item) => item.id === id);
     return run ? `${new Date(run.startedAt).toLocaleString(locale)} \xB7 ${run.prompt?.slice(0, 60) ?? run.id} \xB7 ${t[run.state]}${run.incomplete ? ` \xB7 ${t.incomplete}` : ""}` : id;
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dv-app", "data-base": base, lang: locale, "aria-label": t.title, onKeyDown: (event) => {
-    if (event.altKey && (event.key === "ArrowDown" || event.key === "ArrowUp") && !editor && !confirmation) {
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { ref: appRef, className: "dv-app", "data-base": base, lang: locale, "aria-label": t.title, onKeyDown: (event) => {
+    if (event.altKey && (event.key === "ArrowDown" || event.key === "ArrowUp") && !confirmation) {
       event.preventDefault();
       navigateHunk(event.key === "ArrowDown" ? 1 : -1);
     }
   }, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("header", { className: "dv-top", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-heading", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h1", { children: t.title }),
-        review && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-counts", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-added", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("header", { className: "dv-top", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-heading", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("select", { className: "dv-scope", "aria-label": t.scope, value: request.scope, disabled: !boot || busy, onChange: (event) => {
+          const scope = event.target.value;
+          const run = sessionRuns.find((item) => item.root === request.root) ?? sessionRuns[0];
+          setFileCollapsed(false);
+          setRequest((value) => ({ root: value.root, scope, sessionId: initialRequest.sessionId, ...scope === "turn" || scope === "lastTurn" ? { root: run?.root ?? value.root, sessionId: initialRequest.sessionId ?? run?.sessionId, runId: scope === "turn" ? run?.id : void 0 } : {}, ref: scope === "commit" || scope === "branch" ? refDraft : void 0 }));
+        }, children: ["lastTurn", "turn", "unstaged", "staged", "commit", "branch"].map((scope) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: scope, children: t[scope] }, scope)) }),
+        review && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-counts", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-added", children: [
             "+",
             review.files.reduce((sum, file) => sum + file.additions, 0)
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-deleted", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-deleted", children: [
             "\u2212",
             review.files.reduce((sum, file) => sum + file.deletions, 0)
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-toolbar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [
-            t.language,
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": t.language, value: locale.startsWith("zh") ? "zh-CN" : "en", onChange: (event) => setLocale(event.target.value), children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "zh-CN", children: "\u4E2D\u6587" }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "en", children: "English" })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-top-actions", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { className: "dv-icon-button", "aria-label": t.search, title: t.search, "aria-pressed": searchOpen, onClick: () => setSearchOpen((value) => !value), children: "\u2315" }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { className: "dv-menu", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { "aria-label": t.settings, title: t.settings, children: "\xB7\xB7\xB7" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-menu-body", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: busy || loadingReview, onClick: () => setBootTick((value) => value + 1), children: t.refresh }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { className: "dv-check", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("input", { type: "checkbox", checked: wrap, onChange: (event) => saveSettings({ wordWrap: event.target.checked }) }),
+                t.wrap
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-segment", role: "group", "aria-label": t.settings, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-pressed": layout === "unified", onClick: () => saveSettings({ layout: "unified" }), children: t.unified }),
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-pressed": layout === "split", onClick: () => saveSettings({ layout: "split" }), children: t.split })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+                t.context,
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("select", { "aria-label": t.context, value: context, disabled: busy, onChange: (event) => {
+                  resetPage();
+                  setContext(Number(event.target.value));
+                }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: 3, children: "3" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: 20, children: "20" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: -1, children: t.full })
+                ] })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: !detail?.hunks.length, onClick: () => setCollapsed(new Set(detail?.hunks.map((hunk) => hunk.id))), children: locale.startsWith("zh") ? "\u6298\u53E0\u5168\u90E8\u5DEE\u5F02" : "Collapse all hunks" }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: !detail?.hunks.length, onClick: () => setCollapsed(/* @__PURE__ */ new Set()), children: locale.startsWith("zh") ? "\u5C55\u5F00\u5168\u90E8\u5DEE\u5F02" : "Expand all hunks" }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("hr", {}),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { className: "dv-repository", children: [
+                t.repository,
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("select", { "aria-label": t.repository, value: request.root ?? "", disabled: !boot || busy, onChange: (event) => {
+                  setFileCollapsed(false);
+                  setRequest((value) => ({ ...value, root: event.target.value, runId: void 0, sessionId: initialRequest.sessionId }));
+                  setQuery("");
+                }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", disabled: true, children: "\u2014" }),
+                  roots.map((root) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: root, children: boot?.repositories.find((repo) => repo.root === root)?.name ?? root }, root))
+                ] })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+                t.language,
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("select", { "aria-label": t.language, value: locale.startsWith("zh") ? "zh-CN" : "en", onChange: (event) => setLocale(event.target.value), children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "zh-CN", children: "\u4E2D\u6587" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "en", children: "English" })
+                ] })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-toolbar", "aria-label": t.batch, children: ["stage", "unstage", "revert", "reapply"].map((action) => {
+                const files = visibleFiles.filter((file) => file.actions.includes(action)).slice(0, 20);
+                return files.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { disabled: busy || loadingReview, onClick: () => {
+                  if (review) {
+                    setError("");
+                    setBatchResults([]);
+                    setConfirmation({ kind: "batch", action, files, review });
+                  }
+                }, children: [
+                  t[action],
+                  " \xB7 ",
+                  files.length
+                ] }, action);
+              }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: !boot?.runs.length || busy, onClick: () => {
+                setError("");
+                setConfirmation({ kind: "history" });
+              }, children: t.clearHistory }),
+              review?.notice && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "dv-muted", children: review.notice }),
+              context !== 3 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "dv-muted", children: t.expandedHint }),
+              request.scope === "turn" && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { className: "dv-run", children: [
+                t.run,
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("select", { "aria-label": t.run, disabled: busy, value: request.runId ?? "", onChange: (event) => {
+                  const run = boot?.runs.find((item) => item.id === event.target.value);
+                  if (run) {
+                    setFileCollapsed(false);
+                    setRequest((value) => ({ ...value, root: run.root, runId: run.id, sessionId: run.sessionId }));
+                  }
+                }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", disabled: true, children: "\u2014" }),
+                  sessionRuns.map((run) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: run.id, children: runLabel(run.id) }, run.id))
+                ] })
+              ] })
             ] })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [
-            t.theme,
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": t.theme, value: base, onChange: (event) => setBase(event.target.value), children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "light", children: t.light }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "dark", children: t.dark })
-            ] })
-          ] }),
-          onClose && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: onClose, disabled: busy, children: t.close })
+          onClose && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { className: "dv-icon-button", "aria-label": t.close, onClick: onClose, disabled: busy, children: "\xD7" })
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-toolbar dv-repo-toolbar", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dv-repository", children: [
-          t.repository,
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": t.repository, value: request.root ?? "", disabled: !boot || busy, onChange: (event) => {
-            setRequest((value) => ({ ...value, root: event.target.value, runId: void 0, sessionId: initialRequest.sessionId }));
-            setQuery("");
-          }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "", disabled: true, children: "\u2014" }),
-            roots.map((root) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("option", { value: root, children: [
-              boot?.repositories.find((repo) => repo.root === root)?.name ?? root,
-              " \u2014 ",
-              root
-            ] }, root))
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [
-          t.scope,
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("select", { "aria-label": t.scope, value: request.scope, disabled: !boot || busy, onChange: (event) => {
-            const scope = event.target.value;
-            const run = sessionRuns.find((item) => item.root === request.root) ?? sessionRuns[0];
-            setRequest((value) => ({ root: value.root, scope, sessionId: initialRequest.sessionId, ...scope === "turn" || scope === "lastTurn" ? { root: run?.root ?? value.root, sessionId: initialRequest.sessionId ?? run?.sessionId, runId: scope === "turn" ? run?.id : void 0 } : {}, ref: scope === "commit" || scope === "branch" ? refDraft : void 0 }));
-          }, children: ["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].map((scope) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: scope, children: t[scope] }, scope)) })
-        ] }),
-        request.scope === "turn" && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dv-run", children: [
-          t.run,
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": t.run, disabled: busy, value: request.runId ?? "", onChange: (event) => {
-            const run = boot?.runs.find((item) => item.id === event.target.value);
-            if (run) setRequest((value) => ({ ...value, root: run.root, runId: run.id, sessionId: run.sessionId }));
-          }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "", disabled: true, children: "\u2014" }),
-            sessionRuns.map((run) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: run.id, children: runLabel(run.id) }, run.id))
-          ] })
-        ] }),
-        (request.scope === "commit" || request.scope === "branch") && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("form", { className: "dv-toolbar", onSubmit: (event) => {
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-toolbar dv-repo-toolbar", children: [
+        (request.scope === "commit" || request.scope === "branch") && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("form", { className: "dv-toolbar", onSubmit: (event) => {
           event.preventDefault();
           setRequest((value) => ({ ...value, ref: refDraft.trim() }));
         }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
             t.ref,
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { "aria-label": t.ref, value: refDraft, onChange: (event) => setRefDraft(event.target.value), maxLength: 250 })
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("input", { "aria-label": t.ref, value: refDraft, onChange: (event) => setRefDraft(event.target.value), maxLength: 250 })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy || !refDraft.trim(), children: t.applyRef })
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: busy || !refDraft.trim(), children: t.applyRef })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy || loadingReview, onClick: () => setBootTick((value) => value + 1), children: t.refresh }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: !boot?.runs.length || busy, onClick: () => {
-          setError("");
-          setConfirmation({ kind: "history" });
-        }, children: t.clearHistory })
-      ] }),
-      review?.notice && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-notice", children: review.notice }),
-      request.runId && boot?.runs.find((run) => run.id === request.runId)?.incomplete && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-notice", children: t.incomplete })
+        searchOpen && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("input", { autoFocus: true, type: "search", "aria-label": t.search, placeholder: t.search, value: query, onChange: (event) => setQuery(event.target.value) })
+      ] })
     ] }),
-    (error || status) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: `dv-message ${error ? "dv-error" : ""}`, role: error ? "alert" : "status", children: error || status }),
-    batchResults.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { className: "dv-message", open: true, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: t.batch }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap" }, children: batchResults.map((result) => `${result.ok ? "\u2713" : "\u2717"} ${result.path}: ${result.message}`).join("\n") })
+    (error || status) && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: `dv-message ${error ? "dv-error" : ""}`, role: error ? "alert" : "status", children: error || status }),
+    batchResults.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { className: "dv-message", open: true, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: t.batch }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("pre", { style: { whiteSpace: "pre-wrap" }, children: batchResults.map((result) => `${result.ok ? "\u2713" : "\u2717"} ${result.path}: ${result.message}`).join("\n") })
     ] }),
-    bootError ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-empty dv-error", role: "alert", children: [
+    bootError ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-empty dv-error", role: "alert", children: [
       bootError,
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => setBootTick((value) => value + 1), children: t.retry })
-    ] }) : !boot ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", role: "status", children: t.loading }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-workspace", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("aside", { className: "dv-files", "aria-label": t.files, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-file-search", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
-            t.files,
-            " ",
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dv-muted", children: review?.files.length ?? 0 })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { type: "search", "aria-label": t.search, placeholder: t.search, value: query, onChange: (event) => setQuery(event.target.value) })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-toolbar", "aria-label": t.batch, children: ["stage", "unstage", "revert", "reapply"].map((action) => {
-          const files = visibleFiles.filter((file) => file.actions.includes(action)).slice(0, 20);
-          return files.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { disabled: busy || loadingReview, onClick: () => {
-            if (review) {
-              setError("");
-              setBatchResults([]);
-              setConfirmation({ kind: "batch", action, files, review });
-            }
-          }, children: [
-            t[action],
-            " \xB7 ",
-            files.length
-          ] }, action);
-        }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("nav", { className: "dv-file-list", "aria-label": t.files, children: visibleFiles.map((file) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { className: "dv-file", "aria-current": file.id === selected ? "true" : void 0, disabled: busy, onClick: () => {
-          resetPage();
-          setSelected(file.id);
-          setEditor(null);
-        }, title: `${file.oldPath ? `${file.oldPath} \u2192 ` : ""}${file.path}`, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dv-file-name", children: file.path.split("/").pop() }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-counts", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-added", children: [
-              "+",
-              file.additions
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-deleted", children: [
-              "\u2212",
-              file.deletions
-            ] })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-file-path", children: [
-            file.path,
-            file.oldPath && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("br", {}),
-              "\u2190 ",
-              file.oldPath
-            ] })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-file-status", children: [
-            t[file.status],
-            file.origin === "external" ? locale.startsWith("zh") ? " \xB7 \u5DE5\u4F5C\u533A\u5916 \xB7 \u53EA\u8BFB" : " \xB7 Outside workspace \xB7 read-only" : "",
-            file.kind !== "text" ? ` \xB7 ${kindLabel(file.kind, locale)}` : "",
-            file.state === "reverted" ? ` \xB7 ${t.reverted}` : ""
-          ] })
-        ] }, file.id)) }),
-        !visibleFiles.length && !loadingReview && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dv-rail-empty", children: [
-          query ? t.noMatches : t.noFiles,
-          query && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => setQuery(""), children: t.clearSearch })
-        ] })
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setBootTick((value) => value + 1), children: t.retry })
+    ] }) : !boot ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", role: "status", children: t.loading }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-workspace", ref: workspaceRef, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("nav", { className: "dv-file-list", "aria-label": t.files, children: (selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex + 1)).map(fileRow) }),
+      !visibleFiles.length && !loadingReview && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { className: "dv-rail-empty", children: [
+        query ? t.noMatches : t.noFiles,
+        query && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setQuery(""), children: t.clearSearch })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("main", { className: "dv-review", "aria-busy": loadingReview || loadingDetail, children: loadingReview ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", role: "status", children: t.loading }) : reviewError ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-empty dv-error", role: "alert", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("main", { className: "dv-review", hidden: fileCollapsed || Boolean(query && selectedIndex < 0), "aria-busy": loadingReview || loadingDetail, children: loadingReview ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", role: "status", children: t.loading }) : reviewError ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-empty dv-error", role: "alert", children: [
         reviewError,
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => setRefreshTick((value) => value + 1), children: t.retry })
-      ] }) : !review ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", children: t.noRoots }) : !currentFile ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", children: review.files.length ? t.chooseFile : t.noFiles }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-file-heading", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { children: currentFile.path }),
-            currentFile.oldPath && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dv-muted", children: [
-              "\u2190 ",
-              currentFile.oldPath
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-added", children: [
-              "+",
-              currentFile.additions
-            ] }),
-            " ",
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dv-deleted", children: [
-              "\u2212",
-              currentFile.deletions
-            ] }),
-            " ",
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dv-muted", children: t[currentFile.status] })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-toolbar", children: [
-            actionButtons(currentFile),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy, onClick: copyPatch, children: t.copy })
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-display-toolbar dv-toolbar", "aria-label": t.settings, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-segment", role: "group", "aria-label": t.settings, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { "aria-pressed": layout === "unified", onClick: () => saveSettings({ layout: "unified" }), children: t.unified }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { "aria-pressed": layout === "split", onClick: () => saveSettings({ layout: "split" }), children: t.split })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dv-check", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { type: "checkbox", checked: wrap, onChange: (event) => saveSettings({ wordWrap: event.target.checked }) }),
-            t.wrap
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [
-            t.context,
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": t.context, value: context, disabled: busy, onChange: (event) => {
-              resetPage();
-              setContext(Number(event.target.value));
-            }, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: 3, children: "3" }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: 20, children: "20" }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: -1, children: t.full })
-            ] })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => navigateHunk(-1), disabled: !detail?.hunks.length, title: t.keyboard, children: t.previousHunk }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => navigateHunk(1), disabled: !detail?.hunks.length, title: t.keyboard, children: t.nextHunk })
-        ] }),
-        context !== 3 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-notice", children: t.expandedHint }),
-        currentFile.note && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-notice", children: currentFile.note }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: `dv-diff-pane ${wrap ? "dv-wrap" : "dv-nowrap"}`, ref: diffPane, tabIndex: 0, "aria-label": `${currentFile.path} ${t.title}`, children: loadingDetail ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", role: "status", children: t.loading }) : detailError ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-empty dv-error", role: "alert", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setRefreshTick((value) => value + 1), children: t.retry })
+      ] }) : !review ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", children: t.noRoots }) : !currentFile ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", children: review.files.length ? t.chooseFile : t.noFiles }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h2", { className: "dv-sr-only", children: currentFile.path }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: `dv-diff-pane ${wrap ? "dv-wrap" : "dv-nowrap"}`, ref: diffPane, tabIndex: 0, "aria-label": `${currentFile.path} ${t.title}`, children: loadingDetail ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", role: "status", children: t.loading }) : detailError && !detail ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-empty dv-error", role: "alert", children: [
           detailError,
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => setDetailTick((value) => value + 1), children: t.retry })
-        ] }) : currentFile.kind !== "text" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", children: t[currentFile.kind] }) : detail && !detail.hunks.length ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-empty", children: currentFile.status === "mode" ? t.mode : t.noHunks }) : detail?.hunks.map((hunk, index) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dv-hunk", style: { "--dv-stagger": `${Math.min(index, 4) * 20}ms` }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-hunk-heading", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { "data-hunk-nav": true, "aria-expanded": !collapsed.has(hunk.id), onClick: () => setCollapsed((value) => {
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setDetailTick((value) => value + 1), children: t.retry })
+        ] }) : currentFile.kind !== "text" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", children: t[currentFile.kind] }) : detail && !detail.hunks.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-empty", children: currentFile.status === "mode" ? t.mode : t.noHunks }) : detail?.hunks.map((hunk) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { className: "dv-hunk", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-hunk-heading", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { "data-hunk-nav": true, "aria-expanded": !collapsed.has(hunk.id), onClick: () => setCollapsed((value) => {
               const next = new Set(value);
               next.has(hunk.id) ? next.delete(hunk.id) : next.add(hunk.id);
               return next;
             }), "aria-label": `${collapsed.has(hunk.id) ? t.collapsed : t.expanded} ${hunk.header}`, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { "aria-hidden": "true", children: collapsed.has(hunk.id) ? "\u25B8" : "\u25BE" }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { "aria-hidden": "true", children: collapsed.has(hunk.id) ? "\u25B8" : "\u25BE" }),
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: hunk.header })
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: hunk.header })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-toolbar", children: context === 3 && !currentFile.oldPath && review.scope !== "turn" && review.scope !== "lastTurn" && actionButtons(currentFile, hunk) })
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dv-toolbar", children: context === 3 && !currentFile.oldPath && review.scope !== "turn" && review.scope !== "lastTurn" && actionButtons(currentFile, hunk) })
           ] }),
-          !collapsed.has(hunk.id) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(DiffRows, { path: currentFile.path, lines: hunk.lines, layout, t, disabled: busy, onLine: (line, side) => openComment(line, side, hunk) })
-        ] }, `${context}:${offset}:${hunk.id}`)) }),
-        detail && detail.totalRows > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("footer", { className: "dv-pagination", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
-            t.page,
-            " ",
-            detail.offset + 1,
-            "\u2013",
-            detail.offset + detail.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0),
-            " ",
-            t.of,
-            " ",
-            detail.totalRows
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-toolbar", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: !pageStack.length || busy || loadingDetail, onClick: () => {
-              const pages = [...pageStack];
-              setOffset(pages.pop() ?? 0);
-              setPageStack(pages);
-              diffPane.current?.scrollTo(0, 0);
-            }, children: t.previous }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: detail.nextOffset == null || busy || loadingDetail, onClick: () => {
-              if (detail.nextOffset != null) {
-                setPageStack((value) => [...value, offset]);
-                setOffset(detail.nextOffset);
-                diffPane.current?.scrollTo(0, 0);
-              }
-            }, children: t.next })
-          ] }),
-          detail.totalRows > 80 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("small", { children: t.continuation })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { className: "dv-comments", open: true, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("summary", { children: [
-            t.summary,
-            " (",
-            comments.length,
-            ")"
-          ] }),
-          commentsError && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dv-error", role: "alert", children: [
-            t.commentsFailed,
-            ": ",
-            commentsError,
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => setCommentsTick((value) => value + 1), children: t.retry })
-          ] }),
-          loadingComments ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: t.loading }) : !comments.length && !commentsError && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-muted", children: t.noComments }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dv-comment-list", children: comments.map((comment) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("article", { className: "dv-comment", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("header", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: comment.anchor.path }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
-                t[comment.anchor.side],
-                ":",
-                comment.anchor.line
-              ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-toolbar", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy, onClick: () => {
-                  setError("");
-                  setEditor({ id: comment.id, body: comment.body, anchor: comment.anchor });
-                }, children: t.edit }),
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy, onClick: () => {
-                  setError("");
-                  setConfirmation({ kind: "comment", comment });
-                }, children: t.delete })
-              ] })
-            ] }),
-            comment.stale && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-stale", children: t.stale }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-comment-body", children: comment.body }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: t.deletedExcerpt }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { children: comment.anchor.excerpt })
-            ] })
-          ] }, comment.id)) }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { className: "dv-feedback", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: t.feedback }),
-            feedbackLoading ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: t.loading }) : feedbackError ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dv-error", role: "alert", children: [
-              t.feedbackFailed,
-              ": ",
-              feedbackError
-            ] }) : feedback ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("textarea", { readOnly: true, "aria-label": t.feedbackCopy, value: feedback, rows: 5 }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-muted", children: t.feedbackEmpty }),
-            canInsert ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: !feedback || feedbackLoading || busy, onClick: () => {
-                if (!live.current || !feedback || !canInsert) return;
-                setError("");
-                transport.insertText(feedback).catch((err) => {
-                  if (live.current) setError(errorText(err));
-                });
-              }, children: t.insert }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-muted", children: t.feedbackHint })
-            ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-muted", children: t.feedbackNoSession })
+          !collapsed.has(hunk.id) && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(DiffRows, { path: currentFile.path, lines: hunk.lines, layout, t })
+        ] }, `${context}:${hunk.id}`)) }),
+        detail?.nextOffset != null && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-continuation", ref: continuationRef, "aria-label": t.loadMore, children: [
+          loadingMore && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { role: "status", children: t.loading }),
+          detailError && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dv-error", role: "alert", children: [
+            detailError,
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: loadMore, children: t.retry })
           ] })
         ] })
-      ] }) })
+      ] }) }),
+      selectedIndex >= 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("nav", { className: "dv-file-list", "aria-label": t.files, children: visibleFiles.slice(selectedIndex + 1).map(fileRow) })
     ] }),
-    editor && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Modal, { title: editor.id ? t.edit : t.addComment, busy, onClose: () => setEditor(null), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("form", { onSubmit: (event) => {
-      event.preventDefault();
-      const draft = editor;
-      const key = scopeRef.current;
-      void perform(async () => {
-        if (!draft.body.trim() || draft.body.length > 4e3) throw new Error(t.commentLimit);
-        await transport.invoke("saveComment", { id: draft.id, anchor: draft.anchor, body: draft.body.trim(), sessionId });
-        if (!live.current || scopeRef.current !== key) return;
-        setEditor(null);
-        setStatus(t.commentSaved);
-        setCommentsTick((value) => value + 1);
-      });
-    }, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dv-anchor", children: [
-        editor.anchor.path,
-        " \xB7 ",
-        t[editor.anchor.side],
-        ":",
-        editor.anchor.line
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { children: editor.anchor.excerpt }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dv-editor-label", children: [
-        t.commentBody,
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("textarea", { "aria-label": t.commentBody, autoFocus: true, value: editor.body, maxLength: 4e3, rows: 5, onChange: (event) => setEditor((value) => value && { ...value, body: event.target.value }) })
-      ] }),
-      error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-error", role: "alert", children: error }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-dialog-actions", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", disabled: busy, onClick: () => setEditor(null), children: t.cancel }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "dv-primary", disabled: busy || !editor.body.trim(), children: busy ? t.loading : t.save })
-      ] })
-    ] }) }),
-    confirmation && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(Modal, { title: confirmation.kind === "action" || confirmation.kind === "batch" ? `${t.confirm}: ${t[confirmation.action]}` : confirmation.kind === "history" ? t.clearHistory : t.delete, busy, onClose: () => setConfirmation(null), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: confirmation.kind === "batch" ? t.batchHint : confirmation.kind === "action" ? t.confirmHint : confirmation.kind === "history" ? t.clearHint : t.deleteHint }),
-      confirmation.kind === "batch" && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+    confirmation && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(Modal, { title: confirmation.kind === "action" || confirmation.kind === "batch" ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory, busy, onClose: () => setConfirmation(null), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: confirmation.kind === "batch" ? t.batchHint : confirmation.kind === "action" ? t.confirmHint : t.clearHint }),
+      confirmation.kind === "batch" && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
           confirmation.review.root,
           " \xB7 ",
           t[confirmation.review.scope]
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap" }, children: confirmation.files.map((file) => file.path).join("\n") })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("pre", { style: { whiteSpace: "pre-wrap" }, children: confirmation.files.map((file) => file.path).join("\n") })
       ] }),
-      confirmation.kind === "action" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dl", { className: "dv-target", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t.repository }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: confirmation.review.root }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t.scope }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: t[confirmation.review.scope] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t.target }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { children: [
+      confirmation.kind === "action" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("dl", { className: "dv-target", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("dt", { children: t.repository }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("dd", { children: confirmation.review.root }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("dt", { children: t.scope }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("dd", { children: t[confirmation.review.scope] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("dt", { children: t.target }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("dd", { children: [
           confirmation.file.path,
-          confirmation.file.oldPath && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+          confirmation.file.oldPath && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
             " \u2190 ",
             confirmation.file.oldPath
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t.action }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("dt", { children: t.action }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("dd", { children: [
           t[confirmation.action],
           " \xB7 ",
           confirmation.hunk ? `${t.hunk} ${confirmation.hunk.header}` : t.wholeFile
         ] })
-      ] }) : confirmation.kind === "comment" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dv-anchor", children: [
-          confirmation.comment.anchor.path,
-          " \xB7 ",
-          t[confirmation.comment.anchor.side],
-          ":",
-          confirmation.comment.anchor.line
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: confirmation.comment.body })
-      ] }) : confirmation.kind === "history" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+      ] }) : confirmation.kind === "history" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
         t.history,
         ": ",
         boot?.runs.length ?? 0
       ] }) : null,
-      error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dv-error", role: "alert", children: error }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dv-dialog-actions", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { disabled: busy, onClick: () => setConfirmation(null), autoFocus: true, children: t.cancel }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "dv-primary", disabled: busy, onClick: confirmOperation, children: busy ? t.loading : t.confirm })
+      error && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "dv-error", role: "alert", children: error }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dv-dialog-actions", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: busy, onClick: () => setConfirmation(null), autoFocus: true, children: t.cancel }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { className: "dv-primary", disabled: busy, onClick: confirmOperation, children: busy ? t.loading : t.confirm })
       ] })
     ] })
   ] });
@@ -31517,16 +31392,17 @@ function ReviewApp({ transport: source, initialRequest = {}, initialFileId, onCl
 var ReviewApp_default = ReviewApp;
 
 // src/view/index.tsx
-var import_jsx_runtime3 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime4 = __toESM(require_jsx_runtime(), 1);
 function Panel() {
-  const [appearance, setAppearance] = (0, import_react3.useState)({});
-  const [navigation, setNavigation] = (0, import_react3.useState)(null), [error, setError] = (0, import_react3.useState)(""), [selecting, setSelecting] = (0, import_react3.useState)(Boolean(new URLSearchParams(location.search).get("piViewOpen")));
-  const transport = (0, import_react3.useMemo)(() => ({ invoke(method, args) {
+  const [appearance, setAppearance] = (0, import_react4.useState)({});
+  const [navigation, setNavigation] = (0, import_react4.useState)(null), [error, setError] = (0, import_react4.useState)(""), [selecting, setSelecting] = (0, import_react4.useState)(Boolean(new URLSearchParams(location.search).get("piViewOpen")));
+  const hasSelection = (0, import_react4.useRef)(false);
+  const transport = (0, import_react4.useMemo)(() => ({ invoke(method, args) {
     const bridge = window.pluginBridge;
     if (!bridge) return Promise.reject(new Error("PI-Desktop bridge is unavailable / PI-Desktop \u6865\u63A5\u4E0D\u53EF\u7528\u3002"));
     return bridge.invoke(`diff.${method}`, args);
   } }), []);
-  (0, import_react3.useEffect)(() => {
+  (0, import_react4.useEffect)(() => {
     let live = true;
     const update = (value) => {
       if (!live) return;
@@ -31542,27 +31418,27 @@ function Panel() {
       if (typeof dispose === "function") dispose();
     };
   }, []);
-  (0, import_react3.useEffect)(() => {
-    let live = true, generation = 0, target = null;
-    const load = (initial) => {
-      if (!target) return;
+  (0, import_react4.useEffect)(() => {
+    let live = true, generation = 0, target = null, pending = false;
+    const load = () => {
+      if (!target || pending) return;
+      pending = true;
       const own = generation, nonce = target;
-      if (initial) {
-        setSelecting(true);
-        setError("");
-        setNavigation(null);
-      }
       transport.invoke("readTurnSelection", { nonce }).then((selection) => {
         if (!live || own !== generation) return;
-        setNavigation((previous) => previous?.nonce === selection.nonce ? previous : selection);
+        hasSelection.current = true;
+        setNavigation((previous) => previous?.nonce === selection.nonce && previous.revision === selection.revision ? previous : selection);
         setError("");
         setSelecting(false);
       }).catch((err) => {
         if (live && own === generation) {
+          hasSelection.current = false;
           setNavigation(null);
           setError(String(err?.message ?? err));
           setSelecting(false);
         }
+      }).finally(() => {
+        pending = false;
       });
     };
     const receive = (path) => {
@@ -31570,19 +31446,24 @@ function Panel() {
       generation++;
       if (typeof path !== "string" || !/^diff-view:[0-9a-f-]{36}$/i.test(path)) {
         target = null;
+        hasSelection.current = false;
         setNavigation(null);
         setSelecting(false);
         setError("\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid plugin selection");
         return;
       }
       target = path.slice("diff-view:".length);
-      load(true);
+      if (!hasSelection.current) {
+        setSelecting(true);
+        setError("");
+      }
+      load();
     };
     const dispose = window.pluginBridge?.on?.("view:open", (value) => receive(value?.path));
     receive(new URLSearchParams(location.search).get("piViewOpen"));
     const timer = setInterval(() => {
-      if (document.visibilityState !== "hidden") load(false);
-    }, 1500);
+      if (document.visibilityState !== "hidden") load();
+    }, 500);
     return () => {
       live = false;
       generation++;
@@ -31590,7 +31471,7 @@ function Panel() {
       if (typeof dispose === "function") dispose();
     };
   }, [transport]);
-  const initialRequest = (0, import_react3.useMemo)(() => {
+  const initialRequest = (0, import_react4.useMemo)(() => {
     const params = new URLSearchParams(location.search);
     const result = {};
     for (const key of ["root", "sessionId", "runId", "ref"]) if (params.get(key)) result[key] = params.get(key);
@@ -31598,11 +31479,11 @@ function Panel() {
     if (scope && ["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(scope)) result.scope = scope;
     return result;
   }, []);
-  if (selecting || error) return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("section", { className: "dv-app", "data-base": appearance.base ?? "light", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: `dv-empty ${error ? "dv-error" : ""}`, role: error ? "alert" : "status", children: error || "\u6B63\u5728\u5B9A\u4F4D\u6240\u9009\u6587\u4EF6\u2026 / Locating selected file\u2026" }) });
-  return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ReviewApp_default, { transport, initialRequest: navigation?.request ?? initialRequest, initialFileId: navigation?.fileId, ...appearance }, navigation?.nonce ?? "default");
+  if (selecting || error) return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("section", { className: "dv-app", "data-base": appearance.base ?? "light", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: `dv-empty ${error ? "dv-error" : ""}`, role: error ? "alert" : "status", children: error || "\u6B63\u5728\u5B9A\u4F4D\u6240\u9009\u6587\u4EF6\u2026 / Locating selected file\u2026" }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(ReviewApp_default, { transport, initialRequest: navigation?.request ?? initialRequest, initialFileId: navigation?.fileId, navigationKey: navigation ? `${navigation.nonce}:${navigation.revision}` : void 0, ...appearance });
 }
 var element = document.getElementById("root");
-if (element) (0, import_client.createRoot)(element).render(/* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Panel, {}));
+if (element) (0, import_client.createRoot)(element).render(/* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Panel, {}));
 export {
   Panel
 };

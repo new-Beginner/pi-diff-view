@@ -26,7 +26,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
     let run: CaptureRun | null = null, store: SnapshotStore | null = null;
     let pending = new Map<string, { run: CaptureRun; paths: { capture: CaptureIdentity; before: FileSnapshot }[] }>();
     let seen = new Set<string>(), retired = new Set<string>(), warned = false, disposed = false, tail = Promise.resolve();
-    let lastReply: CaptureRun['finalReply'], privatePaths: string[] = [], observed = new Set<string>();
+    let lastReply: CaptureRun['finalReply'], privatePaths: string[] = [], observed = new Set<string>(), settled = false;
     const serial = (fn: () => Promise<void>, ctx: Context): Promise<void> => {
       tail = tail.then(fn).catch(async error => {
         lastReply = undefined;
@@ -65,10 +65,19 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       run = { version: 2, contentVersion: 0, boundary: uncertain ? 'uncertain' : 'user', id: randomUUID(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root: await fs.realpath(ctx.cwd), startedAt: Date.now(), state: 'running', fileCount: 0, incomplete: uncertain, changes: Object.create(null), replies: [], bindings: {} };
       for (const id of seen) retired.add(id);
       while (retired.size > 4096) retired.delete(retired.keys().next().value!);
-      pending.clear(); seen.clear(); observed.clear(); warned = false; lastReply = undefined;
+      pending.clear(); seen.clear(); observed.clear(); warned = false; lastReply = undefined; settled = false;
       await persist(run);
     };
     pi.on('before_agent_start', (_event, ctx) => serial(() => begin(ctx), ctx));
+    pi.on('agent_start', (_event, ctx) => serial(async () => {
+      // Desktop forwards internal end/start pairs for steering and retries without a new USER boundary.
+      // Keep first-before snapshots and tool identities instead of beginning an uncertain second task.
+      if (disposed || settled || !run || run.state === 'running' || run.state === 'aborted' || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs.realpath(ctx.cwd)) return;
+      await check(run);
+      run.state = 'running'; delete run.endedAt; delete run.finalReply; delete run.cardPreview;
+      run.bindings = {}; lastReply = undefined;
+      await persist(run);
+    }, ctx));
     pi.on('tool_call', (event, ctx) => serial(async () => {
       if (disposed || typeof event.toolCallId !== 'string' || seen.has(event.toolCallId)) return;
       lastReply = undefined;
@@ -127,7 +136,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       // A missing timestamp cannot safely bind a host message later.
       if (!Number.isFinite(message.timestamp)) { run.incomplete = true; await persist(run); return; }
       if (message.timestamp < run.startedAt || message.timestamp > Date.now() + 3000) { run.incomplete = true; await persist(run); return; }
-      const reply = { hash: digest(text), timestamp: message.timestamp as number };
+      const reply = { hash: digest(text.trim()), timestamp: message.timestamp as number };
       if (!run.replies.some(r => r.hash === reply.hash && r.timestamp === reply.timestamp)) run.replies.push(reply);
       run.replies = run.replies.slice(-20);
       if (!pending.size && !['error', 'aborted', 'toolUse', 'tool_use', 'length'].includes(message.stopReason)) lastReply = reply;
@@ -149,12 +158,15 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       const messages = Array.isArray(event.messages) ? event.messages : undefined;
       if (messages) {
         const last = [...messages].reverse().find((m: any) => m.role === 'assistant');
-        if (!last || !lastReply || digest(textContent(last)) !== lastReply.hash || last.timestamp !== lastReply.timestamp || (Array.isArray(last.content) && last.content.some((b: any) => b.type === 'toolCall' || b.type === 'tool_use'))) lastReply = undefined;
+        if (!last || !lastReply || digest(textContent(last).trim()) !== lastReply.hash || last.timestamp !== lastReply.timestamp || (Array.isArray(last.content) && last.content.some((b: any) => b.type === 'toolCall' || b.type === 'tool_use'))) lastReply = undefined;
       }
       const aborted = event.aborted === true || event.isError === true;
       if (aborted) { run.incomplete = true; lastReply = undefined; }
       if (run.boundary === 'user' && lastReply && !aborted) run.finalReply = lastReply;
       run.state = aborted ? 'aborted' : run.incomplete ? 'incomplete' : 'completed'; run.endedAt = Date.now(); await persist(run);
+    }, ctx));
+    pi.on('agent_settled', (_event, ctx) => serial(async () => {
+      if (run?.sessionId === ctx.sessionManager.getSessionId()) settled = true;
     }, ctx));
     pi.on('session_shutdown', (_event, ctx) => serial(async () => {
       if (run?.state === 'running') { run.incomplete = true; run.state = 'aborted'; delete run.finalReply; run.endedAt = Date.now(); await persist(run).catch(() => {}); }

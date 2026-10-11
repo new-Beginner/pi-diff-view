@@ -1,0 +1,7 @@
+Diff view chat-summary acceptance fixture A.
+Purpose: verify the task file count and first file entry.
+Expected: this file appears in the task summary.
+Retest: v2 per-task summary, first file.
+Acceptance run: TASK_SUMMARY_FOLLOWUP_A
+Card smoke test: FIRST_FILE_20261010
+Persistent card retest: CARD_RECHECK_A

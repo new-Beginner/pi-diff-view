@@ -3,7 +3,7 @@ import type { UiTransport } from '../core/contracts';
 // One short wire request at a time across all UI callers in this JS realm.
 const realm = globalThis as typeof globalThis & { __piDiffQueue?: { tail: Promise<unknown>; last: number } };
 const queue = realm.__piDiffQueue ??= { tail: Promise.resolve(), last: 0 };
-const background = new Set(['bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'selectTurn']);
+const background = new Set(['bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'selectTurn', 'card', 'replyCards']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
   const wire = <T,>(method: string, args?: unknown): Promise<T> => {

@@ -27,7 +27,7 @@ const host = {
     state.calls.push(payload.method);
     if (payload.method === 'rendererReport') { state.reports.push(payload.args.stage); return { ok: true }; }
     if (payload.method === 'activeReviewSession') return { ok: true };
-    if (payload.method === 'jobStart') { const id = `job-${jobs.size}`; jobs.set(id, failBoot ? { state: 'error', error: { code: 'TEST_BOOT_ERROR', message: 'Injected boot failure' } } : { state: 'done', result: boot }); return { jobId: id }; }
+    if (payload.method === 'jobStart') { const id = `job-${jobs.size}`; jobs.set(id, failBoot ? { state: 'error', error: { code: 'TEST_BOOT_ERROR', message: 'Injected boot failure' } } : { state: 'done', result: payload.args.method === 'replyCards' ? { cards: [], revision: 'empty', pending: [], nextOffset: null, locale: boot.locale, base: boot.base } : boot }); return { jobId: id }; }
     if (payload.method === 'jobPoll') return jobs.get(payload.args.jobId);
     if (payload.method === 'nativeProbeInfo') return { version: '0.18.0', hashes: {}, supported: false, reason: 'Test host is intentionally not native' };
     throw new Error(`Unexpected method: ${payload.method}`);
@@ -44,7 +44,7 @@ const host = {
     root.render(React.createElement(options.component, { sessionId: 's', messageId: 'reply', message: { content: 'No recorded capture', createdAt: new Date().toISOString() } }));
     return () => { root.unmount(); container.remove(); state.slots = state.slots.filter(slot => slot !== options.slot); };
   } },
-  composer: { subscribeDraft(listener: (data: any) => void) { state.listeners++; listener({ sessionId: 's', text: 'Existing draft', generation: 1 }); return () => { state.listeners--; }; } }
+  composer: { subscribeDraft(listener: (data: any) => void) { state.listeners++; listener({ text: 'Existing draft', marks: [], generation: 1 }); return () => { state.listeners--; }; } }
 };
 // esbuild deliberately retains this variable dynamic import, which the browser resolves with the map above.
 const entryUrl = new URL('/production-renderer.mjs', location.href).href;

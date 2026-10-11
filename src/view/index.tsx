@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ReviewApp from './ReviewApp';
 import type { ReviewRequest, UiTransport } from '../core/contracts';
@@ -9,6 +9,7 @@ declare global { interface Window { pluginBridge?: Bridge } }
 export function Panel() {
   const [appearance, setAppearance] = useState<Appearance>({});
   const [navigation, setNavigation] = useState<ReviewNavigation | null>(null), [error, setError] = useState(''), [selecting, setSelecting] = useState(Boolean(new URLSearchParams(location.search).get('piViewOpen')));
+  const hasSelection = useRef(false);
   const transport = useMemo<UiTransport>(() => ({ invoke<T>(method: string, args?: unknown) {
     const bridge = window.pluginBridge;
     if (!bridge) return Promise.reject(new Error('PI-Desktop bridge is unavailable / PI-Desktop 桥接不可用。'));
@@ -22,25 +23,30 @@ export function Panel() {
     return () => { live = false; if (typeof dispose === 'function') dispose(); };
   }, []);
   useEffect(() => {
-    let live = true, generation = 0, target: string | null = null;
-    const load = (initial: boolean) => {
-      if (!target) return;
+    let live = true, generation = 0, target: string | null = null, pending = false;
+    const load = () => {
+      if (!target || pending) return;
+      pending = true;
       const own = generation, nonce = target;
-      if (initial) { setSelecting(true); setError(''); setNavigation(null); }
       transport.invoke<ReviewNavigation>('readTurnSelection', { nonce }).then(selection => {
         if (!live || own !== generation) return;
-        setNavigation(previous => previous?.nonce === selection.nonce ? previous : selection); setError(''); setSelecting(false);
-      }).catch(err => { if (live && own === generation) { setNavigation(null); setError(String(err?.message ?? err)); setSelecting(false); } });
+        hasSelection.current = true;
+        setNavigation(previous => previous?.nonce === selection.nonce && previous.revision === selection.revision ? previous : selection);
+        setError(''); setSelecting(false);
+      }).catch(err => { if (live && own === generation) { hasSelection.current = false; setNavigation(null); setError(String(err?.message ?? err)); setSelecting(false); } }).finally(() => { pending = false; });
     };
     const receive = (path: unknown) => {
       if (path == null || path === '') return;
       generation++;
-      if (typeof path !== 'string' || !/^diff-view:[0-9a-f-]{36}$/i.test(path)) { target = null; setNavigation(null); setSelecting(false); setError('无效的插件定位令牌 / Invalid plugin selection'); return; }
-      target = path.slice('diff-view:'.length); load(true);
+      if (typeof path !== 'string' || !/^diff-view:[0-9a-f-]{36}$/i.test(path)) { target = null; hasSelection.current = false; setNavigation(null); setSelecting(false); setError('无效的插件定位令牌 / Invalid plugin selection'); return; }
+      target = path.slice('diff-view:'.length);
+      if (!hasSelection.current) { setSelecting(true); setError(''); }
+      load();
     };
     const dispose = window.pluginBridge?.on?.('view:open', value => receive(value?.path));
     receive(new URLSearchParams(location.search).get('piViewOpen'));
-    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') load(false); }, 1500);
+    // Read only volatile UI state. Never change the native view URL to select another file.
+    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') load(); }, 500);
     return () => { live = false; generation++; clearInterval(timer); if (typeof dispose === 'function') dispose(); };
   }, [transport]);
   const initialRequest = useMemo<Partial<ReviewRequest>>(() => {
@@ -50,7 +56,7 @@ export function Panel() {
     return result;
   }, []);
   if (selecting || error) return <section className="dv-app" data-base={appearance.base ?? 'light'}><p className={`dv-empty ${error ? 'dv-error' : ''}`} role={error ? 'alert' : 'status'}>{error || '正在定位所选文件… / Locating selected file…'}</p></section>;
-  return <ReviewApp key={navigation?.nonce ?? 'default'} transport={transport} initialRequest={navigation?.request ?? initialRequest} initialFileId={navigation?.fileId} {...appearance} />;
+  return <ReviewApp transport={transport} initialRequest={navigation?.request ?? initialRequest} initialFileId={navigation?.fileId} navigationKey={navigation ? `${navigation.nonce}:${navigation.revision}` : undefined} {...appearance} />;
 }
 const element = document.getElementById('root');
 if (element) createRoot(element).render(<Panel />);

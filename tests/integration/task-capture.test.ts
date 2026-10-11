@@ -69,6 +69,57 @@ describe('USER-task final binding and bounded summaries', () => {
     await h.emit('before_agent_start'); await h.emit('message_end', { message: message('second task') }); await h.emit('agent_end');
     expect(await importRuns()).toHaveLength(2);
   });
+  it('binds the exact final reply suffix supplied by the real host aggregate, not progress or altered final text', async () => {
+    const h = harness(); await h.emit('before_agent_start');
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'one', input: { path: 'a.txt' } });
+    await fs.writeFile(path.join(root, 'a.txt'), 'one\n'); await h.emit('tool_result', { toolCallId: 'one' });
+    const progress = message('Working on the task'), final = message('  Done.\n\nChecks passed.\n ');
+    await h.emit('message_end', { message: progress }); await h.emit('message_end', { message: final });
+    await h.emit('agent_end', { messages: [progress, final] }); const [run] = await importRuns();
+    const args = cardArgs(final), aggregate = `${progress.content[0].text}\n\n${final.content[0].text.trim()}`;
+    expect((await service.card({ ...args, content: aggregate })).run?.id).toBe(run.id);
+    expect((await service.card({ ...args, content: progress.content[0].text })).run).toBeNull();
+    expect((await service.card({ ...args, content: `${aggregate}\n\nAn unrelated ending` })).run).toBeNull();
+    expect((await service.card({ ...args, sessionId: 'other', content: aggregate })).run).toBeNull();
+    expect((await service.card({ ...args, content: aggregate, createdAt: new Date(final.timestamp + 60000).toISOString() })).run).toBeNull();
+    expect((await service.card({ ...args, content: aggregate, messageId: 'another-ui-message' })).run).toBeNull();
+  });
+  it.each([false, true])('keeps one USER-task through steering continuation (previous binding: %s)', async bound => {
+    const h = harness(); await h.emit('before_agent_start'); await h.emit('agent_start');
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'before-steer', input: { path: 'a.txt' } });
+    await fs.writeFile(path.join(root, 'a.txt'), 'before steer\n'); await h.emit('tool_result', { toolCallId: 'before-steer' });
+    const first = message('First response'); await h.emit('message_end', { message: first });
+    await h.emit('agent_end', { messages: [first] }); const [initial] = await importRuns();
+    if (bound) expect((await service.card(cardArgs(first))).run?.id).toBe(initial.id);
+    // Desktop forwards internal agent_end even when a pending steer causes agent.continue().
+    // No before_agent_start is emitted for this continuation.
+    await h.emit('agent_start');
+    const [live] = await importRuns(); expect(live.id).toBe(initial.id); expect(live.state).toBe('running');
+    expect((await service.replyCards({ sessionId: 's' })).cards).toEqual([]);
+    await h.emit('message_end', { message: { role: 'user', content: 'Continue with this change', timestamp: Date.now() } });
+    await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'after-steer', input: { path: 'a.txt' } });
+    await fs.writeFile(path.join(root, 'a.txt'), 'after steer\nextra\n'); await h.emit('tool_result', { toolCallId: 'after-steer' });
+    const final = message('Steered task done'); await h.emit('message_end', { message: final });
+    await h.emit('agent_end', { messages: [final] }); await h.emit('agent_settled');
+    const runs = await importRuns(); expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ id: initial.id, boundary: 'user', state: 'completed', incomplete: false, fileCount: 1 });
+    expect(runs[0].changes['a.txt'].before.exists).toBe(false); expect(runs[0].changes['a.txt'].after.text).toBe('after steer\nextra\n');
+    expect((await service.card(cardArgs(first))).run).toBeNull();
+    const card = await service.card(cardArgs(final)); expect(card.run?.id).toBe(initial.id); expect(card.summary?.additions).toBe(2);
+    expect((await service.replyCards({ sessionId: 's' })).cards[0].messageId).toBe(cardArgs(final).messageId);
+  });
+  it('retains captured files when a steering continuation only produces a final response', async () => {
+    const h = harness(); await h.emit('before_agent_start'); await h.emit('agent_start');
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'one', input: { path: 'a.txt' } });
+    await fs.writeFile(path.join(root, 'a.txt'), 'one\n'); await h.emit('tool_result', { toolCallId: 'one' });
+    const first = message('Working'); await h.emit('message_end', { message: first }); await h.emit('agent_end', { messages: [first] });
+    await h.emit('agent_start'); const final = message('Done after your clarification');
+    await h.emit('message_end', { message: final }); await h.emit('agent_end', { messages: [final] });
+    const runs = await importRuns(); expect(runs).toHaveLength(1); expect(runs[0].finalReply?.hash).toBe(digest(final.content[0].text));
+    expect((await service.card(cardArgs(final))).summary?.fileCount).toBe(1);
+    await h.emit('before_agent_start'); await h.emit('agent_start'); await h.emit('message_end', { message: message('Separate task') }); await h.emit('agent_end');
+    const separate = await importRuns(); expect(separate).toHaveLength(2); expect(separate[0].id).not.toBe(runs[0].id); expect(separate[0].fileCount).toBe(0);
+  });
   it.each(['aborted', 'uncertain', 'last-tool', 'missing-time'])('does not invent a final binding for %s execution', async mode => {
     const h = harness(); if (mode !== 'uncertain') await h.emit('before_agent_start');
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 'one', input: { path: 'a.txt' } }); await fs.writeFile(path.join(root, 'a.txt'), 'one'); await h.emit('tool_result', { toolCallId: 'one' });

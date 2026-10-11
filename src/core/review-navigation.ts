@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ReviewRequest } from './contracts';
 import { fail } from './path-policy';
-export interface ReviewNavigation { nonce: string; sessionId: string; request: ReviewRequest; fileId?: string; at: number; }
+export interface ReviewNavigation { nonce: string; revision: number; sessionId: string; request: ReviewRequest; fileId?: string; at: number; }
 /** Plugin-owned volatile UI selections only, never transcript/database edits. */
 export class ReviewNavigationStore {
   private activeSession: string | null | undefined;
@@ -10,7 +10,9 @@ export class ReviewNavigationStore {
   set(request: ReviewRequest, fileId?: string): ReviewNavigation {
     if (!request.sessionId || request.scope !== 'turn' || !request.runId) fail('NAVIGATION_INVALID', 'A recorded task/session is required');
     this.prune();
-    const entry = { nonce: randomUUID(), sessionId: request.sessionId, request, fileId, at: Date.now() };
+    const previous = this.selections.get(request.sessionId);
+    // A stable view capability keeps the native panel alive; revisions select files within it.
+    const entry = { nonce: previous?.nonce ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sessionId: request.sessionId, request, fileId, at: Date.now() };
     this.selections.delete(request.sessionId); this.selections.set(request.sessionId, entry);
     while (this.selections.size > 32) this.selections.delete(this.selections.keys().next().value!);
     return entry;

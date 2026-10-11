@@ -36,6 +36,11 @@
   const state = window.__demo = { calls: [], comments: [], failFile: scenario === 'file-error', conflict: scenario === 'conflict', stale: scenario === 'stale', settings: { layout: 'unified', wordWrap: true }, review: null, runs: [run], appearance: { locale: params.get('lang') || 'en', base: params.get('base') || 'light' }, changeAppearance(value) { this.appearance = value; listeners.get('appearance:changed')?.(value); } };
   state.navigation = new Map();
   state.openLocation = path => listeners.get('view:open')?.({ path });
+  const preview = (record = run) => ({ runId: record.id, sessionId: record.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(0, 3).map(file => ({ ...file, actions: [] })), offset: 0, nextOffset: 3 });
+  state.replyBindings = new Map();
+  const historyCount = Number(params.get('historyCards') || 0);
+  if (historyCount) for (let i = 0; i < historyCount; i++) { const record = { ...run, id: `history-run-${i}` }; state.replyBindings.set(`history-${i}`, { messageId: `history-${i}`, run: record, summary: preview(record) }); }
+  if (params.has('persisted')) state.replyBindings.set('reply-demo', { messageId: 'reply-demo', run, summary: preview() });
   const jobs = new Map();
   window.pluginBridge = {
     on(event, callback) { listeners.set(event, callback); return () => listeners.delete(event); },
@@ -78,11 +83,22 @@
       if (method === 'diff.batchAction') return { results: args.targets.map((target, i) => ({ path: files.find(file => file.id === target.fileId).path, ok: i !== 1, message: i === 1 ? 'Demo FILE_CONFLICT: changed file' : 'Demo operation completed' })) };
       if (method === 'diff.copyPatch') return { ok: true };
       if (method === 'diff.settings') { Object.assign(state.settings, args); return; }
-      if (method === 'diff.clearHistory') { if (!args.confirmed) throw new Error('Confirmation required'); state.runs = []; state.comments = []; return; }
+      if (method === 'diff.clearHistory') { if (!args.confirmed) throw new Error('Confirmation required'); state.runs = []; state.comments = []; state.replyBindings.clear(); return; }
       if (method === 'diff.turnSummary') { const offset = args.offset || 0, limit = args.limit || 3; return { runId: run.id, sessionId: run.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(offset, offset + limit), offset, nextOffset: offset + limit < turnFiles.length ? offset + limit : null }; }
-      if (method === 'diff.selectTurn') { const nonce = `00000000-0000-4000-8000-${String(state.navigation.size + 1).padStart(12, '0')}`; const selection = { nonce, sessionId: run.sessionId, request: { scope: 'turn', root, sessionId: run.sessionId, runId: run.id }, fileId: args.fileId, at: Date.now() }; state.navigation.set(nonce, selection); return selection; }
+      if (method === 'diff.selectTurn') { const previous = [...state.navigation.values()].find(item => item.sessionId === run.sessionId); const nonce = previous?.nonce || `00000000-0000-4000-8000-${String(state.navigation.size + 1).padStart(12, '0')}`; const selection = { nonce, revision: (previous?.revision || 0) + 1, sessionId: run.sessionId, request: { scope: 'turn', root, sessionId: run.sessionId, runId: args.runId || run.id }, fileId: args.fileId, at: Date.now() }; state.navigation.set(nonce, selection); return selection; }
       if (method === 'diff.readTurnSelection') { const selections = window.parent !== window ? window.parent.__demo.navigation : state.navigation; const selected = selections.get(args.nonce); if (!selected) throw new Error('Demo selection expired'); return selected; }
-      if (method === 'diff.card') return { run: args.messageId === 'reply-demo' ? run : null };
+      if (method === 'diff.replyCards') {
+        if (state.failFeed) throw new Error('Temporary feed failure');
+        const all = args.sessionId === run.sessionId && state.runs.length ? [...state.replyBindings.values()] : [];
+        const revision = `${state.runs.length}-${state.replyBindings.size}`, offset = args.offset || 0;
+        const pending = !state.replyBindings.size && state.runs.length ? [Date.parse('2025-06-15T15:07:40.000Z') + (params.has('latestAtEnd') ? 11000 : 0)] : [];
+        return { cards: args.revision === revision ? [] : all.slice(offset, offset + 20), revision, unchanged: args.revision === revision, nextOffset: args.revision !== revision && offset + 20 < all.length ? offset + 20 : null, pending, ...state.appearance };
+      }
+      if (method === 'diff.card') {
+        if (args.messageId !== 'reply-demo') return { run: null };
+        const card = { messageId: args.messageId, run, summary: preview() }; state.replyBindings.set(args.messageId, card);
+        return { run, summary: card.summary };
+      }
       if (method === 'diff.openPanel') return;
       throw new Error(`Unexpected mocked method: ${method}`);
     }

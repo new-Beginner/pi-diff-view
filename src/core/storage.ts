@@ -123,8 +123,9 @@ export class SnapshotStore {
       try {
         const run = await this.getRun(id, true, false); if (!run) continue;
         const current = await this.getRun(id, false, false);
-        // Preserve main-owned message bindings; previous-generation records remain historical.
-        run.bindings = current?.bindings ?? {};
+        // Main owns bindings, but a steering continuation invalidates the previous final reply.
+        const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
+        run.bindings = sameReply ? current?.bindings ?? {} : {};
         if (run.generation !== generation && run.state === 'running') { run.state = 'incomplete'; run.incomplete = true; }
         await this.writeRun(run);
         // Open runs remain an inbox source; settled ones have no late writer once retired.
