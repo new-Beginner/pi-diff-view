@@ -15,8 +15,12 @@ import type { Messages } from './i18n';
 for (const [name, language] of Object.entries({ javascript, typescript, python, json, css, xml, bash, markdown, yaml })) hljs.registerLanguage(name, language);
 type Range = [number, number];
 type Pair = { left?: DiffLine; right?: DiffLine; oldRanges?: Range[]; newRanges?: Range[] };
+const rangeCache = new Map<string, [Range[], Range[]]>();
 function ranges(before: string, after: string): [Range[], Range[]] {
   if (before.length + after.length > 4000) return [[], []];
+  const cacheKey = `${before}\0${after}`;
+  const hit = rangeCache.get(cacheKey);
+  if (hit) return hit;
   const changes = diffWordsWithSpace(before, after, { timeout: 15 });
   if (!changes) return [[], []];
   let old = 0, next = 0;
@@ -25,7 +29,10 @@ function ranges(before: string, after: string): [Range[], Range[]] {
     if (!c.added) { if (c.removed) a.push([old, old + c.value.length]); old += c.value.length; }
     if (!c.removed) { if (c.added) b.push([next, next + c.value.length]); next += c.value.length; }
   }
-  return [a, b];
+  const result: [Range[], Range[]] = [a, b];
+  rangeCache.set(cacheKey, result);
+  if (rangeCache.size > 2000) rangeCache.delete(rangeCache.keys().next().value!);
+  return result;
 }
 export function alignLines(lines: DiffLine[]): Pair[] {
   const result: Pair[] = [];
@@ -47,12 +54,32 @@ function language(path: string): string | undefined {
   const ext = path.split('.').pop()?.toLowerCase();
   return ({ ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', py: 'python', json: 'json', css: 'css', html: 'xml', svg: 'xml', xml: 'xml', sh: 'bash', md: 'markdown', yml: 'yaml', yaml: 'yaml' } as Record<string, string>)[ext ?? ''];
 }
-function Code({ text, path, changes = [] }: { text: string; path: string; changes?: Range[] }) {
+const highlightCache = new Map<string, string>();
+function getHighlightedHtml(text: string, lang: string): string {
+  const cacheKey = `${lang}\0${text}`;
+  let html = highlightCache.get(cacheKey);
+  if (html === undefined) {
+    html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    highlightCache.set(cacheKey, html);
+    if (highlightCache.size > 3000) highlightCache.delete(highlightCache.keys().next().value!);
+  }
+  return html;
+}
+const Code = React.memo(function Code({ text, path, changes = [] }: { text: string; path: string; changes?: Range[] }) {
   const nodes = useMemo(() => {
     const lang = language(path);
     const template = document.createElement('template');
-    if (lang && text.length <= 8000) template.innerHTML = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    if (lang && text.length <= 8000) template.innerHTML = getHighlightedHtml(text, lang);
     else template.content.append(document.createTextNode(text));
+    if (!changes.length) {
+      let key = 0;
+      function walkFast(node: Node): React.ReactNode {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+        const el = node as Element;
+        return <span className={el.getAttribute('class') ?? undefined} key={key++}>{Array.from(node.childNodes).map(walkFast)}</span>;
+      }
+      return Array.from(template.content.childNodes).map(walkFast);
+    }
     let offset = 0, key = 0;
     function walk(node: Node): React.ReactNode {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -71,7 +98,7 @@ function Code({ text, path, changes = [] }: { text: string; path: string; change
     return Array.from(template.content.childNodes).map(walk);
   }, [text, path, changes]);
   return <code className="dv-code">{nodes.length ? nodes : ' '}</code>;
-}
+});
 export function DiffRows({ lines, path, layout, t }: { lines: DiffLine[]; path: string; layout: 'unified' | 'split'; t: Messages }) {
   const pairs = useMemo(() => alignLines(lines), [lines]);
   const number = (line: DiffLine | undefined, side: 'old' | 'new') => {

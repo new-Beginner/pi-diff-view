@@ -64,4 +64,15 @@ describe('review service', () => {
   const detail = await service.file({ reviewId: review.id, fileId: review.files[0].id, context: -1 }); expect(detail.hunks.flatMap(h => h.lines).map(l => l.text).join('\n')).toContain('three');
   expect(JSON.stringify(detail)).not.toContain('fabricated');
  });
+ it('returns exactly one context line per side and keeps other context modes independent', async () => {
+  const before = Array.from({ length: 15 }, (_, i) => `line-${i + 1}\n`).join('');
+  run.changes['a.txt'].before = snapshotOfText(before); run.changes['a.txt'].after = snapshotOfText(before.replace('line-8\n', 'changed-8\n')); await store.writeRun(run);
+  const review = await turn(), args = { reviewId: review.id, fileId: review.files[0].id };
+  const narrow = await service.file({ ...args, context: 1 });
+  expect(narrow.totalRows).toBe(4); expect(narrow.hunks[0].header).toBe('@@ -7,3 +7,3 @@');
+  expect(narrow.hunks[0].lines.map(line => [line.kind, line.text])).toEqual([['context', 'line-7'], ['del', 'line-8'], ['add', 'changed-8'], ['context', 'line-9']]);
+  expect((await service.file(args)).totalRows).toBe(8);
+  for (const context of [20, -1]) expect((await service.file({ ...args, context })).totalRows).toBe(16);
+  expect(await service.file({ ...args, context: 1 })).toEqual(narrow);
+ });
 });

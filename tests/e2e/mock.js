@@ -30,6 +30,7 @@
     if (files.find(f => f.id === fileId)?.kind !== 'text') return [];
     const first = hunk('0:1:1', 1, 1, [line('context', 'export function review() {', 1, 1), line('del', '  const context = 3;', 2, null), line('add', '  const context = 20;', null, 2), line('add', '  const wrap = true;', null, 3), line('context', '  return context;', 3, 4), line('context', '}', 4, 5)]);
     const second = hunk('1:60:61', 60, 61, [line('del', `const description = "${'long line '.repeat(80)}old";`, 60, null), line('add', `const description = "${'long line '.repeat(80)}new";`, null, 61), line('notice', '\\ No newline at end of file', null, null)]);
+    if (context === 1) return [hunk('0:1:1', 1, 1, first.lines.slice(0, 5)), second];
     if (context !== 3) return [hunk('0:1:1-expanded', 1, 1, [...first.lines, ...Array.from({ length: context === -1 ? 140 : 20 }, (_, i) => line('context', `// Additional context ${i + 1}`, i + 5, i + 6)), ...second.lines])];
     return [first, second];
   };

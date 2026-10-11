@@ -53,6 +53,26 @@ async function recorded(count = 5): Promise<CaptureRun> {
   await store.writeRun(run); return run;
 }
 describe('USER-task final binding and bounded summaries', () => {
+  it.each(['dialogue', 'no-op', 'restored', 'failed'])('does not retain an unchanged %s task or its reply', async mode => {
+    const h = harness(); await fs.writeFile(path.join(root, 'a.txt'), 'original'); await h.emit('before_agent_start');
+    if (mode !== 'dialogue') {
+      await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'one', input: { path: 'a.txt' } });
+      if (mode === 'restored') await fs.writeFile(path.join(root, 'a.txt'), 'changed');
+      await h.emit('tool_result', { toolCallId: 'one', isError: mode === 'failed' });
+      if (mode === 'restored') {
+        const [changed] = await importRuns(); expect(changed.fileCount).toBe(1);
+        await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'restore', input: { path: 'a.txt' } });
+        await fs.writeFile(path.join(root, 'a.txt'), 'original'); await h.emit('tool_result', { toolCallId: 'restore' });
+      }
+    }
+    const reply = message('No changes'); await h.emit('message_end', { message: reply });
+    expect(await importRuns()).toEqual([]);
+    const [marker] = await store.listRuns(false, true); expect(marker.replies).toEqual([]); expect(marker.finalReply).toBeUndefined();
+    await expect(service.invoke('clearHistory', { confirmed: true })).rejects.toThrow('Stop active');
+    await h.emit('agent_end', { messages: [reply] });
+    expect(await importRuns()).toEqual([]); expect((await service.card(cardArgs(reply))).run).toBeNull();
+    for (const dir of ['inbox', 'runs']) expect(await fs.readdir(path.join(store.directory, dir))).toEqual([]);
+  });
   it('never cards a running/intermediate/tool-loop reply; only the finalized last reply binds', async () => {
     const h = harness(); await h.emit('before_agent_start');
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 'one', input: { path: 'a.txt' } });
@@ -67,7 +87,7 @@ describe('USER-task final binding and bounded summaries', () => {
     expect((await service.card(cardArgs(intermediate))).run).toBeNull(); expect((await service.card(cardArgs(final))).run?.id).toBe(run.id);
     expect((await service.card(cardArgs(final, 'other'))).run).toBeNull();
     await h.emit('before_agent_start'); await h.emit('message_end', { message: message('second task') }); await h.emit('agent_end');
-    expect(await importRuns()).toHaveLength(2);
+    expect(await importRuns()).toHaveLength(1);
   });
   it('binds the exact final reply suffix supplied by the real host aggregate, not progress or altered final text', async () => {
     const h = harness(); await h.emit('before_agent_start');
@@ -118,7 +138,7 @@ describe('USER-task final binding and bounded summaries', () => {
     const runs = await importRuns(); expect(runs).toHaveLength(1); expect(runs[0].finalReply?.hash).toBe(digest(final.content[0].text));
     expect((await service.card(cardArgs(final))).summary?.fileCount).toBe(1);
     await h.emit('before_agent_start'); await h.emit('agent_start'); await h.emit('message_end', { message: message('Separate task') }); await h.emit('agent_end');
-    const separate = await importRuns(); expect(separate).toHaveLength(2); expect(separate[0].id).not.toBe(runs[0].id); expect(separate[0].fileCount).toBe(0);
+    const separate = await importRuns(); expect(separate).toHaveLength(1); expect(separate[0].id).toBe(runs[0].id);
   });
   it.each(['aborted', 'uncertain', 'last-tool', 'missing-time'])('does not invent a final binding for %s execution', async mode => {
     const h = harness(); if (mode !== 'uncertain') await h.emit('before_agent_start');
@@ -140,12 +160,12 @@ describe('USER-task final binding and bounded summaries', () => {
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'old.txt' } });
     await h.emit('before_agent_start'); await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'new.txt' } });
     await fs.writeFile(path.join(root, 'old.txt'), 'late'); await h.emit('tool_result', { toolCallId: 'old' }); await h.emit('agent_end');
-    const runs = await importRuns(); expect(runs).toHaveLength(2); expect(runs.every(r => r.incomplete && Object.keys(r.changes).length === 0)).toBe(true);
+    const runs = await importRuns(); expect(runs).toHaveLength(0); expect(await fs.readdir(path.join(store.directory, 'runs'))).toEqual([]);
   });
   it('bounds pending before-snapshot memory and rejects over-limit stored file counts', async () => {
     const h = harness(); await h.emit('before_agent_start'); await fs.writeFile(path.join(root, 'large.txt'), 'x'.repeat(2 * 1024 * 1024));
     for (let i = 0; i < 17; i++) await h.emit('tool_call', { toolName: 'Edit', toolCallId: `pending-${i}`, input: { path: 'large.txt' } });
-    const [run] = await importRuns(); expect(run.incomplete).toBe(true);
+    await importRuns(); const [marker] = await store.listRuns(false, true); expect(marker.incomplete).toBe(true); expect(marker.replies).toEqual([]);
     await h.emit('session_shutdown');
     const oversized = await recorded(255); oversized.changes['extra.txt'] = { capture: identity('extra.txt'), before: absentSnapshot(), after: snapshotOfText('x') }; await expect(store.writeRun(oversized)).rejects.toThrow('256');
   });
@@ -154,7 +174,7 @@ describe('USER-task final binding and bounded summaries', () => {
     await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: store.directory, generation: randomUUID(), expiresAt: Date.now() + 60000 });
     await fs.writeFile(path.join(root, 'old.txt'), 'late'); vi.mocked(fs.open).mockClear();
     await h.emit('tool_result', { toolCallId: 'old' }); expect(fs.open).not.toHaveBeenCalled();
-    const [run] = await importRuns(); expect(run.changes).toEqual({});
+    expect(await importRuns()).toEqual([]); const [marker] = await store.listRuns(false, true); expect(marker.changes).toEqual({});
   });
   it('omits net-restored paths and counts all files/lines independently of metadata pagination', async () => {
     const run = await recorded(7); await fs.writeFile(path.join(root, 'unrelated.txt'), 'must not appear');
@@ -193,8 +213,8 @@ describe('USER-task final binding and bounded summaries', () => {
     const h = harness(); await h.emit('before_agent_start');
     await h.emit('tool_call', { toolName: 'write', toolCallId: 'one', input: { file_path: 'new.txt' } }); await fs.writeFile(path.join(root, 'new.txt'), 'new'); await h.emit('tool_result', { toolCallId: 'one' });
     await h.emit('tool_call', { toolName: 'edit', toolCallId: 'two', input: { file_path: 'new.txt', ops: 'REM' } }); await fs.unlink(path.join(root, 'new.txt')); await h.emit('tool_result', { toolCallId: 'two' });
-    const m = message('restored'); await h.emit('message_end', { message: m }); await h.emit('agent_end'); const [run] = await importRuns();
-    expect(run.fileCount).toBe(0); expect((await service.turnSummary({ runId: run.id, sessionId: 's' })).files).toEqual([]); expect((await service.card(cardArgs(m))).run).toBeNull();
+    const m = message('restored'); await h.emit('message_end', { message: m }); await h.emit('agent_end');
+    expect(await importRuns()).toEqual([]); expect((await service.bootstrap('s')).runs).toEqual([]); expect((await service.card(cardArgs(m))).run).toBeNull();
   });
 });
 describe('explicit external capture and safety boundaries', () => {

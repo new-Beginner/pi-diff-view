@@ -321,8 +321,17 @@ var SnapshotStore = class {
       validId(run.id);
       const changes = /* @__PURE__ */ Object.create(null);
       if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
+      const fileCount = Object.values(run.changes).filter((c) => !sameSnapshot(c.before, c.after)).length;
+      if (!fileCount) {
+        if (run.state === "running") {
+          const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run;
+          await atomicJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
+        } else {
+          for (const sub of ["runs", "inbox"]) await fs2.rm(path2.join(this.directory, sub, `${run.id}.json`), { force: true });
+        }
+        return;
+      }
       for (const [p, c] of Object.entries(run.changes)) changes[p] = { ...c, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
-      const fileCount = Object.values(changes).filter((c) => !sameSnapshot(c.before, c.after)).length;
       await atomicJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, fileCount, changes });
     };
     if (inbox) await this.captureLock(save);
@@ -357,13 +366,13 @@ var SnapshotStore = class {
       }
     });
   }
-  async listRuns(hydrate = true) {
+  async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await fs2.readdir(path2.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
     const runs = [];
     for (const file of files.slice(-MAX_RUNS * 2)) {
       try {
         const run = await this.getRun(file.slice(0, -5), false, hydrate);
-        if (run) runs.push(run);
+        if (run && (includeUnchanged || Object.values(run.changes).some((c) => !sameSnapshot(c.before, c.after)))) runs.push(run);
       } catch {
       }
     }
@@ -385,7 +394,7 @@ var SnapshotStore = class {
 `, { mode: 384 });
   }
   async prune() {
-    const runs = await this.listRuns(false);
+    const runs = await this.listRuns(false, true);
     let used = 0;
     const keep = /* @__PURE__ */ new Set();
     for (const run of runs) {

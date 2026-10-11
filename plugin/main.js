@@ -311,8 +311,17 @@ var SnapshotStore = class {
       validId(run.id);
       const changes2 = /* @__PURE__ */ Object.create(null);
       if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
+      const fileCount = Object.values(run.changes).filter((c) => !sameSnapshot(c.before, c.after)).length;
+      if (!fileCount) {
+        if (run.state === "running") {
+          const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run;
+          await atomicJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
+        } else {
+          for (const sub of ["runs", "inbox"]) await import_promises2.default.rm(import_node_path2.default.join(this.directory, sub, `${run.id}.json`), { force: true });
+        }
+        return;
+      }
       for (const [p, c] of Object.entries(run.changes)) changes2[p] = { ...c, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
-      const fileCount = Object.values(changes2).filter((c) => !sameSnapshot(c.before, c.after)).length;
       await atomicJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, fileCount, changes: changes2 });
     };
     if (inbox) await this.captureLock(save);
@@ -347,13 +356,13 @@ var SnapshotStore = class {
       }
     });
   }
-  async listRuns(hydrate = true) {
+  async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
     const runs = [];
     for (const file of files.slice(-MAX_RUNS * 2)) {
       try {
         const run = await this.getRun(file.slice(0, -5), false, hydrate);
-        if (run) runs.push(run);
+        if (run && (includeUnchanged || Object.values(run.changes).some((c) => !sameSnapshot(c.before, c.after)))) runs.push(run);
       } catch {
       }
     }
@@ -375,7 +384,7 @@ var SnapshotStore = class {
 `, { mode: 384 });
   }
   async prune() {
-    const runs = await this.listRuns(false);
+    const runs = await this.listRuns(false, true);
     let used = 0;
     const keep = /* @__PURE__ */ new Set();
     for (const run of runs) {
@@ -1677,8 +1686,15 @@ var ReviewService = class {
   async file(args) {
     const review = this.get(args.reviewId), file = review.files.find((f) => f.id === args.fileId);
     if (!file) fail("FILE_NOT_FOUND", "File not in this review");
-    const context = args.context === -1 ? 1e6 : Math.min(1e6, Math.max(3, Number(args.context) || 3));
-    const hunks = file.kind === "text" ? buildHunks(file.before.text ?? "", file.after.text ?? "", context) : [];
+    const context = args.context === -1 ? 1e6 : Math.min(1e6, Math.max(1, Math.floor(Number(args.context) || 3)));
+    review.hunksCache ??= /* @__PURE__ */ new Map();
+    const cacheKey = `${file.id}:${context}`;
+    let hunks = review.hunksCache.get(cacheKey);
+    if (!hunks) {
+      hunks = file.kind === "text" ? buildHunks(file.before.text ?? "", file.after.text ?? "", context) : [];
+      review.hunksCache.set(cacheKey, hunks);
+      while (review.hunksCache.size > 50) review.hunksCache.delete(review.hunksCache.keys().next().value);
+    }
     const totalRows = hunks.reduce((n, h) => n + h.lines.length, 0);
     const offset = Math.max(0, Math.floor(Number(args.offset) || 0)), limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit) || 80)));
     let skipped = 0, taken = 0, bytes = 0, full = false;
@@ -1916,7 +1932,7 @@ ${text}`;
       case "clearHistory":
         if (!args.confirmed) fail("CONFIRM_REQUIRED", "Confirm clearing plugin history");
         await this.store.importInbox(this.generation);
-        if ((await this.store.listRuns(false)).some((r) => r.state === "running")) fail("AGENT_BUSY", "Stop active captures before clearing history");
+        if ((await this.store.listRuns(false, true)).some((r) => r.state === "running")) fail("AGENT_BUSY", "Stop active captures before clearing history");
         await this.store.clear();
         this.reviews.clear();
         this.summaries.clear();

@@ -102,8 +102,18 @@ export class SnapshotStore {
     const save = async () => {
       validId(run.id); const changes: CaptureRun['changes'] = Object.create(null);
       if (Object.keys(run.changes).length > 256) fail('STORE_LIMIT', 'Turn exceeds 256 captured files');
+      const fileCount = Object.values(run.changes).filter(c => !sameSnapshot(c.before, c.after)).length;
+      if (!fileCount) {
+        // Keep only a live marker for clear/prune safety; never retain empty-turn conversations.
+        if (run.state === 'running') {
+          const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run;
+          await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
+        } else {
+          for (const sub of ['runs', 'inbox']) await fs.rm(path.join(this.directory, sub, `${run.id}.json`), { force: true });
+        }
+        return;
+      }
       for (const [p, c] of Object.entries(run.changes)) changes[p] = { ...c, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
-      const fileCount = Object.values(changes).filter(c => !sameSnapshot(c.before, c.after)).length;
       await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, fileCount, changes });
     };
     if (inbox) await this.captureLock(save); else await save();
@@ -134,10 +144,10 @@ export class SnapshotStore {
     }
     });
   }
-  async listRuns(hydrate = true): Promise<CaptureRun[]> {
+  async listRuns(hydrate = true, includeUnchanged = false): Promise<CaptureRun[]> {
     const files = (await fs.readdir(path.join(this.directory, 'runs'))).filter(e => /^[\w-]+\.json$/.test(e));
     const runs: CaptureRun[] = [];
-    for (const file of files.slice(-MAX_RUNS * 2)) { try { const run = await this.getRun(file.slice(0, -5), false, hydrate); if (run) runs.push(run); } catch { /* isolated corrupt record */ } }
+    for (const file of files.slice(-MAX_RUNS * 2)) { try { const run = await this.getRun(file.slice(0, -5), false, hydrate); if (run && (includeUnchanged || Object.values(run.changes).some(c => !sameSnapshot(c.before, c.after)))) runs.push(run); } catch { /* isolated corrupt record */ } }
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
   async comments(): Promise<ReviewComment[]> { return readJson<ReviewComment[]>(path.join(this.directory, 'comments.json'), []); }
@@ -149,7 +159,7 @@ export class SnapshotStore {
     await fs.appendFile(file, `${JSON.stringify({ timestamp: Date.now(), event })}\n`, { mode: 0o600 });
   }
   async prune(): Promise<void> {
-    const runs = await this.listRuns(false); let used = 0; const keep = new Set<string>();
+    const runs = await this.listRuns(false, true); let used = 0; const keep = new Set<string>();
     for (const run of runs) {
       const hashes = Object.values(run.changes).flatMap(c => [c.before, c.after]).filter(s => s.exists && s.kind === 'text');
       const cost = hashes.reduce((n, s) => n + s.size, 0);

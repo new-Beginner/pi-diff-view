@@ -1,7 +1,7 @@
 import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Bootstrap, CapturedChange, CaptureRun, GitScope, InternalFile, LineAnchor, RepositoryInfo, ReplyCard, ReplyCardsPage, ReviewActionRequest, ReviewComment, ReviewDetail, ReviewFile, ReviewRequest, ReviewSummary, RunSummary, TurnSummary } from './contracts';
+import type { Bootstrap, CapturedChange, CaptureRun, DiffHunk, GitScope, InternalFile, LineAnchor, RepositoryInfo, ReplyCard, ReplyCardsPage, ReviewActionRequest, ReviewComment, ReviewDetail, ReviewFile, ReviewRequest, ReviewSummary, RunSummary, TurnSummary } from './contracts';
 import { assertPublicPath, canonical, digest, fail, sameSnapshot } from './path-policy';
 import { buildHunks, patchText, publicFile, stats } from './diff';
 import { SnapshotStore, atomicJson, readJson } from './storage';
@@ -9,7 +9,7 @@ import { replaceSnapshot } from './rollback';
 import { discoverRepository, readGitReview, type GitReview } from '../git/repository';
 import { applyGitAction } from '../git/actions';
 export interface ServiceHost { workspace(): Promise<{ path: string; roots?: (string | { path: string })[] } | null>; settings(): Promise<Record<string, unknown>>; setSettings(value: Record<string, unknown>): Promise<void>; appearance(): Promise<{ locale?: string; base?: string }>; clipboard(text: string): Promise<void>; openPanel(): Promise<void>; }
-interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; }
+interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; hunksCache?: Map<string, DiffHunk[]>; }
 function runSummary(run: CaptureRun): RunSummary { return { id: run.id, sessionId: run.sessionId, root: run.root, startedAt: run.startedAt, endedAt: run.endedAt, state: run.state, fileCount: Object.values(run.changes).filter(c => !sameSnapshot(c.before, c.after)).length, incomplete: run.incomplete }; }
 function turnNotice(run: CaptureRun): string | undefined {
   const notices: string[] = [];
@@ -138,8 +138,15 @@ export class ReviewService {
   async file(args: { reviewId: string; fileId: string; offset?: number; limit?: number; context?: number }): Promise<ReviewDetail> {
     const review = this.get(args.reviewId), file = review.files.find(f => f.id === args.fileId);
     if (!file) fail('FILE_NOT_FOUND', 'File not in this review');
-    const context = args.context === -1 ? 1000000 : Math.min(1000000, Math.max(3, Number(args.context) || 3));
-    const hunks = file.kind === 'text' ? buildHunks(file.before.text ?? '', file.after.text ?? '', context) : [];
+    const context = args.context === -1 ? 1000000 : Math.min(1000000, Math.max(1, Math.floor(Number(args.context) || 3)));
+    review.hunksCache ??= new Map();
+    const cacheKey = `${file.id}:${context}`;
+    let hunks = review.hunksCache.get(cacheKey);
+    if (!hunks) {
+      hunks = file.kind === 'text' ? buildHunks(file.before.text ?? '', file.after.text ?? '', context) : [];
+      review.hunksCache.set(cacheKey, hunks);
+      while (review.hunksCache.size > 50) review.hunksCache.delete(review.hunksCache.keys().next().value!);
+    }
     const totalRows = hunks.reduce((n, h) => n + h.lines.length, 0);
     const offset = Math.max(0, Math.floor(Number(args.offset) || 0)), limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit) || 80)));
     let skipped = 0, taken = 0, bytes = 0, full = false;
@@ -301,7 +308,7 @@ export class ReviewService {
       case 'copyPatch': { const r = this.get(args.reviewId), files = r.files.filter(f => !args.fileId || f.id === args.fileId); if (!files.length || files.some(f => f.kind === 'unavailable')) fail('FILE_NOT_FOUND', 'No validated captured content for this file'); await this.host.clipboard(files.map(patchText).join('\n')); return { ok: true }; }
       case 'settings': { const settings: Record<string, unknown> = {}; if (['split', 'unified'].includes(args.layout)) settings.layout = args.layout; if (typeof args.wordWrap === 'boolean') settings.wordWrap = args.wordWrap; await this.host.setSettings(settings); return; }
       case 'openPanel': return this.host.openPanel();
-      case 'clearHistory': if (!args.confirmed) fail('CONFIRM_REQUIRED', 'Confirm clearing plugin history'); await this.store.importInbox(this.generation); if ((await this.store.listRuns(false)).some(r => r.state === 'running')) fail('AGENT_BUSY', 'Stop active captures before clearing history'); await this.store.clear(); this.reviews.clear(); this.summaries.clear(); return;
+      case 'clearHistory': if (!args.confirmed) fail('CONFIRM_REQUIRED', 'Confirm clearing plugin history'); await this.store.importInbox(this.generation); if ((await this.store.listRuns(false, true)).some(r => r.state === 'running')) fail('AGENT_BUSY', 'Stop active captures before clearing history'); await this.store.clear(); this.reviews.clear(); this.summaries.clear(); return;
       default: fail('UNKNOWN_METHOD', 'Unknown Diff view method');
     }
   }

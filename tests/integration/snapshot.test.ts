@@ -44,7 +44,12 @@ describe('snapshots and guarded restore', () => {
     const hash = runs[0].changes['a.txt'].after.hash; await fs.unlink(path.join(data, 'blobs', hash)); const store = new SnapshotStore(data); expect((await store.getRun(runs[0].id))?.changes['a.txt'].after.kind).toBe('unavailable');
   });
   it('isolates concurrent sessions and rejects expired generations', async () => {
-    const a = harness('A'), b = harness('B'); await a.emit('before_agent_start'); await b.emit('before_agent_start'); await a.emit('agent_end'); await b.emit('agent_end'); expect(new Set((await imported()).map(r => r.sessionId)).size).toBe(2);
+    const a = harness('A'), b = harness('B'); await a.emit('before_agent_start'); await b.emit('before_agent_start');
+    for (const [h, file] of [[a, 'a.txt'], [b, 'b.txt']] as const) {
+      await h.emit('tool_call', { toolName: 'Write', toolCallId: file, input: { path: file } });
+      await fs.writeFile(path.join(root, file), file); await h.emit('tool_result', { toolCallId: file }); await h.emit('agent_end');
+    }
+    expect(new Set((await imported()).map(r => r.sessionId)).size).toBe(2);
     await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: data, generation, expiresAt: 0 }); const c = harness('C'); await c.emit('before_agent_start'); expect((await imported()).some(r => r.sessionId === 'C')).toBe(false);
   });
   it('marks a retry without a new user boundary incomplete and ignores late results', async () => {
@@ -54,7 +59,7 @@ describe('snapshots and guarded restore', () => {
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 'new', input: { path: 'b.txt' } });
     await fs.writeFile(path.join(root, 'a.txt'), 'late'); await h.emit('tool_result', { toolCallId: 'old' });
     await fs.writeFile(path.join(root, 'b.txt'), 'new'); await h.emit('tool_result', { toolCallId: 'new' }); await h.emit('agent_end');
-    const runs = await imported(); expect(runs).toHaveLength(2); expect(runs.every(r => r.incomplete)).toBe(true);
+    const runs = await imported(); expect(runs).toHaveLength(1); expect(runs.every(r => r.incomplete)).toBe(true);
     expect(runs.find(r => r.fileCount === 1)?.changes['b.txt'].after.text).toBe('new');
     expect(runs.every(r => !r.changes['a.txt'])).toBe(true);
   });

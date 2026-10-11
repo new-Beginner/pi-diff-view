@@ -4,7 +4,7 @@ import { DiffRows } from './DiffRows';
 import FilePath from './FilePath';
 import { messages, kindLabel } from './i18n';
 import { ensureBounded } from './transport';
-import { useDiffDetail } from './useDiffDetail';
+import { useDiffDetail, prefetchDiffDetail } from './useDiffDetail';
 import './review.css';
 
 export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; navigationKey?: string; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
@@ -73,6 +73,15 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     if (detail && initialRequest.runId && (!initialFileId || selected === initialFileId)) void transport.invoke('rendererReport', { stage: 'view-targeted' }).catch(() => {});
   }, [transport, detail?.file.id, initialRequest.runId]);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
+  useEffect(() => {
+    if (!validReview?.id || !review?.files.length) return;
+    const reviewId = validReview.id;
+    const candidates = review.files.filter(f => f.kind === 'text' && f.id !== selected).slice(0, 8);
+    const timer = setTimeout(() => {
+      for (const file of candidates) prefetchDiffDetail(transport, reviewId, file.id, context, detailTick);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [transport, validReview?.id, review, selected, context, detailTick]);
   useEffect(() => { if (hostLocale) setLocale(hostLocale); }, [hostLocale]);
   useEffect(() => { if (hostBase) setBase(hostBase); }, [hostBase]);
   useEffect(() => {
@@ -105,7 +114,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     return () => { active = false; };
   }, [transport, bootTick]);
   useEffect(() => {
-    if (!boot) return;
+    if (!boot && !request.root && !request.sessionId && !request.runId) return;
     let active = true;
     setLoadingReview(false); setReview(null); setReviewError(''); setConfirmation(null); setCollapsed(new Set());
     if (!request.root && !request.sessionId && !request.runId) return;
@@ -167,7 +176,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const actionButtons = (file: ReviewFile, hunk?: DiffHunk) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || loadingDetail} onClick={() => { setError(''); if (review) setConfirmation({ kind: 'action', action, file, hunk, review }); }}>{t[action]}</button>);
   const selectedIndex = visibleFiles.findIndex(file => file.id === selected);
   const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id}>
-    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onClick={() => { if (file.id === selected) setFileCollapsed(value => !value); else { resetPage(); setSelected(file.id); setFileCollapsed(false); } }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.path} · ${t[file.status]}`}>
+    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) setFileCollapsed(value => !value); else { resetPage(); setSelected(file.id); setFileCollapsed(false); } }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.path} · ${t[file.status]}`}>
       <span className="dv-file-type" aria-hidden="true">{file.path.split('.').pop()?.slice(0, 3).toUpperCase() || '◇'}</span><span className="dv-file-name"><FilePath path={file.path} /></span><span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">−{file.deletions}</span></span><span className="dv-file-chevron" aria-hidden="true">{file.id === selected && !fileCollapsed ? '⌃' : '⌄'}</span>
     </button>
     {file.id === selected && <details className="dv-menu dv-file-menu"><summary aria-label={t.action} title={t.action}>···</summary><div className="dv-menu-body">{actionButtons(file)}<button disabled={busy} onClick={copyPatch}>{t.copy}</button>{file.oldPath && <p>← {file.oldPath}</p>}<p className="dv-muted">{t[file.status]} · {kindLabel(file.kind, locale)}</p>{file.note && <p className="dv-muted">{file.note}</p>}</div></details>}
@@ -187,7 +196,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
             <button disabled={busy || loadingReview} onClick={() => setBootTick(value => value + 1)}>{t.refresh}</button>
             <label className="dv-check"><input type="checkbox" checked={wrap} onChange={event => saveSettings({ wordWrap: event.target.checked })} />{t.wrap}</label>
             <div className="dv-segment" role="group" aria-label={t.settings}><button aria-pressed={layout === 'unified'} onClick={() => saveSettings({ layout: 'unified' })}>{t.unified}</button><button aria-pressed={layout === 'split'} onClick={() => saveSettings({ layout: 'split' })}>{t.split}</button></div>
-            <label>{t.context}<select aria-label={t.context} value={context} disabled={busy} onChange={event => { resetPage(); setContext(Number(event.target.value)); }}><option value={3}>3</option><option value={20}>20</option><option value={-1}>{t.full}</option></select></label>
+            <label>{t.context}<select aria-label={t.context} value={context} disabled={busy} onChange={event => { resetPage(); setContext(Number(event.target.value)); }}><option value={1}>1</option><option value={3}>3</option><option value={20}>20</option><option value={-1}>{t.full}</option></select></label>
             <button disabled={!detail?.hunks.length} onClick={() => setCollapsed(new Set(detail?.hunks.map(hunk => hunk.id)))}>{locale.startsWith('zh') ? '折叠全部差异' : 'Collapse all hunks'}</button>
             <button disabled={!detail?.hunks.length} onClick={() => setCollapsed(new Set())}>{locale.startsWith('zh') ? '展开全部差异' : 'Expand all hunks'}</button>
             <hr />
