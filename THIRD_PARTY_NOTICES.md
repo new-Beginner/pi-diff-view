@@ -10,7 +10,7 @@ Diff view 以 MIT 许可发布。
 打包运行依赖：
 | 依赖 | 版本 | 许可 |
 |---|---|---|
-| diff | 8.0.2 | BSD-3-Clause |
+| diff | 8.0.4 | BSD-3-Clause |
 | highlight.js | 11.11.1 | BSD-3-Clause |
 | React / React DOM | 18.3.1 | MIT |
 

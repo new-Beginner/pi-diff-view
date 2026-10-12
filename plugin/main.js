@@ -466,6 +466,11 @@ function tokenize(value, options) {
 }
 
 // node_modules/diff/libesm/patch/create.js
+var INCLUDE_HEADERS = {
+  includeIndex: true,
+  includeUnderline: true,
+  includeFileHeaders: true
+};
 function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
   let optionsObj;
   if (!options) {
@@ -572,17 +577,27 @@ function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, ne
     };
   }
 }
-function formatPatch(patch) {
+function formatPatch(patch, headerOptions) {
+  if (!headerOptions) {
+    headerOptions = INCLUDE_HEADERS;
+  }
   if (Array.isArray(patch)) {
-    return patch.map(formatPatch).join("\n");
+    if (patch.length > 1 && !headerOptions.includeFileHeaders) {
+      throw new Error("Cannot omit file headers on a multi-file patch. (The result would be unparseable; how would a tool trying to apply the patch know which changes are to which file?)");
+    }
+    return patch.map((p) => formatPatch(p, headerOptions)).join("\n");
   }
   const ret = [];
-  if (patch.oldFileName == patch.newFileName) {
+  if (headerOptions.includeIndex && patch.oldFileName == patch.newFileName) {
     ret.push("Index: " + patch.oldFileName);
   }
-  ret.push("===================================================================");
-  ret.push("--- " + patch.oldFileName + (typeof patch.oldHeader === "undefined" ? "" : "	" + patch.oldHeader));
-  ret.push("+++ " + patch.newFileName + (typeof patch.newHeader === "undefined" ? "" : "	" + patch.newHeader));
+  if (headerOptions.includeUnderline) {
+    ret.push("===================================================================");
+  }
+  if (headerOptions.includeFileHeaders) {
+    ret.push("--- " + patch.oldFileName + (typeof patch.oldHeader === "undefined" ? "" : "	" + patch.oldHeader));
+    ret.push("+++ " + patch.newFileName + (typeof patch.newHeader === "undefined" ? "" : "	" + patch.newHeader));
+  }
   for (let i = 0; i < patch.hunks.length; i++) {
     const hunk = patch.hunks[i];
     if (hunk.oldLines === 0) {
@@ -607,14 +622,14 @@ function createTwoFilesPatch(oldFileName, newFileName, oldStr, newStr, oldHeader
     if (!patchObj) {
       return;
     }
-    return formatPatch(patchObj);
+    return formatPatch(patchObj, options === null || options === void 0 ? void 0 : options.headerOptions);
   } else {
     const { callback } = options;
     structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, Object.assign(Object.assign({}, options), { callback: (patchObj) => {
       if (!patchObj) {
         callback(void 0);
       } else {
-        callback(formatPatch(patchObj));
+        callback(formatPatch(patchObj, options.headerOptions));
       }
     } }));
   }

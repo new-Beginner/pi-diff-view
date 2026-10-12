@@ -4,8 +4,10 @@ import { execFileSync } from 'node:child_process';
 
 // Publish a fresh, allowlisted snapshot, never the local repository history.
 const root = process.cwd();
-const destination = path.join(root, 'output', 'public');
-try { await fs.lstat(destination); throw new Error('output/public already exists; inspect it before preparing another release'); }
+const outputName = process.argv[2] || 'public';
+if (!/^[a-zA-Z0-9.-]+$/.test(outputName) || outputName === '.' || outputName === '..') throw new Error('Use a simple public output directory name');
+const destination = path.join(root, 'output', outputName);
+try { await fs.lstat(destination); throw new Error(`${destination} already exists; inspect it before preparing another release`); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 const rootFiles = new Set(['.gitattributes', '.gitignore', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts']);
 const runtimeFiles = new Set(['manifest.json', 'package.json', 'main.js', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'agent/index.mjs', 'renderer/index.mjs', 'views/index.html', 'views/index.js', 'views/index.css', 'licenses/diff.txt', 'licenses/highlight.js.txt', 'licenses/react.txt', 'licenses/react-dom.txt']);
