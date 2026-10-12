@@ -81,3 +81,64 @@ it('honors the explicit current identity instead of making a later visible user 
   expect(runs.filter(run => run.state === 'running').map(run => run.userMessageId)).toEqual(['new-user']);
   expect((await store.getRun(hostHistoryRunId(sid, 'new-user')))!.changes['native.txt'].evidence).toContain('native:child-tool');
 });
+
+it('never imports the previous turn into a new empty capture with a stale user identity', async () => {
+  await session([user('old-user', now), tool('old-tool', now + 1000), reply('old-reply', now + 2000), user('new-user', now + 4000)]);
+  const old = captured('old-main', 'old-user', now);
+  const next = { ...captured('new-main', 'old-user', now + 4010), changes: {}, fileCount: 0 };
+  await store.writeRun(old); await store.writeRun(next);
+  await importer.syncSession(sid, root, context());
+  expect((await store.getRun(next.id))!.changes).toEqual({});
+  expect((await store.getRun(old.id))!).toMatchObject({ state: 'completed', replyMessageId: 'old-reply' });
+});
+
+it('repairs old native recovery pollution using exact new tool ownership without growing the previous turn', async () => {
+  await session([user('old-user', now), tool('old-tool', now + 1000), reply('old-reply', now + 2000), user('new-user', now + 4000), tool('new-tool', now + 5000)]);
+  await importer.syncSession(sid, root, context());
+  const old = (await store.getRun(hostHistoryRunId(sid, 'old-user')))!;
+  const next = captured('polluted-main', 'old-user', now + 4010, ['write:new-tool']);
+  next.changes['native.txt'] = old.changes['native.txt'];
+  next.hostRecovery = { captureVersion: 3, files: { 'native.txt': 'legacy-checkpoint' } };
+  const oldOnly = { ...old.changes['native.txt'], capture: { ...old.changes['native.txt'].capture!, path: 'old-only.txt', absolutePath: path.join(root, 'old-only.txt'), identity: canonical(path.join(root, 'old-only.txt')), id: digest(canonical(path.join(root, 'old-only.txt'))).slice(0, 24) } };
+  old.changes['old-only.txt'] = oldOnly; await store.writeRun(old);
+  next.changes['old-only.txt'] = oldOnly; next.hostRecovery!.files!['old-only.txt'] = 'legacy-checkpoint';
+  next.replyMessageId = 'old-reply'; next.endedAt = now + 2000; next.state = 'completed';
+  await store.writeRun(next);
+  for (let i = 0; i < 3; i++) {
+    await importer.syncSession(sid, root, context());
+    const fixed = (await store.getRun(next.id))!;
+    expect(fixed).toMatchObject({ userMessageId: 'new-user', state: 'running' });
+    expect(fixed.replyMessageId).toBeUndefined(); expect(fixed.endedAt).toBeUndefined();
+    expect(fixed.changes['native.txt'].evidence).toEqual(['native:new-tool']);
+    expect(fixed.changes['old-only.txt']).toBeUndefined();
+    expect((await store.getRun(old.id))!).toMatchObject({ state: 'completed', fileCount: 2 });
+    expect(await store.getRun(hostHistoryRunId(sid, 'new-user'))).toBeNull();
+  }
+  await session([user('old-user', now), tool('old-tool', now + 1000), reply('old-reply', now + 2000), user('new-user', now + 4000), tool('new-tool', now + 5000), reply('new-reply', now + 6000)]);
+  await importer.syncSession(sid, root, { running: false });
+  const settled = (await store.getRun(next.id))!;
+  expect(settled).toMatchObject({ userMessageId: 'new-user', state: 'completed', replyMessageId: 'new-reply', fileCount: 2 });
+  await importer.syncSession(sid, root, { running: false });
+  expect(await store.getRun(next.id)).toEqual(settled);
+  expect((await store.listRuns(false, true)).filter(run => run.state === 'running')).toEqual([]);
+});
+
+it('settles every matching capture instead of leaving the second old capture running', async () => {
+  await session([user('old-user', now), reply('old-reply', now + 2000), user('new-user', now + 4000)]);
+  const captures = [captured('old-a', 'old-user', now), captured('old-b', 'old-user', now + 10)];
+  for (const run of captures) { await store.writeRun(run); await store.writeRun(run, true); }
+  await importer.syncSession(sid, root, context());
+  await store.importInbox('generation');
+  for (const run of captures) expect((await store.getRun(run.id))!).toMatchObject({ state: 'completed', replyMessageId: 'old-reply' });
+  expect((await store.listRuns(false, true)).filter(run => run.state === 'running').map(run => run.userMessageId)).toEqual(['new-user']);
+});
+
+it('does not use a stale identity to merge genuinely mixed tool ownership', async () => {
+  await session([user('old-user', now), tool('old-tool', now + 1000), reply('old-reply', now + 2000), user('new-user', now + 4000), tool('new-tool', now + 5000)]);
+  const mixed = captured('mixed-child', 'old-user', now + 4010, ['write:old-tool', 'write:new-tool']);
+  await store.writeRun(mixed);
+  await importer.syncSession(sid, root, context());
+  expect(Object.keys((await store.getRun(mixed.id))!.changes)).toEqual(['agent.txt']);
+  expect((await store.getRun(hostHistoryRunId(sid, 'old-user')))!.state).toBe('completed');
+  expect((await store.getRun(hostHistoryRunId(sid, 'new-user')))!.state).toBe('running');
+});

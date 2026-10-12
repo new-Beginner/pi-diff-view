@@ -1,0 +1,34 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.14",
+  "package": "plugin/dist/local.diff-view-1.4.14.piplug",
+  "packageBytes": 2780330,
+  "packageFiles": 86,
+  "sha256": "c55efd28dfd373d09d6995cc644b3634da526a220dce8ccf6ea55dee0632e14d",
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed; final code bundle hashes match the browser-tested build",
+    "unitIntegration": { "filesPassed": 38, "testsPassed": 333, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "targetedIntegration": { "testsPassed": 91, "oldImplementationReproduction": "All four new current-turn regressions failed before the fix; the full suite includes strengthened completion and repeated-refresh assertions" },
+    "browser": { "testsPassed": 126, "testsFailed": 0, "browser": "local Chrome", "host": "actual components and production bundle with controlled host bridges, not native client acceptance" },
+    "realHistoryReplay": { "passes": 3, "oldTurnFiles": 13, "newTurnFiles": 12, "bothSettled": true, "idleRunningRecords": 0, "repeatImports": [0, 0], "repeatRecordsIdentical": true, "originalStoreModified": false, "warnings": ["Unlinked host modification evidence remained explicitly unlinked"] },
+    "pluginCheck": "passed",
+    "pluginPack": "passed",
+    "archiveIntegrity": "SHA-256 verified; all 86 files use ZIP_STORED and match the final plugin directory",
+    "unchangedBundles": ["agent/index.mjs", "renderer/index.mjs", "views/index.js", "views/index.css"],
+    "unchangedBundleComparison": "byte-identical to the 1.4.13 archive",
+    "gitDiffCheck": "passed",
+    "versionConsistency": "package, lock root, manifest and runtime are 1.4.14"
+  },
+  "changes": [
+    "Reject obsolete user bindings contradicted by a later explicit USER boundary; do not infer ownership from time proximity",
+    "Reject fallback identity merges when known tool ownership conflicts",
+    "Repair only importer-owned native recovery entries with exact earlier-turn tool ownership; preserve original, mixed and unlinked capture evidence",
+    "Clear obsolete reply bindings when exact tool ownership repairs the user identity",
+    "Settle every matching capture rather than only the first one",
+    "Preserve existing inbox-version protection, snapshot recovery, UI, Agent capture and Git behavior"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostFilesModified": false, "gitStageCommitPushPerformed": false },
+  "report": "docs/verification-1.4.14.md"
+}

@@ -2903,20 +2903,30 @@ var HostHistoryImporter = class {
     await this.store.captureLock(async () => {
       const existing = await this.store.listRuns(false, true);
       const users = ordered.filter((m) => m.role === "user" && !m.parent && !m.meta.steering);
+      const nextBoundary = new Map(users.slice(0, -1).map((user, index) => [user.id, users[index + 1].createdAt]));
+      const refOwner = (ref) => {
+        const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
+        return message?.blocks.some((b) => b.type === "tool_call" && b.callId === callId) ? owner(message) : void 0;
+      };
+      const foreignRecovery = (run2, value, change) => run2.hostRecovery?.files?.[value] !== void 0 && !!change.evidence?.length && change.evidence.every((ref) => {
+        const boundary = nextBoundary.get(refOwner(ref) ?? "");
+        return ref.startsWith("native:") && !!boundary && run2.startedAt >= boundary;
+      });
       for (const user of users) {
         const turnEvents = events.filter((e) => owner(e.message) === user.id);
         const live = running && (taskId ? user.id === taskId : user === users.at(-1));
         const id = hostHistoryRunId(sessionId, user.id);
-        const duplicate = existing.find((r) => {
+        const duplicates = existing.filter((r) => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === "host-history") return false;
-          const refs = Object.values(r.changes).flatMap((c) => c.evidence ?? []);
-          const linkedOwners = refs.map((ref) => {
-            const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
-            return message?.blocks.some((b) => b.type === "tool_call" && b.callId === callId) ? owner(message) : void 0;
-          });
-          const verifiedOwner = linkedOwners[0] && Object.values(r.changes).every((c) => !!c.evidence?.length) && linkedOwners.every((id2) => id2 === linkedOwners[0]) ? linkedOwners[0] : void 0;
-          return verifiedOwner ? verifiedOwner === user.id : r.userMessageId === user.id;
+          const attributable = Object.entries(r.changes).filter(([value, change]) => !foreignRecovery(r, value, change));
+          const linkedOwners = attributable.flatMap(([, c]) => c.evidence ?? []).map(refOwner);
+          const verifiedOwner = linkedOwners[0] && attributable.every(([, c]) => !!c.evidence?.length) && linkedOwners.every((id2) => id2 === linkedOwners[0]) ? linkedOwners[0] : void 0;
+          if (verifiedOwner) return verifiedOwner === user.id;
+          if (linkedOwners.some((id2) => id2 && id2 !== user.id)) return false;
+          const boundary = nextBoundary.get(user.id);
+          return r.userMessageId === user.id && !(boundary && r.startedAt >= boundary);
         });
+        const duplicate = duplicates[0];
         const previous = await this.store.getRun(id);
         if (previous && (previous.source !== "host-history" || canonical(previous.root) !== canonical(root))) {
           d.skipped++;
@@ -2950,58 +2960,67 @@ var HostHistoryImporter = class {
         }
         const incomplete = Object.values(changes2).some((c) => c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
         const run2 = { version: 2, id, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live ? void 0 : retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, state: live ? "running" : replyId ? "completed" : "incomplete", fileCount: Object.keys(changes2).length, incomplete, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
-        if (duplicate) {
-          const liveRun = await this.store.getRun(duplicate.id);
-          const recoveredFiles = { ...liveRun.hostRecovery?.files };
-          let changed = false;
-          if (liveRun.userMessageId !== user.id || liveRun.boundary !== "user") {
-            liveRun.userMessageId = user.id;
-            liveRun.boundary = "user";
-            changed = true;
-          }
-          if (live && (liveRun.replyMessageId || liveRun.finalReply || Object.keys(liveRun.bindings).length)) {
-            delete liveRun.replyMessageId;
-            delete liveRun.finalReply;
-            liveRun.bindings = {};
-            changed = true;
-          }
-          if (replyId && liveRun.replyMessageId !== replyId) {
-            liveRun.replyMessageId = replyId;
-            changed = true;
-          }
-          for (const [value, change] of Object.entries(changes2)) {
-            const old = liveRun.changes[value];
-            const complete = change.before.kind === "text" && change.after.kind === "text";
-            if (!old || complete && (old.ambiguous || old.before.kind === "unavailable" || old.after.kind === "unavailable") || old.evidence?.some((e) => e.startsWith("native:"))) {
-              const signature2 = (c) => c && JSON.stringify({ ...c, diffStats: void 0 });
-              if (signature2(old) !== signature2(change)) {
-                recoveredFiles[value] ??= captureCheckpoint(old);
-                liveRun.changes[value] = change;
-                changed = true;
+        if (duplicates.length) {
+          for (const duplicate2 of duplicates) {
+            const liveRun = await this.store.getRun(duplicate2.id);
+            const recoveredFiles = { ...liveRun.hostRecovery?.files };
+            let changed = false;
+            for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change)) {
+              delete liveRun.changes[value];
+              delete recoveredFiles[value];
+              changed = true;
+            }
+            if (liveRun.userMessageId !== user.id || liveRun.boundary !== "user") {
+              liveRun.userMessageId = user.id;
+              liveRun.boundary = "user";
+              delete liveRun.replyMessageId;
+              liveRun.bindings = {};
+              changed = true;
+            }
+            if (live && (liveRun.replyMessageId || liveRun.finalReply || Object.keys(liveRun.bindings).length)) {
+              delete liveRun.replyMessageId;
+              delete liveRun.finalReply;
+              liveRun.bindings = {};
+              changed = true;
+            }
+            if (replyId && liveRun.replyMessageId !== replyId) {
+              liveRun.replyMessageId = replyId;
+              changed = true;
+            }
+            for (const [value, change] of Object.entries(changes2)) {
+              const old = liveRun.changes[value];
+              const complete = change.before.kind === "text" && change.after.kind === "text";
+              if (!old || complete && (old.ambiguous || old.before.kind === "unavailable" || old.after.kind === "unavailable") || old.evidence?.some((e) => e.startsWith("native:"))) {
+                const signature2 = (c) => c && JSON.stringify({ ...c, diffStats: void 0 });
+                if (signature2(old) !== signature2(change)) {
+                  recoveredFiles[value] ??= captureCheckpoint(old);
+                  liveRun.changes[value] = change;
+                  changed = true;
+                }
               }
             }
+            if (liveRun.state !== run2.state || liveRun.endedAt !== run2.endedAt) {
+              liveRun.state = run2.state;
+              liveRun.endedAt = run2.endedAt;
+              changed = true;
+            }
+            const damaged = Object.values(liveRun.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
+            if (liveRun.incomplete !== (run2.incomplete || damaged)) {
+              liveRun.incomplete = run2.incomplete || damaged;
+              changed = true;
+            }
+            const captureVersion = liveRun.hostRecovery?.captureVersion ?? liveRun.contentVersion ?? 0;
+            if (liveRun.hostRecovery?.captureVersion !== captureVersion || JSON.stringify(liveRun.hostRecovery?.files ?? {}) !== JSON.stringify(recoveredFiles)) {
+              liveRun.hostRecovery = { captureVersion, files: recoveredFiles };
+              changed = true;
+            }
+            d.runIds.push(liveRun.id);
+            if (changed) {
+              liveRun.contentVersion = (liveRun.contentVersion ?? 0) + 1;
+              await this.store.writeRun(liveRun);
+              d.imported++;
+            } else d.unchanged++;
           }
-          if (liveRun.state !== run2.state || liveRun.endedAt !== run2.endedAt) {
-            liveRun.state = run2.state;
-            liveRun.endedAt = run2.endedAt;
-            changed = true;
-          }
-          const damaged = Object.values(liveRun.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
-          if (liveRun.incomplete !== (run2.incomplete || damaged)) {
-            liveRun.incomplete = run2.incomplete || damaged;
-            changed = true;
-          }
-          const captureVersion = liveRun.hostRecovery?.captureVersion ?? liveRun.contentVersion ?? 0;
-          if (liveRun.hostRecovery?.captureVersion !== captureVersion || JSON.stringify(liveRun.hostRecovery?.files ?? {}) !== JSON.stringify(recoveredFiles)) {
-            liveRun.hostRecovery = { captureVersion, files: recoveredFiles };
-            changed = true;
-          }
-          d.runIds.push(liveRun.id);
-          if (changed) {
-            liveRun.contentVersion = (liveRun.contentVersion ?? 0) + 1;
-            await this.store.writeRun(liveRun);
-            d.imported++;
-          } else d.unchanged++;
           if (previous?.source === "host-history") await import_promises7.default.rm(import_node_path8.default.join(this.store.directory, "runs", `${id}.json`), { force: true });
           continue;
         }

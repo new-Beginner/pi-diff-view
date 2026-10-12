@@ -59,3 +59,4 @@ await fs.copyFile('docs/verification-1.4.12.md', 'plugin/docs/verification-1.4.1
 for (const name of ['card-1.4.12-expanded-light.png', 'card-1.4.12-expanded-narrow.png']) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
 await fs.copyFile('docs/verification-1.4.13.md', 'plugin/docs/verification-1.4.13.md');
 for (const name of ['card-1.4.13-directory-light.png', 'card-1.4.13-directory-narrow.png', 'card-1.4.13-expanded-light.png', 'card-1.4.13-expanded-narrow.png']) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
+await fs.copyFile('docs/verification-1.4.14.md', 'plugin/docs/verification-1.4.14.md');
