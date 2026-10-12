@@ -12,7 +12,7 @@ function fixture() {
 }
 it('opens only the exact plugin tab and forwards an opaque selection location', async () => {
   const f = fixture(), adapter = createPluginReviewAdapter({ info: async () => info, load: async () => f.modules });
-  await adapter.open('s', location); expect(f.calls).toEqual([{ sessionId: 's', tab: { id: REVIEW_TAB_ID, kind: 'plugin', resource: 'local.diff-view/review', location } }]);
+  await adapter.open('s', location); expect(f.calls).toEqual([{ sessionId: 's', tab: { id: REVIEW_TAB_ID, kind: 'plugin', resource: 'local.diff-view/review', location: `${location}?sessionId=s` } }]);
   adapter.close(); await expect(adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' });
 });
 it('opens on changed versions and hashes without requesting build validation', async () => {
@@ -80,7 +80,7 @@ it('opens the review tab when the old minified factory export has changed', asyn
   const sessions: (string | null)[] = []; await adapter.subscribeSession(id => sessions.push(id));
   await adapter.open('s', location);
   expect(oldFactoryCalled).toBe(false); expect(sessions).toEqual(['s']);
-  expect(f.calls).toEqual([{ sessionId: 's', tab: { id: REVIEW_TAB_ID, kind: 'plugin', resource: 'local.diff-view/review', location } }]); adapter.close();
+  expect(f.calls).toEqual([{ sessionId: 's', tab: { id: REVIEW_TAB_ID, kind: 'plugin', resource: 'local.diff-view/review', location: `${location}?sessionId=s` } }]); adapter.close();
 });
 it('does not require a host tab factory export and still validates store and React', async () => {
   const f = fixture();
@@ -91,9 +91,9 @@ it('does not require a host tab factory export and still validates store and Rea
 });
 it('does not reopen an already active panel at the same location, but restores a collapsed one', async () => {
   const f = fixture(); const tab = f.modules.tab('local.diff-view', 'review');
-  Object.assign(f.state, { workPanelTabs: [{ ...tab, location }], workPanelOpen: true, activeWorkPanelTabId: REVIEW_TAB_ID });
+  Object.assign(f.state, { workPanelTabs: [{ ...tab, location: `${location}?sessionId=s` }], workPanelOpen: true, activeWorkPanelTabId: REVIEW_TAB_ID });
   const adapter = createPluginReviewAdapter({ load: async () => f.modules });
   await adapter.open('s', location); expect(f.calls).toHaveLength(0);
-  f.state.workPanelOpen = false; await adapter.open('s', location); expect(f.calls).toEqual([{ sessionId: 's', tab: { ...tab, location } }]);
+  f.state.workPanelOpen = false; await adapter.open('s', location); expect(f.calls).toEqual([{ sessionId: 's', tab: { ...tab, location: `${location}?sessionId=s` } }]);
   f.state.selectingSessionId = 'other'; await expect(adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_SESSION' }); adapter.close();
 });

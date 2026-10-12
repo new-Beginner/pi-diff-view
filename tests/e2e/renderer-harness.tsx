@@ -21,13 +21,19 @@ const nativeState = { activeSessionId: new URLSearchParams(location.search).has(
 const host: RendererHost = {
   dispatch<T>(action: string, payload?: any): Promise<T> {
     if (action !== 'plugin.call') return Promise.reject(new Error(`Unexpected renderer action: ${action}`));
-    const methods = ['rendererReport', 'jobStart', 'jobPoll', 'bootstrap', 'review', 'file', 'action', 'batchAction', 'comments', 'saveComment', 'deleteComment', 'feedback', 'copyPatch', 'settings', 'clearHistory', 'card', 'replyCards', 'turnSummary', 'selectTurn', 'readTurnSelection', 'activeReviewSession'];
+    if (payload.method === 'sessionEvidence' || payload.method === 'sessionContext') return Promise.resolve({ ok: true } as T);
+    const methods = ['rendererReport', 'jobStart', 'jobPoll', 'bootstrap', 'review', 'file', 'action', 'batchAction', 'comments', 'saveComment', 'deleteComment', 'feedback', 'copyPatch', 'settings', 'clearHistory', 'card', 'replyCards', 'turnSummary', 'runningChanges', 'selectTurn', 'readTurnSelection', 'activeReviewSession'];
     if (!methods.includes(payload.method)) return Promise.reject(new Error('Method not declared in renderer whitelist'));
     return window.pluginBridge!.invoke<T>(`diff.${payload.method}`, payload.args);
   },
   ui: { injectStyle(css) { const element = document.createElement('style'); element.textContent = css; document.head.append(element); state.styles++; return () => { element.remove(); state.styles--; }; } },
   slots: { register(options) {
     state.positions.push({ slot: options.slot });
+    if (options.slot === 'composerControl') {
+      const element = document.createElement('div'); element.dataset.testSlot = options.slot; (document.querySelector('.mock-composer') ?? document.body).append(element);
+      const root = createRoot(element); root.render(React.createElement(options.component));
+      return () => { root.unmount(); element.remove(); };
+    }
     const params = new URLSearchParams(location.search), target = params.has('latestAtEnd') ? 11 : 0;
     const element = document.createElement('div'); element.dataset.testSlot = options.slot; (document.getElementById('mock-reply') ?? document.body).append(element);
     const root = createRoot(element); const Component = options.component;

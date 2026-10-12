@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Action, ActionResult, Bootstrap, DiffHunk, ReviewActionRequest, ReviewFile, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
+import type { Action, ActionResult, Bootstrap, DiffHunk, ReviewActionRequest, ReviewFile, ReviewFilesPage, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
+import { isImagePath } from '../core/review-file-policy';
 import { DiffRows } from './DiffRows';
 import FilePath from './FilePath';
+import FileIcon from './FileIcon';
+import ReviewIcon from './ReviewIcon';
 import { messages, kindLabel } from './i18n';
 import { ensureBounded } from './transport';
 import { useDiffDetail, prefetchDiffDetail } from './useDiffDetail';
 import './review.css';
 
-export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; navigationKey?: string; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
+export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; navigationKey?: string; active?: boolean; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
 type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 function Modal({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
@@ -17,7 +20,7 @@ function Modal({ title, children, onClose, busy }: { title: string; children: Re
     <h2>{title}</h2>{children}
   </dialog>;
 }
-export function ReviewApp({ transport: source, initialRequest = {}, initialFileId, navigationKey, onClose, locale: hostLocale, base: hostBase }: ReviewAppProps) {
+export function ReviewApp({ transport: source, initialRequest = {}, initialFileId, navigationKey, active: panelActive = true, onClose, locale: hostLocale, base: hostBase }: ReviewAppProps) {
   const transport = useMemo(() => ensureBounded(source), [source]);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [bootError, setBootError] = useState('');
@@ -56,13 +59,19 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [batchResults, setBatchResults] = useState<{ path: string; ok: boolean; message: string }[]>([]);
+  useEffect(() => { if (!panelActive) setConfirmation(null); }, [panelActive]);
   const live = useRef(true);
+  const sessionKey = initialRequest.sessionId ?? request.sessionId;
   const scopeKey = `${request.scope}|${request.root}|${request.ref}|${request.sessionId}|${request.runId}`;
   const scopeRef = useRef(scopeKey); scopeRef.current = scopeKey;
   const diffPane = useRef<HTMLDivElement>(null);
+  const reviewPending = useRef(false), loadedScope = useRef('');
   const workspaceRef = useRef<HTMLDivElement>(null), continuationRef = useRef<HTMLDivElement>(null);
-  const validReview = review && review.scope === request.scope && review.root === request.root && (request.scope !== 'turn' || review.runId === request.runId) && review.files.some(file => file.id === selected) ? review : null;
-  const { detail, loading: loadingDetail, loadingMore, error: detailError, loadMore } = useDiffDetail(transport, validReview?.id, selected, context, detailTick);
+  const matchingReview = review && review.scope === request.scope && (!request.root || review.root === request.root) && review.sessionId === request.sessionId && (request.scope !== 'turn' || review.runId === request.runId) ? review : null;
+  const validReview = matchingReview?.files.some(file => file.id === selected) ? matchingReview : null;
+  const selectedFile = matchingReview?.files.find(file => file.id === selected);
+  const detailVersion = selectedFile ? `${selectedFile.fingerprint}|${selectedFile.kind}|${selectedFile.state}|${selectedFile.actions.join(',')}|${selectedFile.statsKnown}` : undefined;
+  const { detail, loading: loadingDetail, loadingMore, error: detailError, loadMore } = useDiffDetail(transport, validReview?.id, selected, context, detailTick, `${scopeKey}|${matchingReview?.runId ?? ''}`, detailVersion);
   useEffect(() => {
     const target = continuationRef.current;
     if (!target || !detail || detail.nextOffset == null || loadingDetail || loadingMore || detailError || fileCollapsed || detail.hunks.every(hunk => collapsed.has(hunk.id))) return;
@@ -76,34 +85,40 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   useEffect(() => {
     if (!validReview?.id || !review?.files.length) return;
     const reviewId = validReview.id;
-    const candidates = review.files.filter(f => f.kind === 'text' && f.id !== selected).slice(0, 8);
+    const index = review.files.findIndex(file => file.id === selected);
+    const candidates = review.files.slice(index + 1, index + 3).filter(f => f.kind === 'text');
     const timer = setTimeout(() => {
-      for (const file of candidates) prefetchDiffDetail(transport, reviewId, file.id, context, detailTick);
-    }, 120);
+      // At most one speculative request; clicks share the pending page instead of queuing duplicates.
+      if (!loadingDetail && candidates[0]) prefetchDiffDetail(transport, reviewId, candidates[0].id, context, detailTick);
+    }, 1000);
     return () => clearTimeout(timer);
-  }, [transport, validReview?.id, review, selected, context, detailTick]);
+  }, [transport, validReview?.id, review, selected, context, detailTick, loadingDetail]);
   useEffect(() => { if (hostLocale) setLocale(hostLocale); }, [hostLocale]);
   useEffect(() => { if (hostBase) setBase(hostBase); }, [hostBase]);
+  const previousNavigation = useRef(navigationKey);
   useEffect(() => {
     if (!navigationKey) return;
+    const changedNavigation = previousNavigation.current !== navigationKey;
+    previousNavigation.current = navigationKey;
     const next: ReviewRequest = { ...initialRequest, scope: initialRequest.scope ?? 'turn' };
     const sameReview = review?.scope === next.scope && review?.root === next.root && review?.runId === next.runId && review?.sessionId === next.sessionId;
     const target = initialFileId ?? (sameReview ? review?.files[0]?.id : undefined) ?? '';
     setRequest(next); setSelected(target); setFileCollapsed(false); setQuery('');
     setCollapsed(new Set()); setConfirmation(null); setError('');
     // Only refresh the bounded file list when the target is outside it or a prior load is still pending.
-    if ((sameReview && target && !review?.files.some(file => file.id === target)) || (!review && boot)) setRefreshTick(value => value + 1);
+    if ((sameReview && target && !review?.files.some(file => file.id === target)) || (changedNavigation && (!review || loadingReview))) setRefreshTick(value => value + 1);
   }, [navigationKey]);
   useEffect(() => {
-    if (!navigationKey || !selected) return;
+    if (!panelActive || !navigationKey || !selected) return;
     appRef.current?.querySelector<HTMLElement>('.dv-file[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
-  }, [navigationKey, selected, review]);
+  }, [navigationKey, selected]);
   useEffect(() => {
     let active = true; setBootError('');
-    transport.invoke<Bootstrap>('bootstrap', { sessionId: initialRequest.sessionId }).then(data => {
+    const load = () => transport.invoke<Bootstrap>('bootstrap', { sessionId: initialRequest.sessionId }).then(data => {
       if (!active) return;
       setBoot(data); setLayout(data.settings.layout); setWrap(data.settings.wordWrap);
       if (!hostLocale) setLocale(data.locale); if (!hostBase) setBase(data.base);
+      if (bootTick > 0) setRefreshTick(value => value + 1);
       setRequest(previous => {
         if (previous.root) return previous;
         const run = data.runs.find(item => item.id === previous.runId) ?? data.runs.find(item => item.sessionId === previous.sessionId) ?? data.runs[0];
@@ -111,26 +126,63 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         return { ...previous, root, ...((previous.scope === 'turn' || previous.scope === 'lastTurn') && run ? { sessionId: previous.sessionId ?? run.sessionId, runId: previous.scope === 'turn' ? previous.runId ?? run.id : undefined } : {}) };
       });
     }).catch(err => { if (active) setBootError(errorText(err)); });
-    return () => { active = false; };
-  }, [transport, bootTick]);
+    // An exact task/root is already known: paint its diff before loading optional history/settings.
+    const timer = bootTick === 0 && initialRequest.runId && initialRequest.root ? setTimeout(load, 180) : undefined;
+    if (!timer) void load();
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }, [transport, bootTick, sessionKey]);
   useEffect(() => {
     if (!boot && !request.root && !request.sessionId && !request.runId) return;
     let active = true;
-    setLoadingReview(false); setReview(null); setReviewError(''); setConfirmation(null); setCollapsed(new Set());
-    if (!request.root && !request.sessionId && !request.runId) return;
-    if ((request.scope === 'commit' || request.scope === 'branch') && !request.ref?.trim()) { setReviewError(t.emptyRef); return; }
-    setLoadingReview(true);
-    transport.invoke<ReviewSummary>('review', { ...request, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(data => {
+    const changedScope = loadedScope.current !== scopeKey;
+    loadedScope.current = scopeKey;
+    setReviewError('');
+    if (changedScope) { setReview(null); setConfirmation(null); setCollapsed(new Set()); }
+    if (!request.root && !request.sessionId && !request.runId) { setLoadingReview(false); return; }
+    if ((request.scope === 'commit' || request.scope === 'branch') && !request.ref?.trim()) { setLoadingReview(false); setReviewError(t.emptyRef); return; }
+    // Background updates never clear existing content or disable its read-only controls.
+    reviewPending.current = true; setLoadingReview(changedScope || !matchingReview);
+    transport.invoke<ReviewSummary>('review', { ...request, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(async response => {
       if (!active) return;
-      setReview(data); setSelected(previous => data.files.some(file => file.id === previous) ? previous : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.files[0]?.id ?? '');
-    }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (active) setLoadingReview(false); });
-    return () => { active = false; };
-  }, [transport, boot, scopeKey, refreshTick]);
+      if (response.scope !== request.scope || response.sessionId !== request.sessionId || (request.scope === 'turn' && response.runId !== request.runId) || (request.root && response.root !== request.root)) throw new Error('审查结果与当前会话或轮次不匹配，请刷新。');
+      if (review?.id === response.id && review.nextFileOffset == null) return;
+      if (review && review.runId !== response.runId) { setCollapsed(new Set()); setFileCollapsed(false); }
+      let data: ReviewSummary = { ...response, files: response.files.filter(file => !isImagePath(file.path)), nextFileOffset: response.nextFileOffset ?? null };
+      const publish = () => {
+        setReview(data);
+        const current = data;
+        setSelected(previous => current.files.some(file => file.id === previous) ? previous : initialFileId && current.files.some(file => file.id === initialFileId) ? initialFileId : current.nextFileOffset != null ? initialFileId ?? previous : current.files[0]?.id ?? '');
+      };
+      const streaming = !review || review.runId !== response.runId;
+      if (streaming || data.nextFileOffset == null) publish();
+      while (data.nextFileOffset != null && active) {
+        const offset = data.nextFileOffset;
+        const page = await transport.invoke<ReviewFilesPage>('reviewFiles', { reviewId: data.id, offset });
+        if (!active) return;
+        if (page.reviewId !== data.id || page.offset !== offset || (page.nextOffset != null && page.nextOffset <= offset)) throw new Error('无效的文件列表分页。');
+        data = { ...data, files: [...data.files, ...page.files.filter(file => !isImagePath(file.path))], nextFileOffset: page.nextOffset };
+        if (streaming || data.nextFileOffset == null) publish();
+      }
+    }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (active) { reviewPending.current = false; setLoadingReview(false); } });
+    return () => { active = false; reviewPending.current = false; };
+  }, [transport, scopeKey, refreshTick]);
   const resetPage = () => { setCollapsed(new Set()); };
-  const currentFile = detail?.file.id === selected ? detail.file : review?.files.find(file => file.id === selected);
-  const visibleFiles = review?.files.filter(file => `${file.path} ${file.oldPath ?? ''}`.toLowerCase().includes(query.toLowerCase())) ?? [];
-  const sessionRuns = boot?.runs.filter(run => !initialRequest.sessionId || run.sessionId === initialRequest.sessionId) ?? [];
-  const roots = [...new Set([...(boot?.repositories.map(repo => repo.root) ?? []), ...(boot?.runs.map(run => run.root) ?? []), ...(request.root ? [request.root] : [])])];
+  useEffect(() => {
+    if (!panelActive || (request.scope !== 'lastTurn' && matchingReview?.run?.state !== 'running')) return;
+    const timer = setInterval(() => { if (document.visibilityState !== 'hidden' && !reviewPending.current) setRefreshTick(value => value + 1); }, 750);
+    return () => clearInterval(timer);
+  }, [panelActive, request.scope, scopeKey, matchingReview?.runId, matchingReview?.run?.state]);
+  const currentFile = detail?.file.id === selected ? detail.file : matchingReview?.files.find(file => file.id === selected);
+  const visibleFiles = matchingReview?.files.filter(file => `${file.path} ${file.oldPath ?? ''}`.toLowerCase().includes(query.toLowerCase())) ?? [];
+  const sessionRuns = useMemo(() => {
+    const runs = (boot?.runs ?? []).filter(run => !sessionKey || run.sessionId === sessionKey);
+    if (matchingReview?.run && (!sessionKey || matchingReview.run.sessionId === sessionKey)) return [matchingReview.run, ...runs.filter(run => run.id !== matchingReview.runId)].sort((a, b) => b.startedAt - a.startedAt);
+    return runs;
+  }, [boot?.runs, matchingReview?.run, sessionKey]);
+  const selectedRunId = request.scope === 'lastTurn' ? matchingReview?.runId ?? '' : request.runId ?? '';
+  const unknownFiles = matchingReview?.files.filter(file => file.statsKnown === false || file.kind !== 'text').length ?? 0;
+  const verifiedFiles = matchingReview?.files.filter(file => file.statsKnown !== false && file.kind === 'text') ?? [];
+  const roots = [...new Set([...(boot?.repositories.map(repo => repo.root) ?? []), ...sessionRuns.map(run => run.root), ...(request.root ? [request.root] : [])])];
   const perform = async (job: () => Promise<void>) => {
     if (busy) return;
     setBusy(true); setError(''); setStatus('');
@@ -168,31 +220,55 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       setConfirmation(null); setStatus(t.cleared); setBootTick(value => value + 1);
     }
   });
-  const copyPatch = () => perform(async () => {
-    if (!review) return;
-    await transport.invoke('copyPatch', { reviewId: review.id, fileId: currentFile?.id });
+  const copyPatch = (fileId = currentFile?.id) => perform(async () => {
+    if (!matchingReview) return;
+    await transport.invoke('copyPatch', { reviewId: matchingReview.id, fileId });
     if (live.current) setStatus(t.copied);
   });
+  const copyPath = (file: ReviewFile) => perform(async () => {
+    if (!matchingReview) return;
+    await transport.invoke('copyPath', { reviewId: matchingReview.id, fileId: file.id });
+    if (live.current) setStatus(locale.startsWith('zh') ? '路径已复制' : 'Path copied');
+  });
+  const openFile = (file: ReviewFile) => { resetPage(); setSelected(file.id); setFileCollapsed(false); };
+  const closeFileMenu = (event: React.MouseEvent<HTMLButtonElement>) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; };
+  const placeFileMenu = (menu: HTMLDetailsElement) => {
+    if (!menu.open) return;
+    const body = menu.querySelector<HTMLElement>('.dv-menu-body'), bounds = workspaceRef.current?.getBoundingClientRect();
+    if (!body || !bounds) return;
+    const row = menu.getBoundingClientRect();
+    const below = bounds.bottom - row.bottom - 5, above = row.top - bounds.top - 5;
+    const upward = body.scrollHeight > below && above > below;
+    menu.dataset.placement = upward ? 'above' : 'below';
+    body.style.maxHeight = `${Math.max(60, upward ? above : below)}px`;
+  };
   const actionButtons = (file: ReviewFile, hunk?: DiffHunk) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || loadingDetail} onClick={() => { setError(''); if (review) setConfirmation({ kind: 'action', action, file, hunk, review }); }}>{t[action]}</button>);
   const selectedIndex = visibleFiles.findIndex(file => file.id === selected);
-  const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id}>
-    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) setFileCollapsed(value => !value); else { resetPage(); setSelected(file.id); setFileCollapsed(false); } }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.path} · ${t[file.status]}`}>
-      <span className="dv-file-type" aria-hidden="true">{file.path.split('.').pop()?.slice(0, 3).toUpperCase() || '◇'}</span><span className="dv-file-name"><FilePath path={file.path} /></span><span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">−{file.deletions}</span></span><span className="dv-file-chevron" aria-hidden="true">{file.id === selected && !fileCollapsed ? '⌃' : '⌄'}</span>
+  const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id} data-expanded={file.id === selected && !fileCollapsed}>
+    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) setFileCollapsed(value => !value); else openFile(file); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
+      <FileIcon path={file.path} /><span className="dv-file-label"><span className="dv-file-name"><FilePath path={file.path} /></span><span className="dv-file-chevron"><ReviewIcon name="chevron" /></span></span>{file.statsKnown === false || file.kind !== 'text' ? <span className="dv-counts dv-muted" aria-label={locale.startsWith('zh') ? '行数未知' : 'Unknown totals'}>{locale.startsWith('zh') ? '行数未知' : 'Unknown'}</span> : <span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">-{file.deletions}</span></span>}
     </button>
-    {file.id === selected && <details className="dv-menu dv-file-menu"><summary aria-label={t.action} title={t.action}>···</summary><div className="dv-menu-body">{actionButtons(file)}<button disabled={busy} onClick={copyPatch}>{t.copy}</button>{file.oldPath && <p>← {file.oldPath}</p>}<p className="dv-muted">{t[file.status]} · {kindLabel(file.kind, locale)}</p>{file.note && <p className="dv-muted">{file.note}</p>}</div></details>}
+    <button className="dv-icon-button dv-file-open" disabled={busy} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '展开文件' : 'Expand file'} onClick={() => openFile(file)}><ReviewIcon name="open" /></button>
+    <details className="dv-menu dv-file-menu" onToggle={event => placeFileMenu(event.currentTarget)}><summary aria-label={`${t.action} ${file.path}`} title={t.action}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
+      <button disabled={busy || !matchingReview} onClick={event => { closeFileMenu(event); void copyPath(file); }}>{locale.startsWith('zh') ? '复制路径' : 'Copy path'}</button>
+      <button disabled={busy} onClick={event => { closeFileMenu(event); openFile(file); }}>{locale.startsWith('zh') ? '展开文件' : 'Expand file'}</button>
+      <button disabled={busy || !matchingReview || file.kind === 'unavailable'} onClick={() => void copyPatch(file.id)}>{t.copy}</button>
+      {file.actions.length > 0 && <><hr />{actionButtons(file)}</>}
+      {file.oldPath && <p>← {file.oldPath}</p>}<p className="dv-muted">{t[file.status]} · {kindLabel(file.kind, locale)}</p>{file.note && <p className="dv-muted">{file.note}</p>}
+    </div></details>
   </div>;
   const runLabel = (id: string) => { const run = boot?.runs.find(item => item.id === id); return run ? `${new Date(run.startedAt).toLocaleString(locale)} · ${run.prompt?.slice(0, 60) ?? run.id} · ${t[run.state]}${run.incomplete ? ` · ${t.incomplete}` : ''}` : id; };
   return <section ref={appRef} className="dv-app" data-base={base} lang={locale} aria-label={t.title} onKeyDown={event => { if (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && !confirmation) { event.preventDefault(); navigateHunk(event.key === 'ArrowDown' ? 1 : -1); } }}>
     <header className="dv-top">
       <div className="dv-heading">
-        <select className="dv-scope" aria-label={t.scope} value={request.scope} disabled={!boot || busy} onChange={event => {
+        <div className="dv-review-pill"><select className="dv-scope" aria-label={t.scope} value={request.scope} disabled={!boot || busy} onChange={event => {
           const scope = event.target.value as Scope; const run = sessionRuns.find(item => item.root === request.root) ?? sessionRuns[0];
           setFileCollapsed(false); setRequest(value => ({ root: value.root, scope, sessionId: initialRequest.sessionId, ...(scope === 'turn' || scope === 'lastTurn' ? { root: run?.root ?? value.root, sessionId: initialRequest.sessionId ?? run?.sessionId, runId: scope === 'turn' ? run?.id : undefined } : {}), ref: scope === 'commit' || scope === 'branch' ? refDraft : undefined }));
-        }}>{(['lastTurn', 'turn', 'unstaged', 'staged', 'commit', 'branch'] as Scope[]).map(scope => <option value={scope} key={scope}>{t[scope]}</option>)}</select>
-        {review && <span className="dv-counts"><span className="dv-added">+{review.files.reduce((sum, file) => sum + file.additions, 0)}</span><span className="dv-deleted">−{review.files.reduce((sum, file) => sum + file.deletions, 0)}</span></span>}
+        }}>{(initialRequest.sessionId ? ['lastTurn', 'turn'] : ['lastTurn', 'turn', 'unstaged', 'staged', 'commit', 'branch']).map(scope => <option value={scope} key={scope}>{scope === 'lastTurn' ? locale.startsWith('zh') ? '上一轮' : 'Last turn' : scope === 'turn' ? locale.startsWith('zh') ? '历史轮次' : 'History' : t[scope as Scope]}</option>)}</select>
+        {matchingReview && <span className="dv-counts" aria-label={unknownFiles ? '部分统计' : '行数统计'}>{verifiedFiles.length > 0 && <><span className="dv-added">+{verifiedFiles.reduce((sum, file) => sum + file.additions, 0)}</span><span className="dv-deleted">-{verifiedFiles.reduce((sum, file) => sum + file.deletions, 0)}</span></>}{unknownFiles > 0 && <span className="dv-muted">{verifiedFiles.length ? '部分统计' : '行数未知'}</span>}</span>}</div>
         <div className="dv-top-actions">
-          <button className="dv-icon-button" aria-label={t.search} title={t.search} aria-pressed={searchOpen} onClick={() => setSearchOpen(value => !value)}>⌕</button>
-          <details className="dv-menu"><summary aria-label={t.settings} title={t.settings}>···</summary><div className="dv-menu-body">
+          <button className="dv-icon-button" aria-label={t.search} title={t.search} aria-pressed={searchOpen} onClick={() => setSearchOpen(value => !value)}><ReviewIcon name="search" /></button>
+          <details className="dv-menu"><summary aria-label={t.settings} title={t.settings}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
             <button disabled={busy || loadingReview} onClick={() => setBootTick(value => value + 1)}>{t.refresh}</button>
             <label className="dv-check"><input type="checkbox" checked={wrap} onChange={event => saveSettings({ wordWrap: event.target.checked })} />{t.wrap}</label>
             <div className="dv-segment" role="group" aria-label={t.settings}><button aria-pressed={layout === 'unified'} onClick={() => saveSettings({ layout: 'unified' })}>{t.unified}</button><button aria-pressed={layout === 'split'} onClick={() => saveSettings({ layout: 'split' })}>{t.split}</button></div>
@@ -206,26 +282,30 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
             <button disabled={!boot?.runs.length || busy} onClick={() => { setError(''); setConfirmation({ kind: 'history' }); }}>{t.clearHistory}</button>
             {review?.notice && <p className="dv-muted">{review.notice}</p>}
             {context !== 3 && <p className="dv-muted">{t.expandedHint}</p>}
-            {request.scope === 'turn' && <label className="dv-run">{t.run}<select aria-label={t.run} disabled={busy} value={request.runId ?? ''} onChange={event => { const run = boot?.runs.find(item => item.id === event.target.value); if (run) { setFileCollapsed(false); setRequest(value => ({ ...value, root: run.root, runId: run.id, sessionId: run.sessionId })); } }}><option value="" disabled>—</option>{sessionRuns.map(run => <option key={run.id} value={run.id}>{runLabel(run.id)}</option>)}</select></label>}
           </div></details>
-          {onClose && <button className="dv-icon-button" aria-label={t.close} onClick={onClose} disabled={busy}>×</button>}
+          <button className="dv-icon-button" aria-label={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} title={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} disabled={busy || !selected || fileCollapsed} onClick={() => setFileCollapsed(true)}><ReviewIcon name="collapse" /></button>
+          {onClose && <button className="dv-icon-button" aria-label={t.close} onClick={onClose} disabled={busy}><ReviewIcon name="close" /></button>}
         </div>
       </div>
       <div className="dv-toolbar dv-repo-toolbar">
+        {request.scope === 'turn' && <label className="dv-run">{t.run} <select aria-label="对话轮次" value={selectedRunId} disabled={busy || loadingReview} onChange={event => { const run = sessionRuns.find(r => r.id === event.target.value); if (run) setRequest({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }); }}>{!selectedRunId && <option value="" disabled>{loadingReview || !boot ? '正在读取轮次…' : '暂无修改记录'}</option>}{selectedRunId && !sessionRuns.some(run => run.id === selectedRunId) && <option value={selectedRunId}>当前轮次 · {matchingReview?.files.length ?? 0} 个文件</option>}{sessionRuns.map(run => <option key={run.id} value={run.id}>{new Date(run.startedAt).toLocaleString(locale)} · {run.fileCount} 个文件 · {t[run.state]}</option>)}</select></label>}
         {(request.scope === 'commit' || request.scope === 'branch') && <form className="dv-toolbar" onSubmit={event => { event.preventDefault(); setRequest(value => ({ ...value, ref: refDraft.trim() })); }}><label>{t.ref}<input aria-label={t.ref} value={refDraft} onChange={event => setRefDraft(event.target.value)} maxLength={250} /></label><button disabled={busy || !refDraft.trim()}>{t.applyRef}</button></form>}
         {searchOpen && <input autoFocus type="search" aria-label={t.search} placeholder={t.search} value={query} onChange={event => setQuery(event.target.value)} />}
       </div>
     </header>
+    {boot?.recoveryNotice && <div className="dv-message" role="status">历史恢复：{boot.recoveryNotice}</div>}
+    {unknownFiles > 0 && <details className="dv-stats-note"><summary>{unknownFiles} 个文件暂无法显示行数</summary><p>仅统计有完整快照的文本文件。缺失历史内容的文件仍保留记录，但无法重建差异。</p></details>}
+    {reviewError && matchingReview && <div className="dv-message dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div>}
     {(error || status) && <div className={`dv-message ${error ? 'dv-error' : ''}`} role={error ? 'alert' : 'status'}>{error || status}</div>}
     {batchResults.length > 0 && <details className="dv-message" open><summary>{t.batch}</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{batchResults.map(result => `${result.ok ? '✓' : '✗'} ${result.path}: ${result.message}`).join('\n')}</pre></details>}
-    {bootError ? <div className="dv-empty dv-error" role="alert">{bootError}<button onClick={() => setBootTick(value => value + 1)}>{t.retry}</button></div> : !boot ? <div className="dv-empty" role="status">{t.loading}</div> : <div className="dv-workspace" ref={workspaceRef}>
+    {bootError ? <div className="dv-empty dv-error" role="alert">{bootError}<button onClick={() => setBootTick(value => value + 1)}>{t.retry}</button></div> : !boot && !review ? <div className="dv-empty" role="status">{t.loading}</div> : <div className="dv-workspace" ref={workspaceRef}>
       <nav className="dv-file-list" aria-label={t.files}>{(selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex + 1)).map(fileRow)}</nav>
-      {!visibleFiles.length && !loadingReview && <p className="dv-rail-empty">{query ? t.noMatches : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
-      <main className="dv-review" hidden={fileCollapsed || Boolean(query && selectedIndex < 0)} aria-busy={loadingReview || loadingDetail}>
-        {loadingReview ? <div className="dv-empty" role="status">{t.loading}</div> : reviewError ? <div className="dv-empty dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div> : !review ? <div className="dv-empty">{t.noRoots}</div> : !currentFile ? <div className="dv-empty">{review.files.length ? t.chooseFile : t.noFiles}</div> : <>
+      {!visibleFiles.length && !loadingReview && !reviewError && !bootError && <p className="dv-rail-empty">{query ? t.noMatches : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
+      <main className="dv-review" hidden={fileCollapsed || Boolean(query && selectedIndex < 0) || (!currentFile && review?.nextFileOffset == null && !loadingReview && !reviewError && !bootError && Boolean(review))} aria-busy={loadingReview || loadingDetail}>
+        {loadingReview && !matchingReview ? <div className="dv-empty" role="status">{t.loading}</div> : reviewError && !matchingReview ? <div className="dv-empty dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div> : !review ? <div className="dv-empty">{t.noRoots}</div> : !currentFile ? review.files.length || review.nextFileOffset != null ? <div className="dv-empty">{review.nextFileOffset != null ? t.loading : t.chooseFile}</div> : null : <>
           <h2 className="dv-sr-only">{currentFile.path}</h2>
           <div className={`dv-diff-pane ${wrap ? 'dv-wrap' : 'dv-nowrap'}`} ref={diffPane} tabIndex={0} aria-label={`${currentFile.path} ${t.title}`}>
-            {loadingDetail ? <div className="dv-empty" role="status">{t.loading}</div> : detailError && !detail ? <div className="dv-empty dv-error" role="alert">{detailError}<button onClick={() => setDetailTick(value => value + 1)}>{t.retry}</button></div> : currentFile.kind !== 'text' ? <div className="dv-empty">{t[currentFile.kind]}</div> : detail && !detail.hunks.length ? <div className="dv-empty">{currentFile.status === 'mode' ? t.mode : t.noHunks}</div> : detail?.hunks.map(hunk => <section className="dv-hunk" key={`${context}:${hunk.id}`}>
+            {loadingDetail && !detail ? <div className="dv-empty" role="status">{t.loading}</div> : detailError && !detail ? <div className="dv-empty dv-error" role="alert">{detailError}<button onClick={() => setDetailTick(value => value + 1)}>{t.retry}</button></div> : currentFile.kind !== 'text' ? <div className="dv-empty">{t[currentFile.kind]}</div> : detail && !detail.hunks.length ? <div className="dv-empty">{currentFile.status === 'mode' ? t.mode : t.noHunks}</div> : detail?.hunks.map(hunk => <section className="dv-hunk" key={`${context}:${hunk.id}`}>
               <div className="dv-hunk-heading"><button data-hunk-nav aria-expanded={!collapsed.has(hunk.id)} onClick={() => setCollapsed(value => { const next = new Set(value); next.has(hunk.id) ? next.delete(hunk.id) : next.add(hunk.id); return next; })} aria-label={`${collapsed.has(hunk.id) ? t.collapsed : t.expanded} ${hunk.header}`}><span aria-hidden="true">{collapsed.has(hunk.id) ? '▸' : '▾'}</span> <code>{hunk.header}</code></button><div className="dv-toolbar">{context === 3 && !currentFile.oldPath && review.scope !== 'turn' && review.scope !== 'lastTurn' && actionButtons(currentFile, hunk)}</div></div>
               {!collapsed.has(hunk.id) && <DiffRows path={currentFile.path} lines={hunk.lines} layout={layout} t={t} />}
             </section>)}

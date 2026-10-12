@@ -7,6 +7,16 @@ import { fail } from './core/path-policy';
 import { JobQueue } from './core/jobs';
 import { inspectNativeHostBuild } from './core/native-host-build';
 import { ReviewNavigationStore } from './core/review-navigation';
+import { HostHistoryImporter } from './core/host-history';
+import { HostEvidenceStore } from './core/host-evidence-store';
+let evidenceStore: HostEvidenceStore | null = null;
+import { dispatch as gitManageDispatch } from './git/local-management';
+import { canonical } from './core/path-policy';
+import { writeCaptureContexts, type CaptureContext } from './core/capture-context';
+import { HostEvidenceBuffer } from './core/host-evidence-buffer';
+const evidence = new HostEvidenceBuffer();
+let history: HostHistoryImporter | null = null;
+const contexts = new Map<string, CaptureContext & { syncedAt: number }>();
 declare const pi: any;
 let service: ReviewService | null = null, store: SnapshotStore | null = null;
 let jobs: JobQueue | null = null;
@@ -16,6 +26,11 @@ let turnEnded: ((event: { sessionId?: string; turnId?: string; reason?: string }
 let tail: Promise<unknown> = Promise.resolve();
 let disposed = false;
 let rendererStages: Record<string, number> = {};
+let runningDiagnostic: { sessionId: string; reason: string; at: number } | undefined;
+let rendererDiagnostic: { stage: string; at: number } | undefined;
+async function saveRendererStatus(): Promise<void> {
+  if (store && !disposed) await atomicJson(path.join(store.directory, 'renderer-status.json'), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+}
 const navigation = new ReviewNavigationStore();
 function serial<T>(work: () => Promise<T>): Promise<T> { const result = tail.then(work); tail = result.catch(() => {}); return result; }
 async function heartbeat(): Promise<void> {
@@ -25,8 +40,15 @@ async function heartbeat(): Promise<void> {
 export async function onLoad(): Promise<void> {
   disposed = false; generation = randomUUID(); pluginRoot = await fs.realpath(__dirname);
   const dataPath = await pi.plugin.getDataPath(); store = new SnapshotStore(dataPath); await store.init();
-  rendererStages = {}; navigation.clear();
-  await atomicJson(path.join(store.directory, 'renderer-status.json'), { version: 1, generation, mainLoadedAt: Date.now(), stages: rendererStages });
+  evidenceStore = new HostEvidenceStore(dataPath);
+  // Native getDataPath contract: <host-data>/plugins/data/<plugin-id>.
+  const parent = path.dirname(dataPath), plugins = path.dirname(parent);
+  history = path.basename(parent) === 'data' && path.basename(plugins) === 'plugins' ? new HostHistoryImporter(store, path.dirname(plugins)) : null;
+  contexts.clear(); evidence.clear();
+  rendererStages = {}; runningDiagnostic = undefined; rendererDiagnostic = undefined; navigation.clear();
+  navigation.restore(await readJson(path.join(store.directory, 'selections.json'), []));
+  await saveRendererStatus();
+  await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot); await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: v => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: text => pi.clipboard.writeText(text), openPanel: () => pi.ui.openPanel({ title: 'Diff view' }) }, generation);
   const currentService = service;
@@ -36,6 +58,13 @@ export async function onLoad(): Promise<void> {
   turnEnded = event => { void serial(async () => {
     if (disposed || !store || !event.sessionId) return;
     await store.importInbox(generation);
+    const context = contexts.get(event.sessionId);
+    if (history && context && service) {
+      // Re-read actual final message evidence; do not bind the event's internal turnId.
+      const result = await history.syncSession(event.sessionId, context.root, { running: context.running, messages: evidence.messages(event.sessionId, canonical(context.root)) });
+      service.setRecoveryNotice(event.sessionId, result.warnings.join(' '));
+      context.syncedAt = 0; // The renderer's settled state may arrive immediately afterwards.
+    }
     // The event has no captureRunId/timestamp: retain audit evidence, never guess a binding.
     await store.audit({ action: 'host-turn-ended', sessionId: String(event.sessionId).slice(0, 128), turnId: String(event.turnId ?? '').slice(0, 128), reason: String(event.reason ?? '').slice(0, 128) });
   }).catch(error => console.warn('Diff view turn import:', error.message)); };
@@ -48,6 +77,7 @@ export async function onUnload(): Promise<void> {
   if (turnEnded) pi.events.off('session:turnEnded', turnEnded); turnEnded = undefined;
   jobs?.close(); jobs = null; navigation.clear();
   await tail;
+  evidence.clear(); contexts.clear();
   const current = await readJson<Locator | null>(locatorFile, null).catch(() => null);
   if (current?.generation === generation) await fs.rm(locatorFile, { force: true });
   await pi.commands.unregister('diff-view.open'); service = null; store = null;
@@ -63,36 +93,100 @@ async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'rendererReport') {
     const stage = (args as { stage?: unknown } | null)?.stage;
-    if (typeof stage !== 'string' || !['entry-loaded', 'reply-slot-mounted', 'card-bound', 'session-ready', 'session-source-error', 'sidebar-opened', 'view-targeted', 'bootstrap-ok', 'bootstrap-error', 'card-query-error'].includes(stage)) fail('INVALID_STAGE', 'Unknown renderer diagnostic stage');
-    return serial(async () => { if (disposed || !store) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); rendererStages[stage] = Date.now(); await atomicJson(path.join(store.directory, 'renderer-status.json'), { version: 1, generation, stages: rendererStages }); return { ok: true }; });
+    if (typeof stage !== 'string' || !/^(entry-loaded|reply-slot-mounted|card-bound|session-ready|session-source-error|sidebar-opened|view-targeted|bootstrap-ok|bootstrap-error|card-query-error|composer-mounted|composer-source-error|composer-anchor-missing|composer-anchor-offscreen|composer-positioned|running-idle|running-identity-missing|running-ready|running-query-empty|running-query-error|running-visible|running-click-error)$/.test(stage)) fail('INVALID_STAGE', 'Unknown renderer diagnostic stage');
+    return serial(async () => { if (disposed || !store) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); rendererStages[stage] = Date.now(); rendererDiagnostic = { stage, at: Date.now() }; await saveRendererStatus(); return { ok: true }; });
   }
-  if (method === 'jobStart') { const a = args as { method: string; args?: unknown }; return jobs!.start(a.method, a.args ?? {}); }
+  if (method === 'jobStart') {
+    const a = args as { method: string; args?: unknown; waitMs?: number }, currentJobs = jobs!;
+    const started = currentJobs.start(a.method, a.args ?? {});
+    if (!Number.isFinite(a.waitMs) || !a.waitMs || a.waitMs < 0) return started;
+    const result = await currentJobs.wait(started.jobId, a.waitMs);
+    return result.state === 'pending' ? started : { ...started, ...result };
+  }
   if (method === 'jobPoll') return jobs!.poll((args as { jobId: string }).jobId);
   const s = service;
   return serial(async () => { if (disposed) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args ?? {}); });
 }
+/** Recording scope is not mutation authorization: workspace roots stay owned by ReviewService. */
+async function sessionRoot(args: any): Promise<string | undefined> {
+  if (typeof args?.sessionId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId)) fail('SESSION_REQUIRED', 'Invalid session identity');
+  const workspace = await pi.workspace.get();
+  const roots: string[] = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r: any) => typeof r === 'string' ? r : r.path)] : [];
+  if (roots.length) return typeof args.root === 'string' && roots.some(r => canonical(r) === canonical(args.root)) ? args.root : undefined;
+  // Native host owns this exact session leaf. Never grant an arbitrary renderer-supplied root.
+  return history?.scratchRoot(args.sessionId);
+}
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
+  if (method === 'sessionEvidence') {
+    const root = await sessionRoot(args);
+    if (!root) fail('ROOT_DENIED', 'Unauthorized evidence project');
+    if (args.index === 0) await evidenceStore!.restore(evidence, args.sessionId, root);
+    evidence.append({ ...args, root: canonical(root) });
+    if (args.final === true) await evidenceStore!.save(evidence, args.sessionId, root);
+    return { ok: true };
+  }
+  if (method === 'gitManage') {
+    const workspace = await pi.workspace.get();
+    const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r: any) => typeof r === 'string' ? r : r.path)] : [];
+    return gitManageDispatch(method, args, roots);
+  }
+  if (method === 'sessionContext') {
+    const root = await sessionRoot(args);
+    if (!root) { const warning = '会话项目路径缺失或未授权，未导入历史。'; contexts.delete(args.sessionId); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]); s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
+    const now = Date.now();
+    const taskId = typeof args.taskId === 'string' && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : undefined;
+    const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : undefined;
+    contexts.delete(args.sessionId);
+    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, taskId, since, syncedAt: now, updatedAt: now });
+    while (contexts.size > 200) contexts.delete(contexts.keys().next().value!);
+    await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
+    await evidenceStore!.restore(evidence, args.sessionId, root);
+    if (!history) { const warning = '宿主历史路径契约不匹配，未导入历史。'; s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
+    const result = await history.syncSession(args.sessionId, root, { running: args.running === true, messages: evidence.messages(args.sessionId, canonical(root)) });
+    s.setRecoveryNotice(args.sessionId, result.warnings.join(' ')); return result;
+  }
+  const context = typeof args?.sessionId === 'string' ? contexts.get(args.sessionId) : undefined;
+  if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && Date.now() - context.syncedAt > 2000) {
+    context.syncedAt = Date.now();
+    const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
+  }
+  if (method === 'runningChanges') {
+    if (context?.running && context.taskId === args.taskId && context.since === args.since) {
+      context.updatedAt = Date.now(); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
+    }
+    const result = await s.runningChanges(args);
+    let reason = 'summary-available';
+    if (!result) {
+      const runs = (await store!.listRuns(false, true)).filter(r => r.sessionId === args.sessionId);
+      const run = (args.taskId ? runs.find(r => r.userMessageId === args.taskId) : undefined) ?? runs.find(r => args.since > 0 && r.startedAt >= args.since);
+      reason = !run ? 'capture-missing-or-task-mismatch' : run.boundary !== 'user' ? 'capture-boundary-unknown' : run.state !== 'running' || run.endedAt != null ? 'capture-settled' : run.generation !== generation && run.source !== 'host-history' && !run.hostRecovery ? 'capture-generation-mismatch' : Object.values(run.changes).some(c => c.ambiguous) ? 'capture-ownership-unknown' : run.fileCount === 0 ? 'no-net-changes' : 'no-verified-running-record';
+    }
+    if (runningDiagnostic?.reason !== reason || runningDiagnostic.sessionId !== args.sessionId) {
+      runningDiagnostic = { sessionId: args.sessionId, reason, at: Date.now() }; await saveRendererStatus();
+    }
+    return result;
+  }
   if (method === 'activeReviewSession') {
     if (args?.sessionId !== null && (typeof args?.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId))) fail('NAVIGATION_INVALID', 'Invalid renderer session');
     navigation.setActiveSession(args.sessionId); return { ok: true };
   }
   if (method === 'selectTurn') {
     if (typeof args?.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== 'string' || !args.runId || args.runId.length > 128 || (args.fileId != null && (typeof args.fileId !== 'string' || args.fileId.length > 256))) fail('NAVIGATION_INVALID', 'Invalid recorded-task target');
-    let page = await s.turnSummary({ sessionId: args.sessionId, runId: args.runId, limit: 100 });
-    if (args.fileId) {
-      while (!page.files.some(file => file.id === args.fileId) && page.nextOffset != null) page = await s.turnSummary({ sessionId: args.sessionId, runId: args.runId, offset: page.nextOffset, limit: 100 });
-      if (!page.files.some(file => file.id === args.fileId)) fail('FILE_MISSING', 'Recorded file no longer available; refresh');
-    }
-    const run = await store!.getRun(args.runId, false, false);
-    if (!run || run.sessionId !== args.sessionId) fail('RUN_MISSING', 'Recorded task is unavailable');
-    return navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, args.fileId);
+    const run = await s.selectTarget(args);
+    if (!run) fail('RUN_MISSING', 'Recorded task not found in this session');
+    const selection = navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, args.fileId);
+    await atomicJson(path.join(store!.directory, 'selections.json'), navigation.export());
+    return selection;
   }
   if (method === 'readTurnSelection') {
     if (typeof args?.nonce !== 'string' || !/^[0-9a-f-]{36}$/i.test(args.nonce)) fail('NAVIGATION_INVALID', 'Invalid selection token');
-    const selection = navigation.get(args.nonce);
-    if (!selection) fail('NAVIGATION_EXPIRED', '选择已过期，请重新点击文末文件 / Selection expired; click the reply card again');
+    if (typeof args?.sessionId !== 'string' || !args.sessionId) fail('SESSION_REQUIRED', '当前视图缺少会话标识；请从本会话重新打开差异审查。');
+    const selection = navigation.get(args.nonce, args.sessionId);
+    if (!selection) fail('SELECTION_MISSING', '本会话的文件选择不存在或已清除；可返回本会话修改记录重新选择。');
+    await s.selectTarget({ runId: selection.request.runId!, sessionId: args.sessionId });
     return selection;
   }
-  if (method === 'clearHistory') navigation.clear();
+  if (method === 'clearHistory' && args?.confirmed === true) { const result = await s.invoke(method, args); evidence.clear(); navigation.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
   return s.invoke(method, args);
 }

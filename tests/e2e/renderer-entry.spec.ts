@@ -11,12 +11,12 @@ async function setup(page: Page, query = '') {
   await page.route('**/production-renderer.mjs', route => route.fulfill({ contentType: 'text/javascript', body: entry }));
   await page.goto(`/renderer-entry-host${query}`); await page.addScriptTag({ content: host });
 }
-test('production ESM uses supported host mappings and registers only the reply-end slot', async ({ page }) => {
+test('production ESM uses supported mappings and registers reply and one left composer slot', async ({ page }) => {
   await setup(page);
   await expect.poll(() => page.evaluate(() => (window as any).__entryHost.error || (window as any).__entryHost.loaded)).toBe(true);
-  await expect.poll(() => page.evaluate(() => (window as any).__entryHost.reports.slice().sort())).toEqual(['bootstrap-ok', 'entry-loaded', 'reply-slot-mounted']);
-  expect(await page.evaluate(() => (window as any).__entryHost.slots)).toEqual(['entryExtra']);
-  await expect(page.locator('[data-test-slot="composerControl"]')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__entryHost.reports)).toContain('bootstrap-ok');
+  expect(await page.evaluate(() => (window as any).__entryHost.slots)).toEqual(['entryExtra', 'composerControl']);
+  await expect(page.locator('[data-test-slot="composerControl"]')).toHaveCount(1);
   await expect(page.getByRole('button')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__entryHost.calls)).not.toContain('nativeProbeInfo');
   const specifiers = [...entry.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map(match => match[1]);
@@ -27,17 +27,17 @@ test('production ESM uses supported host mappings and registers only the reply-e
   await expect(page.locator('[data-test-slot]')).toHaveCount(0);
   expect(await page.evaluate(() => [(window as any).__entryHost.styles, (window as any).__entryHost.listeners])).toEqual([0, 0]);
 });
-test('removing composer controls does not depend on the old native-preflight setting', async ({ page }) => {
+test('idle floating controls do not depend on the old native-preflight setting', async ({ page }) => {
   await setup(page, '?enabled=false'); await expect.poll(() => page.evaluate(() => (window as any).__entryHost.loaded)).toBe(true);
   await expect.poll(() => page.evaluate(() => (window as any).__entryHost.reports)).toContain('bootstrap-ok');
-  expect(await page.evaluate(() => (window as any).__entryHost.slots)).toEqual(['entryExtra']);
+  expect(await page.evaluate(() => (window as any).__entryHost.slots)).toEqual(['entryExtra', 'composerControl']);
   await expect(page.getByRole('button')).toHaveCount(0);
   await page.evaluate(() => (window as any).__entryHost.shutdown());
 });
-test('a bootstrap failure is diagnosed without reintroducing input-area controls', async ({ page }) => {
+test('a bootstrap failure is diagnosed without showing an unverified floating button', async ({ page }) => {
   await setup(page, '?boot=fail'); await expect.poll(() => page.evaluate(() => (window as any).__entryHost.loaded)).toBe(true);
   await expect.poll(() => page.evaluate(() => (window as any).__entryHost.reports)).toContain('card-query-error');
-  expect(await page.evaluate(() => (window as any).__entryHost.slots)).toEqual(['entryExtra']);
+  expect(await page.evaluate(() => (window as any).__entryHost.slots)).toEqual(['entryExtra', 'composerControl']);
   await expect(page.getByRole('button')).toHaveCount(0);
   await page.evaluate(() => (window as any).__entryHost.shutdown());
 });

@@ -6,8 +6,9 @@ import { randomUUID } from 'node:crypto';
 import { createCaptureExtension } from '../../src/agent/capture';
 import { ReviewService } from '../../src/core/review-service';
 import { SnapshotStore, atomicJson } from '../../src/core/storage';
-import { absentSnapshot, assertPublicPath, canonical, digest, readCapturedSnapshot, resolveCapturePath, snapshotOfText } from '../../src/core/path-policy';
+import { absentSnapshot, assertPublicPath, canonical, digest, readCapturedSnapshot, resolveCapturePath, snapshotFromBytes, snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureIdentity, CaptureRun, TurnSummary } from '../../src/core/contracts';
+import { writeCaptureContexts } from '../../src/core/capture-context';
 let fixture: string, root: string, virtualRoot: string, plugin: string, locator: string, generation: string, external: string, actualExternal: string;
 let store: SnapshotStore, service: ReviewService, copied: string;
 beforeEach(async () => {
@@ -53,7 +54,7 @@ async function recorded(count = 5): Promise<CaptureRun> {
   await store.writeRun(run); return run;
 }
 describe('USER-task final binding and bounded summaries', () => {
-  it.each(['dialogue', 'no-op', 'restored', 'failed'])('does not retain an unchanged %s task or its reply', async mode => {
+  it.each(['dialogue', 'no-op', 'restored', 'failed'])('retains only observed modification events for %s', async mode => {
     const h = harness(); await fs.writeFile(path.join(root, 'a.txt'), 'original'); await h.emit('before_agent_start');
     if (mode !== 'dialogue') {
       await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'one', input: { path: 'a.txt' } });
@@ -66,6 +67,15 @@ describe('USER-task final binding and bounded summaries', () => {
       }
     }
     const reply = message('No changes'); await h.emit('message_end', { message: reply });
+    if (mode === 'restored') {
+      const [live] = await importRuns(); expect(live.changes['a.txt'].evidence).toEqual(['edit:one', 'edit:restore']);
+      expect(live.changes['a.txt'].before.hash).toBe(live.changes['a.txt'].after.hash);
+      await h.emit('agent_end', { messages: [reply] });
+      await importRuns();
+      const card = await service.card(cardArgs(reply)); expect(card.run?.id).toBe(live.id);
+      expect(card.summary).toMatchObject({ fileCount: 1, additions: 0, deletions: 0 });
+      expect(card.summary?.files[0].note).toContain('净变化为零'); return;
+    }
     expect(await importRuns()).toEqual([]);
     const [marker] = await store.listRuns(false, true); expect(marker.replies).toEqual([]); expect(marker.finalReply).toBeUndefined();
     await expect(service.invoke('clearHistory', { confirmed: true })).rejects.toThrow('Stop active');
@@ -169,20 +179,37 @@ describe('USER-task final binding and bounded summaries', () => {
     await h.emit('session_shutdown');
     const oversized = await recorded(255); oversized.changes['extra.txt'] = { capture: identity('extra.txt'), before: absentSnapshot(), after: snapshotOfText('x') }; await expect(store.writeRun(oversized)).rejects.toThrow('256');
   });
-  it('checks generation before reading a delayed result and never imports it into a new run', async () => {
-    const h = harness(); await h.emit('before_agent_start'); await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'old.txt' } });
-    await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: store.directory, generation: randomUUID(), expiresAt: Date.now() + 60000 });
+  it('recovers generation within the same user task without losing the pending call', async () => {
+    const h = harness(); await h.emit('before_agent_start', { userMessageId: 'same-user' });
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'old.txt' } });
+    await importRuns(); const [marker] = await store.listRuns(false, true);
+    generation = randomUUID();
+    await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: store.directory, generation, expiresAt: Date.now() + 60000 });
+    await fs.writeFile(path.join(root, 'old.txt'), 'same task result'); await h.emit('tool_result', { toolCallId: 'old' });
+    const [recovered] = await importRuns(); expect(recovered.id).toBe(marker.id); expect(recovered.userMessageId).toBe('same-user');
+    expect(recovered.generation).toBe(generation); expect(recovered.changes['old.txt'].after.text).toBe('same task result');
+  });
+  it('never reads late old calls after generation recovery and a new user boundary', async () => {
+    const h = harness(); await h.emit('before_agent_start', { userMessageId: 'old-user' });
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'old.txt' } });
+    generation = randomUUID();
+    await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: store.directory, generation, expiresAt: Date.now() + 60000 });
+    await h.emit('before_agent_start', { userMessageId: 'new-user' });
     await fs.writeFile(path.join(root, 'old.txt'), 'late'); vi.mocked(fs.open).mockClear();
     await h.emit('tool_result', { toolCallId: 'old' }); expect(fs.open).not.toHaveBeenCalled();
-    expect(await importRuns()).toEqual([]); const [marker] = await store.listRuns(false, true); expect(marker.changes).toEqual({});
+    expect(await importRuns()).toEqual([]); const [marker] = await store.listRuns(false, true);
+    expect(marker.userMessageId).toBe('new-user'); expect(marker.changes).toEqual({});
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'new.txt' } });
+    await h.emit('tool_result', { toolCallId: 'old' }); expect(await importRuns()).toEqual([]);
   });
-  it('omits net-restored paths and counts all files/lines independently of metadata pagination', async () => {
+  it('retains recorded net-restored paths without evidence and counts all files independently of pagination', async () => {
     const run = await recorded(7); await fs.writeFile(path.join(root, 'unrelated.txt'), 'must not appear');
     const args = { runId: run.id, sessionId: 's' }, first = await service.turnSummary(args);
-    expect(first).toMatchObject({ fileCount: 7, additions: 14, deletions: 7, incomplete: false, offset: 0, nextOffset: 3 }); expect(first.files).toHaveLength(3);
-    const second = await service.turnSummary({ ...args, offset: first.nextOffset!, limit: 1000 }); expect(second.files).toHaveLength(4); expect(second.nextOffset).toBeNull();
+    expect(first).toMatchObject({ fileCount: 8, additions: 14, deletions: 7, incomplete: false, offset: 0, nextOffset: 3 }); expect(first.files).toHaveLength(3);
+    const second = await service.turnSummary({ ...args, offset: first.nextOffset!, limit: 1000 }); expect(second.files).toHaveLength(5); expect(second.nextOffset).toBeNull();
     const review = await service.review({ scope: 'turn', ...args }); expect([...first.files, ...second.files].map(f => f.id)).toEqual(review.files.map(f => f.id));
-    expect(JSON.stringify(first)).not.toContain('restored'); expect(JSON.stringify(review)).not.toContain('unrelated');
+    expect(review.files.find(f => f.path === 'restored.txt')).toMatchObject({ additions: 0, deletions: 0 });
+    expect(review.files.find(f => f.path === 'restored.txt')?.note).toContain('净变化为零'); expect(JSON.stringify(review)).not.toContain('unrelated');
     expect((await service.turnSummary({ ...args, offset: 999 })).files).toEqual([]);
     await expect(service.turnSummary({ ...args, sessionId: 'other' })).rejects.toThrow('session');
     await expect(service.turnSummary({ ...args, sessionId: '' })).rejects.toThrow('sessionId');
@@ -197,7 +224,7 @@ describe('USER-task final binding and bounded summaries', () => {
     run.bindings.reply = 'message'; await store.writeRun(run); await service.turnSummary(args); expect(hydrate).not.toHaveBeenCalled();
     let offset = 0; const ids: string[] = [];
     do { const page = await service.invoke('turnSummary', { ...args, offset, limit: 100 }) as TurnSummary; ids.push(...page.files.map(f => f.id)); expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(28 * 1024); if (page.nextOffset === null) break; expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset; } while (offset < 120);
-    expect(new Set(ids).size).toBe(120);
+    expect(new Set(ids).size).toBe(121);
     run.changes['file-0.txt'].after = snapshotOfText('changed\n'); run.contentVersion!++; await store.writeRun(run);
     expect((await service.turnSummary(args)).additions).toBe(239); expect(hydrate).toHaveBeenCalled();
   });
@@ -206,15 +233,20 @@ describe('USER-task final binding and bounded summaries', () => {
     for (const change of Object.values(run.changes)) delete change.capture;
     const m = message('legacy'); run.replies = [{ hash: digest('legacy'), timestamp: m.timestamp }]; await store.writeRun(run);
     const review = await service.review({ scope: 'turn', runId: run.id, sessionId: 's' }); expect(review.files[0].actions).toEqual([]); expect(review.notice).toContain('Legacy');
-    const summary = await service.turnSummary({ runId: run.id, sessionId: 's' }); expect(summary).toMatchObject({ fileCount: 1, additions: 2, deletions: 1, incomplete: true }); expect(summary.notice).toContain('pre-installation');
+    const summary = await service.turnSummary({ runId: run.id, sessionId: 's' }); expect(summary).toMatchObject({ fileCount: 2, additions: 2, deletions: 1, incomplete: true }); expect(summary.notice).toContain('pre-installation');
+    expect(summary.files.find(f => f.path === 'restored.txt')?.note).toContain('净变化为零');
     expect((await service.card(cardArgs(m))).run).toBeNull(); expect((await store.getRun(run.id))?.version).toBe(1);
   });
-  it('tracks first-before/final-after and removes create-then-delete from cards and summaries', async () => {
+  it('tracks first-before/final-after and retains create-then-delete in cards and summaries', async () => {
     const h = harness(); await h.emit('before_agent_start');
     await h.emit('tool_call', { toolName: 'write', toolCallId: 'one', input: { file_path: 'new.txt' } }); await fs.writeFile(path.join(root, 'new.txt'), 'new'); await h.emit('tool_result', { toolCallId: 'one' });
     await h.emit('tool_call', { toolName: 'edit', toolCallId: 'two', input: { file_path: 'new.txt', ops: 'REM' } }); await fs.unlink(path.join(root, 'new.txt')); await h.emit('tool_result', { toolCallId: 'two' });
     const m = message('restored'); await h.emit('message_end', { message: m }); await h.emit('agent_end');
-    expect(await importRuns()).toEqual([]); expect((await service.bootstrap('s')).runs).toEqual([]); expect((await service.card(cardArgs(m))).run).toBeNull();
+    const [run] = await importRuns(); expect(run.changes['new.txt'].evidence).toEqual(['write:one', 'edit:two']);
+    expect(run.changes['new.txt'].before.exists).toBe(false); expect(run.changes['new.txt'].after.exists).toBe(false);
+    expect((await service.bootstrap('s')).runs).toHaveLength(1);
+    const card = await service.card(cardArgs(m)); expect(card.run?.id).toBe(run.id);
+    expect(card.summary).toMatchObject({ fileCount: 1, additions: 0, deletions: 0 }); expect(card.summary?.files[0].note).toContain('净变化为零');
   });
 });
 describe('explicit external capture and safety boundaries', () => {
@@ -226,9 +258,10 @@ describe('explicit external capture and safety boundaries', () => {
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 'create', input: { path: path.join(external, 'new.txt') } }); await fs.writeFile(path.join(actualExternal, 'new.txt'), 'new\n'); await h.emit('tool_result', { toolCallId: 'create' });
     await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'delete', input: { path: path.join(external, 'new.txt'), ops: 'REM' } }); await fs.unlink(path.join(actualExternal, 'new.txt')); await h.emit('tool_result', { toolCallId: 'delete' });
     const m = message('external done'); await h.emit('message_end', { message: m }); await h.emit('agent_end'); const [run] = await importRuns();
-    expect(run.incomplete).toBe(false); expect(run.fileCount).toBe(2); expect(run.changes[file].before.text).toBe('before\n'); expect(run.changes[file].after.exists).toBe(false);
+    expect(run.incomplete).toBe(false); expect(run.fileCount).toBe(3); expect(run.changes[file].before.text).toBe('before\n'); expect(run.changes[file].after.exists).toBe(false);
     const args = { runId: run.id, sessionId: 's' }, summary = await service.turnSummary(args), review = await service.review({ scope: 'turn', ...args });
-    expect(summary).toMatchObject({ fileCount: 2, additions: 1, deletions: 1 }); expect(review.root).toBe(virtualRoot); expect(review.files.map(f => f.id)).toEqual(summary.files.map(f => f.id));
+    expect(summary).toMatchObject({ fileCount: 3, additions: 1, deletions: 1 }); expect(review.root).toBe(virtualRoot); expect(review.files.map(f => f.id)).toEqual(summary.files.map(f => f.id));
+    expect(summary.files.find(f => f.path === path.join(external, 'new.txt'))?.note).toContain('净变化为零');
     expect(review.files.every(f => f.origin === 'external' && f.absolutePath === f.path && f.actions.length === 0)).toBe(true);
     const current = review.files.find(f => f.path === moved)!; await fs.writeFile(path.join(actualExternal, 'moved.txt'), 'unrelated live content');
     const detail = await service.file({ reviewId: review.id, fileId: current.id }); expect(JSON.stringify(detail)).toContain('after'); expect(JSON.stringify(detail)).not.toContain('unrelated live');
@@ -298,5 +331,97 @@ describe('new-file capture regressions', () => {
     const [run] = await importRuns(); expect(run.fileCount).toBe(1); expect(run.incomplete).toBe(false);
     expect(Object.hasOwn(run.changes, '__proto__')).toBe(true); expect(run.changes['__proto__'].before.exists).toBe(false); expect(run.changes['__proto__'].after.text).toBe('two\n');
     const summary = await service.turnSummary({ sessionId: 's', runId: run.id }); expect(summary).toMatchObject({ fileCount: 1, additions: 1, deletions: 0 }); expect(summary.files[0].path).toBe('__proto__');
+  });
+});
+
+describe('current running-task summary', () => {
+  it('imports live captures, merges repeated edits, hides net-zero changes but retains historical events for the final card', async () => {
+    const h = harness(), since = Date.now() - 1; await fs.writeFile(path.join(root, 'a.txt'), 'original\n'); await h.emit('before_agent_start');
+    expect(await service.runningChanges({ sessionId: 's', since })).toBeNull();
+    const edit = async (id: string, text: string) => { await h.emit('tool_call', { toolName: 'Edit', toolCallId: id, input: { path: 'a.txt' } }); await fs.writeFile(path.join(root, 'a.txt'), text); await h.emit('tool_result', { toolCallId: id }); };
+    await edit('first', 'intermediate\n'); await edit('second', 'final\nextra\n');
+    const live = await service.runningChanges({ sessionId: 's', since }); expect(live).toMatchObject({ sessionId: 's', fileCount: 1, additions: 2, deletions: 1 });
+    expect(await service.runningChanges({ sessionId: 'other', since })).toBeNull();
+    const target = await service.selectTarget({ sessionId: 's', runId: live!.runId, runningSince: since });
+    const review = await service.review({ scope: 'turn', sessionId: 's', runId: target.id });
+    expect(review.files[0].actions).toEqual([]);
+    const detail = await service.file({ reviewId: review.id, fileId: review.files[0].id }); expect(detail.file.actions).toEqual([]); expect(detail.hunks.flatMap(hunk => hunk.lines).some(line => line.text === 'extra' && line.kind === 'add')).toBe(true);
+    for (const action of ['revert', 'reapply', 'stage', 'unstage'] as const) await expect(service.action({ reviewId: review.id, fileId: review.files[0].id, fingerprint: review.files[0].fingerprint, action, confirmed: true })).rejects.toThrow();
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('final\nextra\n');
+    await edit('restore', 'original\n'); expect(await service.runningChanges({ sessionId: 's', since })).toBeNull();
+    expect((await service.turnSummary({ sessionId: 's', runId: live!.runId })).files[0].note).toContain('净变化为零');
+    await edit('last', 'done\n'); const reply = message('Completed live task'); await h.emit('message_end', { message: reply }); await h.emit('agent_end', { messages: [reply] });
+    expect(await service.runningChanges({ sessionId: 's', since })).toBeNull(); expect((await service.card(cardArgs(reply))).summary?.fileCount).toBe(1);
+    await expect(service.selectTarget({ sessionId: 's', runId: live!.runId, runningSince: since })).rejects.toThrow('no longer current');
+  });
+  it.each(['completed', 'aborted', 'incomplete', 'old-generation', 'uncertain', 'already-carded', 'new-user', 'new-empty', 'ambiguous'])('rejects stale or unverified %s tasks without using earlier history', async mode => {
+    const run = await recorded(1); run.startedAt = Date.now() - 1000; run.state = 'running'; delete run.endedAt; let since = run.startedAt - 1;
+    if (['completed', 'aborted', 'incomplete'].includes(mode)) { run.state = mode as any; run.endedAt = Date.now(); }
+    if (mode === 'old-generation') run.generation = randomUUID();
+    if (mode === 'uncertain') run.boundary = 'uncertain';
+    if (mode === 'already-carded') run.bindings = { hash: 'reply' };
+    if (mode === 'new-user') since = run.startedAt + 1;
+    await store.writeRun(run);
+    if (mode === 'new-empty' || mode === 'ambiguous') await store.writeRun({ ...run, id: randomUUID(), startedAt: run.startedAt + 1, ...(mode === 'new-empty' ? { changes: {}, fileCount: 0 } : {}) });
+    expect(await service.runningChanges({ sessionId: 's', since })).toBeNull();
+  });
+  it('rejects missing task metadata, and a new running user task excludes completed history', async () => {
+    await recorded(5); await expect(service.runningChanges({ sessionId: 's', since: NaN })).rejects.toThrow('identity');
+    const h = harness(), since = Date.now(); await h.emit('before_agent_start');
+    expect(await service.runningChanges({ sessionId: 's', since })).toBeNull();
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'current', input: { path: 'new.txt' } }); await fs.writeFile(path.join(root, 'new.txt'), 'new\n'); await h.emit('tool_result', { toolCallId: 'current' });
+    expect(await service.runningChanges({ sessionId: 's', since })).toMatchObject({ fileCount: 1, additions: 1, deletions: 0 });
+    await h.emit('session_shutdown'); expect(await service.runningChanges({ sessionId: 's', since })).toBeNull();
+  });
+  it('returns partial running totals for unknown files while excluding restored paths, not earlier task history', async () => {
+    const run = await recorded(1); run.state = 'running'; delete run.endedAt; run.userMessageId = 'current-user';
+    const binary = snapshotFromBytes(Buffer.from([0, 1]), 0);
+    run.changes['binary.dat'] = { capture: identity('binary.dat'), before: binary, after: { ...binary, hash: digest('binary-change') } };
+    run.changes['missing.txt'] = { capture: identity('missing.txt'), before: snapshotOfText('old'), after: { ...snapshotOfText('unknown'), kind: 'unavailable', text: null } };
+    run.changes['ambiguous.txt'] = { capture: identity('ambiguous.txt'), before: snapshotOfText('old'), after: snapshotOfText('new'), ambiguous: true };
+    await store.writeRun(run);
+    expect(await service.runningChanges({ sessionId: 's', since: 0, taskId: 'current-user' })).toMatchObject({ runId: run.id, fileCount: 4, additions: 2, deletions: 1, unknownFileCount: 3 });
+    expect((await service.turnSummary({ sessionId: 's', runId: run.id })).fileCount).toBe(5);
+    expect(await service.runningChanges({ sessionId: 's', since: run.startedAt - 1, taskId: 'new-user' })).toBeNull();
+    expect(await service.runningChanges({ sessionId: 'other', since: 0, taskId: 'current-user' })).toBeNull();
+    await store.writeRun({ ...run, id: randomUUID(), userMessageId: 'new-user', startedAt: run.startedAt + 1, changes: {}, fileCount: 0 });
+    expect(await service.runningChanges({ sessionId: 's', since: 0, taskId: 'new-user' })).toBeNull();
+    expect(await service.runningChanges({ sessionId: 's', since: 0, taskId: 'current-user' })).toBeNull();
+  });
+  it.each(['ended', 'uncertain', 'legacy', 'old-generation', 'already-carded', 'duplicate'])('does not bypass running safety checks for an explicit %s user identity', async mode => {
+    const run = await recorded(1); run.state = 'running'; delete run.endedAt; run.userMessageId = 'current-user';
+    if (mode === 'ended') run.endedAt = Date.now();
+    if (mode === 'uncertain') run.boundary = 'uncertain';
+    if (mode === 'legacy') run.version = 1;
+    if (mode === 'old-generation') run.generation = 'old-generation';
+    if (mode === 'already-carded') run.bindings = { hash: 'reply' };
+    await store.writeRun(run);
+    if (mode === 'duplicate') await store.writeRun({ ...run, id: randomUUID() });
+    expect(await service.runningChanges({ sessionId: 's', since: run.startedAt - 1, taskId: 'current-user' })).toBeNull();
+  });
+});
+describe('fresh renderer identity bridge for native continuation capture', () => {
+  it('captures only new endpoints under an exact host user task when pre-start is absent', async () => {
+    const since = Date.now() - 100;
+    await writeCaptureContexts(store.directory, generation, [{ sessionId: 's', root: virtualRoot, running: true, taskId: 'native-user', since, updatedAt: Date.now() }]);
+    const h = harness();
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'native-call', input: { path: 'native.txt' } });
+    await fs.writeFile(path.join(root, 'native.txt'), 'new endpoint\n');
+    await h.emit('tool_result', { toolCallId: 'native-call' });
+    const [run] = await importRuns(); expect(run).toMatchObject({ boundary: 'user', userMessageId: 'native-user', incomplete: true });
+    expect(run.notice).toContain('采集开始后');
+    expect(await service.runningChanges({ sessionId: 's', since, taskId: 'native-user' })).toMatchObject({ fileCount: 1, additions: 1, deletions: 0 });
+    expect(await service.runningChanges({ sessionId: 's', since, taskId: 'next-user' })).toBeNull();
+  });
+  it('does not retroactively promote uncertain endpoints when host identity arrives late', async () => {
+    const h = harness();
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: 'early', input: { path: 'early.txt' } });
+    await fs.writeFile(path.join(root, 'early.txt'), 'not attributed\n'); await h.emit('tool_result', { toolCallId: 'early' });
+    const [before] = await importRuns();
+    await writeCaptureContexts(store.directory, generation, [{ sessionId: 's', root: virtualRoot, running: true, taskId: 'native-user', since: before.startedAt - 1, updatedAt: Date.now() }]);
+    await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'late', input: { path: 'early.txt' } });
+    await fs.writeFile(path.join(root, 'early.txt'), 'still uncertain\n'); await h.emit('tool_result', { toolCallId: 'late' });
+    const [after] = await importRuns(); expect(after.boundary).toBe('uncertain'); expect(after.userMessageId).toBeUndefined();
+    expect(await service.runningChanges({ sessionId: 's', since: before.startedAt - 1, taskId: 'native-user' })).toBeNull();
   });
 });

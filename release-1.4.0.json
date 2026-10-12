@@ -1,0 +1,39 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.0",
+  "package": "plugin/dist/local.diff-view-1.4.0.piplug",
+  "packageBytes": 1876682,
+  "packageFiles": 57,
+  "sha256": "e2785226ac13f1512c2638f29cbe9a1e471098a567c2cf3671defbe9430095b1",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 30, "testsPassed": 251, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 87, "host": "mock", "browser": "local Chrome" },
+    "sidebarFocusedBrowser": { "testsPassed": 32 },
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "packageContentsMatchLocalDirectory": true,
+    "packageStoreOnly": true,
+    "versionMetadataConsistent": true,
+    "gitDiffCheck": "passed",
+    "layoutMeasurements": { "rowHeight": 42, "headerHeight": 53, "narrowViewport": 360, "narrowDocumentWidth": 360 },
+    "screenshotsGeneratedInScratch": true,
+    "screenshotVisualInspection": false
+  },
+  "changes": [
+    "Reference-style review sidebar with capsule controls, quiet separators and inline file-type icons",
+    "Per-file open and overflow controls, validated path copying and file-specific diff copying",
+    "Bottom-row menus flip upward within the scroll viewport",
+    "Exclude image paths from explicit capture, workspace snapshots, host history imports and Git reviews",
+    "Filter legacy images from historical review lists, running totals and reply cards without modifying real files or independent local Git status"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false },
+  "limitations": [
+    "Inline open controls expand the plugin review; external editor integration was not added",
+    "Image exclusion uses filename extensions rather than MIME or content guesses",
+    "Built-in browser guest and scratch image-reader access were unavailable; screenshot visual inspection is not claimed"
+  ],
+  "report": "docs/verification-1.4.0.md"
+}

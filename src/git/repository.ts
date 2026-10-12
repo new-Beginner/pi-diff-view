@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { MAX_TEXT_BYTES, type FileSnapshot, type GitScope, type InternalFile, type RepositoryInfo } from '../core/contracts';
 import { absentSnapshot, assertPublicPath, canonical, digest, fail, safeResolve, sameSnapshot, snapshotFromBytes } from '../core/path-policy';
 import { stats } from '../core/diff';
-import { git, headCommit, OUTPUT_LIMIT, resolveCommit } from './runner';
+import { isImagePath } from '../core/review-file-policy';
+import { git, headCommit, OUTPUT_LIMIT, readGitBlobs, resolveCommit } from './runner';
 
 export interface GitReview { root: string; scope: GitScope; files: InternalFile[]; notice?: string; ref?: string; }
 interface Entry { mode: number; oid: string; stage: number; }
@@ -21,7 +22,7 @@ export function reviewState(review: GitReview): ReviewState {
 }
 
 /** Never replace the authorized project with an enclosing repository. */
-export async function discoverRepository(authorizedRoot: string): Promise<RepositoryInfo> {
+export async function discoverRepository(authorizedRoot: string, includeBranch = true): Promise<RepositoryInfo> {
   const root = await fs.realpath(authorizedRoot);
   if (!(await fs.stat(root)).isDirectory()) fail('INVALID_ROOT', 'Project root is not a directory');
   const result: RepositoryInfo = { root, name: path.basename(root), git: false };
@@ -30,6 +31,7 @@ export async function discoverRepository(authorizedRoot: string): Promise<Reposi
   const gitRoot = await fs.realpath(top.stdout.toString('utf8').replace(/\r?\n$/, ''));
   if (canonical(gitRoot) !== canonical(root)) return result;
   result.git = true;
+  if (!includeBranch) return result;
   const branch = await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true, limit: 4096 });
   if (branch.code === 0) result.branch = branch.stdout.toString('utf8').replace(/\r?\n$/, '');
   return result;
@@ -77,13 +79,19 @@ function metadata(kind: FileSnapshot['kind'], hash: string, mode: number, size =
 
 /** Leaf symlinks are metadata; symlink ancestors are refused, never followed. */
 export async function workingSnapshot(root: string, rel: string, budget = MAX_TEXT_BYTES): Promise<FileSnapshot> {
+  return captureWorking(root, rel, size => size <= budget);
+}
+async function captureWorking(root: string, rel: string, reserve: (size: number) => boolean | Promise<boolean>,
+  onBytes?: (bytes: Buffer) => void): Promise<FileSnapshot> {
   assertPublicPath(rel);
-  const parent = path.posix.dirname(rel);
-  if (parent !== '.') await safeResolve(root, parent);
   let target: string;
   try { target = await safeResolve(root, rel); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'SYMLINK_DENIED') throw error;
+    // A failed full-path check may have found an ancestor, not the leaf. Check
+    // the parent before lstat/readlink, but avoid walking it twice on normal files.
+    const parent = path.posix.dirname(rel);
+    if (parent !== '.') await safeResolve(root, parent);
     const leaf = path.resolve(root, rel);
     const stat = await fs.lstat(leaf);
     if (!stat.isSymbolicLink()) throw error;
@@ -95,7 +103,7 @@ export async function workingSnapshot(root: string, rel: string, budget = MAX_TE
     if (stat.isDirectory()) return metadata('submodule', `directory:${stat.mtimeMs}`, 0o160000);
     if (!stat.isFile()) return metadata('unavailable', `special:${stat.mode}`, stat.mode);
     if (stat.size > MAX_TEXT_BYTES) return metadata('large', `large:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
-    if (stat.size > budget) return metadata('unavailable', `budget:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
+    if (!await reserve(stat.size)) return metadata('unavailable', `budget:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
     handle = await fs.open(target, 'r');
     const opened = await handle.stat();
     if (!opened.isFile() || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs)
@@ -104,6 +112,7 @@ export async function workingSnapshot(root: string, rel: string, budget = MAX_TE
     const after = await handle.stat();
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) fail('FILE_CHANGED', 'Working file changed during capture');
     await safeResolve(root, rel);
+    onBytes?.(bytes);
     return bytesSnapshot(bytes, stat.mode);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return absentSnapshot();
@@ -146,16 +155,46 @@ function changes(bytes: Buffer): Change[] {
   return result;
 }
 
+/** Bound open handles/IO; never retain or reuse mutable working-tree observations. */
+async function mapWorking<T, R>(items: readonly T[], visit: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0, failed = false, error: unknown;
+  await Promise.all(Array.from({ length: Math.min(16, items.length) }, async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try { results[i] = await visit(items[i], i); }
+      catch (cause) { failed = true; error ??= cause; }
+    }
+  }));
+  if (failed) throw error;
+  return results;
+}
+
+function signal(): { ready: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  return { ready, release };
+}
+
 export async function readGitReview(requestedRoot: string, scope: GitScope, ref?: string): Promise<GitReview> {
   if (!['unstaged', 'staged', 'commit', 'branch'].includes(scope)) fail('INVALID_SCOPE', 'Invalid Git review scope');
-  const repo = await discoverRepository(requestedRoot);
+  const repo = await discoverRepository(requestedRoot, false);
   if (!repo.git) return { root: repo.root, scope, files: [], notice: 'Selected project is not a Git root; enclosing repositories are not authorized.' };
   const root = repo.root;
-  const indexPath = (await git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'index'], { limit: 16384 })).stdout.toString().replace(/\r?\n$/, '');
-  const index = await readIndex(indexPath), head = await headCommit(root);
-  const indexEntries = parseEntries((await git(root, ['ls-files', '--stage', '-z', '--'])).stdout, false);
-  const objectLength = (await git(root, ['rev-parse', '--show-object-format'], { limit: 1024 })).stdout.toString().trim() === 'sha256' ? 64 : 40;
-  const filemodeResult = await git(root, ['config', '--type=bool', '--get', 'core.filemode'], { allowFailure: true, limit: 1024 });
+  const [indexPathResult, head, formatResult, filemodeResult] = await Promise.all([
+    git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'index'], { limit: 16384 }),
+    headCommit(root),
+    git(root, ['rev-parse', '--show-object-format'], { limit: 1024 }),
+    git(root, ['config', '--type=bool', '--get', 'core.filemode'], { allowFailure: true, limit: 1024 }),
+  ]);
+  const indexPath = indexPathResult.stdout.toString().replace(/\r?\n$/, '');
+  const index = await readIndex(indexPath);
+  const [indexed, untracked] = await Promise.all([
+    git(root, ['ls-files', '--stage', '-z', '--']),
+    scope === 'unstaged' ? git(root, ['ls-files', '--others', '--exclude-standard', '-z', '--']) : undefined,
+  ]);
+  const indexEntries = parseEntries(indexed.stdout, false);
+  const objectLength = formatResult.stdout.toString().trim() === 'sha256' ? 64 : 40;
   const filemode = filemodeResult.stdout.toString().trim() !== 'false';
   const diffOptions = ['--name-status', '-z', '--no-ext-diff', '--no-textconv', '--find-renames=50%', '-l200', '--ignore-submodules=none'];
   let beforeEntries: Map<string, Entry[]>, afterEntries: Map<string, Entry[]>;
@@ -165,11 +204,14 @@ export async function readGitReview(requestedRoot: string, scope: GitScope, ref?
     // Even a name-only working-tree diff can invoke configured clean/process filters.
     // Compare literal bytes ourselves instead; Git only supplies index/untracked names.
     listed = [...indexEntries.keys()].map(rel => ({ path: rel, status: 'modified' }));
-    for (const rel of records((await git(root, ['ls-files', '--others', '--exclude-standard', '-z', '--'])).stdout))
+    for (const rel of records(untracked!.stdout))
       listed.push({ path: rel, status: 'added' });
   } else if (scope === 'staged') {
-    beforeEntries = await treeEntries(root, head); afterEntries = indexEntries;
-    listed = changes((await git(root, ['diff', '--cached', ...diffOptions, ...(head ? [head] : []), '--'])).stdout);
+    const [tree, diff] = await Promise.all([
+      treeEntries(root, head),
+      git(root, ['diff', '--cached', ...diffOptions, ...(head ? [head] : []), '--']),
+    ]);
+    beforeEntries = tree; afterEntries = indexEntries; listed = changes(diff.stdout);
     if (!head) notice = 'Unborn HEAD: staged changes are compared with an empty tree.';
   } else if (scope === 'commit') {
     selectedRef = await resolveCommit(root, ref ?? 'HEAD');
@@ -177,9 +219,12 @@ export async function readGitReview(requestedRoot: string, scope: GitScope, ref?
     const header = (await git(root, ['cat-file', 'commit', selectedRef])).stdout.toString('utf8').split('\n\n', 1)[0];
     const parents = header.split('\n').filter(line => line.startsWith('parent ')).map(line => line.slice(7));
     if (parents.some(parent => !new RegExp(`^[a-f0-9]{${objectLength}}$`).test(parent))) fail('GIT_FAILED', 'Invalid commit parent');
-    beforeEntries = await treeEntries(root, parents[0]); afterEntries = await treeEntries(root, selectedRef);
-    listed = changes((await git(root, ['diff-tree', '--root', '--no-commit-id', '-r', ...diffOptions,
-      ...(parents.length ? [parents[0], selectedRef] : [selectedRef]), '--'])).stdout);
+    const [before, after, diff] = await Promise.all([
+      treeEntries(root, parents[0]), treeEntries(root, selectedRef),
+      git(root, ['diff-tree', '--root', '--no-commit-id', '-r', ...diffOptions,
+        ...(parents.length ? [parents[0], selectedRef] : [selectedRef]), '--']),
+    ]);
+    beforeEntries = before; afterEntries = after; listed = changes(diff.stdout);
     notice = parents.length > 1 ? 'Merge commit: compared with its first parent only.'
       : parents.length === 0 ? 'Root commit: compared with an empty tree.' : 'Commit: compared with its parent.';
   } else {
@@ -188,68 +233,98 @@ export async function readGitReview(requestedRoot: string, scope: GitScope, ref?
     selectedRef = await resolveCommit(root, ref);
     const base = (await git(root, ['merge-base', '--all', selectedRef, head], { limit: 4096 })).stdout.toString().trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(base)) fail('INVALID_REF', 'No unique merge base');
-    beforeEntries = await treeEntries(root, base); afterEntries = await treeEntries(root, head);
-    listed = changes((await git(root, ['diff', ...diffOptions, base, head, '--'])).stdout);
+    const [before, after, diff] = await Promise.all([
+      treeEntries(root, base), treeEntries(root, head),
+      git(root, ['diff', ...diffOptions, base, head, '--']),
+    ]);
+    beforeEntries = before; afterEntries = after; listed = changes(diff.stdout);
     notice = `Branch: merge-base(${ref}, HEAD) ${base.slice(0, 12)} → HEAD ${head.slice(0, 12)}.`;
   }
   if (scope === 'unstaged' || scope === 'staged') for (const [rel, entries] of indexEntries)
     if (entries.some(entry => entry.stage !== 0)) listed.push({ path: rel, status: 'modified' });
-  listed = [...new Map(listed.map(change => [change.path, change])).values()];
+  listed = [...new Map(listed.map(change => [change.path, change])).values()].filter(change => !isImagePath(change.path));
   if (listed.length > (scope === 'unstaged' ? 10000 : 1000)) fail('GIT_LIMIT', 'Repository path count exceeds the review budget');
   const review: GitReview = { root, scope, files: [], notice, ...(selectedRef ? { ref: selectedRef } : {}) };
   const state: ReviewState = { root, scope, indexPath, indexFingerprint: index.fingerprint, head,
     files: new Map(), working: new Map(), objectLength };
   let skipped = 0, remaining = OUTPUT_LIMIT;
   const deadline = Date.now() + 30000;
-  const blob = async (entry?: Entry): Promise<FileSnapshot> => {
-    if (!entry) return absentSnapshot();
-    if (entry.mode === 0o120000) {
-      const bytes = (await git(root, ['cat-file', 'blob', entry.oid], { limit: 8192 })).stdout;
-      return metadata('symlink', digest(bytes), entry.mode, bytes.length);
-    }
-    if (entry.mode === 0o160000) return metadata('submodule', `git:${entry.oid}`, entry.mode);
-    const size = Number((await git(root, ['cat-file', '-s', entry.oid], { limit: 1024 })).stdout.toString().trim());
-    if (!Number.isSafeInteger(size) || size < 0) fail('GIT_FAILED', 'Invalid Git blob size');
-    if (size > MAX_TEXT_BYTES) return metadata('large', `git:${entry.oid}`, entry.mode, size);
-    if (size > remaining || Date.now() > deadline) return metadata('unavailable', `git:${entry.oid}`, entry.mode, size);
-    remaining -= size;
-    return bytesSnapshot((await git(root, ['cat-file', 'blob', entry.oid], { limit: MAX_TEXT_BYTES + 4096 })).stdout, entry.mode);
-  };
-  for (const change of listed) {
-    if (Date.now() > deadline) fail('GIT_TIMEOUT', 'Review exceeded the time budget; use a smaller repository');
-    let working: FileSnapshot, oldWorking: FileSnapshot | undefined;
+  // Reserve in path order even when stat/read completion order differs. If the
+  // budget is temporarily held by earlier clean files, wait for their refunds.
+  const admitted = listed.map(() => signal()), completed = listed.map(() => signal());
+  const finished: Promise<unknown>[] = [];
+  for (let i = 0; i < listed.length; i++) finished.push(Promise.all([finished[i - 1], completed[i].ready]));
+  const captured = await mapWorking(listed, async (change, i) => {
+    const turn = admitted[i - 1]?.ready;
+    const reserve = async (size: number) => {
+      await turn;
+      if (size > remaining) await finished[i - 1];
+      const fits = size <= remaining;
+      if (fits) remaining -= size;
+      if (!change.oldPath) admitted[i].release();
+      return fits;
+    };
     try {
-      assertPublicPath(change.path);
-      if (change.oldPath) assertPublicPath(change.oldPath);
-      working = await workingSnapshot(root, change.path, remaining);
-      if (working.kind === 'text' || working.kind === 'binary') remaining -= working.size;
-      if (change.oldPath) {
-        oldWorking = await workingSnapshot(root, change.oldPath, remaining);
-        if (oldWorking.kind === 'text' || oldWorking.kind === 'binary') remaining -= oldWorking.size;
+      if (Date.now() > deadline) fail('GIT_TIMEOUT', 'Review exceeded the time budget; use a smaller repository');
+      const conflict = (scope === 'unstaged' || scope === 'staged') && indexEntries.get(change.path)?.some(entry => entry.stage !== 0);
+      const leftEntry = beforeEntries.get(change.oldPath ?? change.path)?.find(entry => entry.stage === 0);
+      const rightEntry = afterEntries.get(change.path)?.find(entry => entry.stage === 0);
+      let working: FileSnapshot, oldWorking: FileSnapshot | undefined, workingOid: string | undefined;
+      try {
+        assertPublicPath(change.path);
+        if (change.oldPath) assertPublicPath(change.oldPath);
+        working = await captureWorking(root, change.path, reserve, scope === 'unstaged' && leftEntry && !conflict ? bytes => {
+          workingOid = createHash(objectLength === 64 ? 'sha256' : 'sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+        } : undefined);
+        if (change.oldPath) oldWorking = await captureWorking(root, change.oldPath, reserve);
+      } catch (error) {
+        if (['PATH_DENIED', 'INVALID_PATH', 'PATH_ESCAPE', 'SYMLINK_DENIED'].includes((error as { code: string }).code)) { skipped++; return undefined; }
+        throw error;
       }
-    } catch (error) {
-      if (['PATH_DENIED', 'INVALID_PATH', 'PATH_ESCAPE', 'SYMLINK_DENIED'].includes((error as { code: string }).code)) { skipped++; continue; }
-      throw error;
-    }
-    const conflict = (scope === 'unstaged' || scope === 'staged') && indexEntries.get(change.path)?.some(entry => entry.stage !== 0);
-    const leftEntry = beforeEntries.get(change.oldPath ?? change.path)?.find(entry => entry.stage === 0);
-    const rightEntry = afterEntries.get(change.path)?.find(entry => entry.stage === 0);
-    if (scope === 'unstaged' && !conflict) {
-      if (leftEntry && working.kind === 'text' && working.text !== null) {
-        const bytes = Buffer.from(working.text);
-        const oid = createHash(objectLength === 64 ? 'sha256' : 'sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
-        const mode = filemode ? (working.mode & 0o111 ? 0o100755 : 0o100644) : leftEntry.mode === 0o100755 ? 0o100755 : 0o100644;
-        if (oid === leftEntry.oid && mode === leftEntry.mode) { remaining += working.size; continue; }
+      if (scope === 'unstaged' && !conflict) {
+        // Literal OIDs also skip unchanged binary files, without a second blob
+        // read or UTF-8 re-encoding. Index stat data cannot prove literal equality.
+        if (leftEntry && workingOid) {
+          const mode = filemode ? (working.mode & 0o111 ? 0o100755 : 0o100644) : leftEntry.mode === 0o100755 ? 0o100755 : 0o100644;
+          if (workingOid === leftEntry.oid && mode === leftEntry.mode) { remaining += working.size; return undefined; }
+        }
+        change.status = !working.exists ? 'deleted' : !leftEntry ? 'added' : 'modified';
       }
-      change.status = !working.exists ? 'deleted' : !leftEntry ? 'added' : 'modified';
+      return { change, working, oldWorking, conflict, leftEntry, rightEntry };
+    } finally {
+      await turn;
+      admitted[i].release(); completed[i].release();
     }
-    let before = conflict ? metadata('conflict', 'unmerged', 0) : await blob(leftEntry);
-    let after = conflict ? metadata('conflict', 'unmerged', 0) : scope === 'unstaged' ? { ...working } : await blob(rightEntry);
+  });
+  const pending = captured.filter(item => item !== undefined);
+  const oids = pending.flatMap(item => item.conflict ? [] : [item.leftEntry, ...(scope === 'unstaged' ? [] : [item.rightEntry])]
+    .filter((entry): entry is Entry => !!entry && entry.mode !== 0o160000).map(entry => entry.oid));
+  const blobs = await readGitBlobs(root, oids, { budget: remaining, maxSize: MAX_TEXT_BYTES, deadline });
+  const snapshots = new Map<string, FileSnapshot>();
+  const blob = (entry?: Entry): FileSnapshot => {
+    if (!entry) return absentSnapshot();
+    if (entry.mode === 0o160000) return metadata('submodule', `git:${entry.oid}`, entry.mode);
+    const value = blobs.get(entry.oid)!;
+    if (entry.mode === 0o120000 && value.size > 8192) fail('GIT_LIMIT', 'Git symlink exceeds the size budget');
+    if (value.size > MAX_TEXT_BYTES) return metadata('large', `git:${entry.oid}`, entry.mode, value.size);
+    if (!value.bytes || value.size > remaining) return metadata('unavailable', `git:${entry.oid}`, entry.mode, value.size);
+    // Deduplicate transport/decoding, but keep the logical per-snapshot budget.
+    remaining -= value.size;
+    const key = `${entry.oid}:${entry.mode}`, cached = snapshots.get(key);
+    if (cached) return cached;
+    const snapshot = entry.mode === 0o120000 ? metadata('symlink', digest(value.bytes), entry.mode, value.size)
+      : bytesSnapshot(value.bytes, entry.mode);
+    snapshots.set(key, snapshot);
+    return snapshot;
+  };
+  for (const { change, working, oldWorking, conflict, leftEntry, rightEntry } of pending) {
+    if (Date.now() > deadline) fail('GIT_TIMEOUT', 'Review exceeded the time budget; use a smaller repository');
+    let before = conflict ? metadata('conflict', 'unmerged', 0) : blob(leftEntry);
+    let after = conflict ? metadata('conflict', 'unmerged', 0) : scope === 'unstaged' ? { ...working } : blob(rightEntry);
     if (scope === 'unstaged' && after.exists && ['text', 'binary', 'large', 'unavailable'].includes(after.kind)) {
       after.mode = filemode ? (working.mode & 0o111 ? 0o100755 : 0o100644) : leftEntry?.mode === 0o100755 ? 0o100755 : 0o100644;
     }
     if (!conflict && !change.oldPath && before.kind === after.kind && sameSnapshot(before, after)) {
-      if (before.kind === 'text' || before.kind === 'binary') remaining += before.size + working.size;
       continue;
     }
     if (before.kind === 'text' && after.kind === 'text' && before.exists && after.exists && before.hash === after.hash) {
@@ -306,9 +381,12 @@ export async function readGitReview(requestedRoot: string, scope: GitScope, ref?
     review.files = review.files.filter(f => !discarded.has(f.id));
   }
   if ((await readIndex(indexPath)).fingerprint !== index.fingerprint) fail('STALE_INDEX', 'Index changed; refresh the review');
-  for (const file of state.files.values()) if (file.actions.length) for (const rel of [file.path, ...(file.oldPath ? [file.oldPath] : [])]) {
+  const revalidate = [...new Set([...state.files.values()].filter(file => file.actions.length)
+    .flatMap(file => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))];
+  await mapWorking(revalidate, async rel => {
+    if (Date.now() > deadline) fail('GIT_TIMEOUT', 'Review exceeded the time budget');
     if (!sameSnapshot(await workingSnapshot(root, rel), state.working.get(rel)!)) fail('FILE_CHANGED', 'Working file changed; refresh the review');
-  }
+  });
   if (skipped) review.notice = [review.notice, `${skipped} credential/internal/unsafe path(s) omitted.`].filter(Boolean).join(' ');
   states.set(review, state);
   return review;

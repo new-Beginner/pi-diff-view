@@ -1,0 +1,41 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.2",
+  "package": "plugin/dist/local.diff-view-1.4.2.piplug",
+  "packageBytes": 1893633,
+  "packageFiles": 59,
+  "sha256": "129bfa70457778febe2bb4e11c311802c4c998d931a6b1c5ad12707aee89c29c",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 33, "testsPassed": 284, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 95, "host": "mock bridge; local Git scenarios use a real temporary backend", "browser": "local Chrome" },
+    "sidebarStability": { "testsPassed": 6, "emptyStateRetained": true, "copyMenusStayEnabledDuringPolling": true, "unchangedDiffNotRefetched": true, "scrollPositionRetained": true, "gitRoundTripRetainsPanel": true, "cardTargetsDoNotReorder": true, "pagedBackgroundSnapshotRetained": true },
+    "noWorkspace": { "unitTestsPassed": 4, "integrationTestsPassed": 4, "scratchCaptureAndHistoryRecovery": true, "sessionIsolationAndReadOnly": true, "junctionRejected": true },
+    "taskOpenPerformance": { "fileCount": 256, "coldSelectReviewFirstPageMs": 49.3, "cachedFirstPageMs": 0.1, "measurement": "local service integration test, not native-host UI timing" },
+    "build": "passed",
+    "boundedCodeReview": "no concrete in-scope defects found",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "packageContentsMatchLocalDirectory": true,
+    "packageStoreOnly": true,
+    "versionMetadataConsistent": true,
+    "packagedDocsCurrent": true,
+    "gitDiffCheck": "passed"
+  },
+  "changes": [
+    "无工作区时从可信宿主契约确定本会话 scratch 根，记录真实成功 Write/Edit 工具证据并只读恢复历史",
+    "后台轮询保留已有内容和单份空状态，不切换复制菜单的 disabled 状态",
+    "目标文件只定位和优先加载，不改变首次记录顺序；有界元数据分页保持原序",
+    "同会话 view:open 与 Git/会话页签往返保留面板节点、折叠状态、选择与输入",
+    "按会话、轮次、文件版本和上下文复用差异页；后台完整取得多页元数据后再发布",
+    "返回 Git 页签时静默核对最新数据，保留现有 Git 操作和确认限制"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "liveHistoryRecordsRepairedByThisVerification": false },
+  "limitations": [
+    "缺少可信宿主路径契约或历史 before/after 时保持未知，不以当前磁盘或 Git 状态补造历史",
+    "浏览器回归使用生产 bundle 和模拟宿主桥接，尚需用户手动 reload 后检查当前 PI-Desktop 原生窗口与旧会话重导入",
+    "文件顺序沿用首次捕获或历史证据记录顺序；没有可靠历史时间字段时不伪造时间"
+  ],
+  "report": "docs/verification-1.4.2.md"
+}

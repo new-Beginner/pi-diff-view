@@ -1,3 +1,5 @@
+import { evidenceChunks } from '../core/host-transcript';
+import type { SessionContext } from './plugin-review-adapter';
 import React, { useEffect, useState } from 'react';
 import { ensureBounded } from '../view/transport';
 import type { ReplyCard, ReplyCardsPage, RunSummary, TurnSummary, UiTransport } from '../core/contracts';
@@ -5,22 +7,23 @@ import { replyTail } from '../core/reply-content';
 import TurnChangeSummary from './TurnChangeSummary';
 import summaryStyle from './summary-style';
 import { createPluginReviewAdapter, type PluginReviewAdapter } from './plugin-review-adapter';
+import RunningChangePill, { runningPillStyle } from './RunningChangePill';
 type Disposer = () => void;
 interface DraftSnapshot { text: string; marks: unknown[]; generation: number }
 export interface RendererHost {
   dispatch<T = unknown>(action: string, payload?: unknown): Promise<T>;
   ui: { injectStyle(css: string): Disposer };
-  slots: { register(options: { slot: 'entryExtra'; component: React.ComponentType<any> }): Disposer };
+  slots: { register(options: { slot: 'entryExtra' | 'composerControl'; positions?: ('left' | 'right')[]; component: React.ComponentType<any> }): Disposer };
   composer: { subscribeDraft(listener: (draft: DraftSnapshot | null) => void): Disposer };
 }
-export interface ReplyProps { sessionId: string; messageId: string; message: { content: unknown; createdAt?: string | number } }
+export interface ReplyProps { sessionId: string; messageId: string; message: { content?: unknown; blocks?: { type: string; text?: string }[]; createdAt?: string | number; role?: string } }
 type CardItem = { props: ReplyProps; listeners: Set<(card: ReplyCard | null) => void>; checkedRevision?: string };
 type Feed = { revision?: string; pending: number[] };
 interface Hub {
   transport: UiTransport; disposed: boolean; timer?: ReturnType<typeof setTimeout>; pumping: boolean; wakeAgain: boolean;
   appearance: { locale: string; base: 'light' | 'dark' }; listeners: Set<() => void>;
   cards: Map<string, CardItem>; cache: Map<string, ReplyCard>; feeds: Map<string, Feed>;
-  activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
+  activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; sessionRetry?: ReturnType<typeof setTimeout>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
   reported: Set<string>;
 }
 let hub: Hub | null = null;
@@ -30,20 +33,45 @@ const cardKey = (sessionId: string, messageId: string) => JSON.stringify([sessio
 const timestamp = (props: ReplyProps) => typeof props.message.createdAt === 'number' ? props.message.createdAt : Date.parse(props.message.createdAt ?? '');
 function same(current: Hub | null): current is Hub { return Boolean(current && current === hub && !current.disposed); }
 function report(current: Hub, stage: string): void {
-  if (!same(current) || current.reported.has(stage)) return;
+  if (!same(current)) return;
+  const dynamic = stage.startsWith('running-') || stage.startsWith('composer-');
+  if (!dynamic && current.reported.has(stage)) return;
   current.reported.add(stage);
   void current.transport.invoke('rendererReport', { stage }).catch(() => {});
 }
 function trackSession(current: Hub): Promise<void> {
-  return current.sessionReady ??= current.adapter.subscribeSession(sessionId => {
-    if (same(current) && current.activeSession !== sessionId) {
-      current.activeSession = sessionId; current.sessionVersion++;
-      void current.transport.invoke('activeReviewSession', { sessionId }).catch(() => {});
-    }
+  let queued: SessionContext | undefined, publishing = false, uploaded: string | undefined;
+  const publish = async () => {
+    if (publishing) return;
+    publishing = true;
+    try {
+      while (queued && same(current)) {
+        const context = queued; queued = undefined;
+        const { evidence, ...metadata } = context;
+        const key = JSON.stringify([context.sessionId, context.root, context.evidenceRevision]);
+        if (evidence && key !== uploaded) {
+          if (new TextEncoder().encode(evidence).length > 8 * 1024 * 1024) throw new Error('Host evidence exceeds 8 MiB');
+          const chunks = evidenceChunks(evidence);
+          for (const [index, chunk] of chunks.entries()) {
+            if (!same(current)) return;
+            await current.transport.invoke('sessionEvidence', { sessionId: context.sessionId, root: context.root, revision: context.evidenceRevision, index, chunk, final: index === chunks.length - 1 });
+          }
+          uploaded = key;
+        }
+        await current.transport.invoke('sessionContext', metadata); wake(current);
+      }
+    } catch { report(current, 'session-source-error'); }
+    finally { publishing = false; if (queued && same(current)) void publish(); }
+  };
+  return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
+    if (!same(current)) return;
+    if (current.activeSession !== sessionId) { current.activeSession = sessionId; current.sessionVersion++; }
+    if (context) { queued = context; void publish(); }
+    void current.transport.invoke('activeReviewSession', { sessionId }).catch(() => {});
   }).then(dispose => {
     if (same(current)) { current.unsubscribeSession = dispose; report(current, 'session-ready'); } else dispose();
   }).catch(error => {
-    if (same(current)) { current.sessionReady = undefined; report(current, 'session-source-error'); }
+    if (same(current)) { current.sessionReady = undefined; report(current, 'session-source-error'); if (!current.sessionRetry) current.sessionRetry = setTimeout(() => { current.sessionRetry = undefined; if (same(current)) void trackSession(current).catch(() => {}); }, 2000); }
     throw error;
   });
 }
@@ -138,7 +166,7 @@ function EntryExtra(props: ReplyProps) {
     return () => { current.listeners.delete(listener); };
   }, [current]);
   useEffect(() => {
-    if (!same(current) || !props.sessionId || !props.messageId || typeof contentKey !== 'string' || !contentKey || !Number.isFinite(timestamp(props))) return;
+    if (!same(current) || !props.sessionId || !props.messageId || (props.message?.role && props.message.role !== 'assistant')) return;
     report(current, 'reply-slot-mounted');
     let item = current.cards.get(key);
     if (!item) { item = { props, listeners: new Set() }; current.cards.set(key, item); }
@@ -163,17 +191,24 @@ function EntryExtra(props: ReplyProps) {
     guard(); await current.adapter.open(run.sessionId, `diff-view:${selection.nonce}`); guard(); report(current, 'sidebar-opened');
   }} />;
 }
+function composerReport(stage: string) { if (hub) report(hub, stage); }
+function ComposerControl() {
+  const current = hub;
+  return same(current) ? <RunningChangePill transport={current.transport} adapter={current.adapter} report={composerReport} /> : null;
+}
 export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapter } = {}) {
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
   const current: Hub = { transport, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new Map(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
   hub = current; realm.__piDiffRenderer = { hub: current, dispose: onUnload };
-  disposers.push(pi.ui.injectStyle(summaryStyle)); disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
+  disposers.push(pi.ui.injectStyle(summaryStyle + runningPillStyle)); disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
+  disposers.push(pi.slots.register({ slot: 'composerControl', positions: ['left'], component: ComposerControl }));
+  void trackSession(current).catch(() => {});
   report(current, 'entry-loaded');
 }
 export function onUnload() {
   const current = hub;
-  if (current) { current.disposed = true; if (current.timer) clearTimeout(current.timer); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
+  if (current) { current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
   for (const dispose of disposers.splice(0).reverse()) dispose();
   if (realm.__piDiffRenderer?.hub === current) delete realm.__piDiffRenderer;
   hub = null;

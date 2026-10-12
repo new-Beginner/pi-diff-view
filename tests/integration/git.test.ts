@@ -218,6 +218,26 @@ describe('bounded literal-byte Git backend', () => {
     expect(review.files.map(f => f.path)).toEqual(['public.txt']); expect(review.notice).toContain('omitted');
   });
 
+  it('omits image paths from Git reviews while retaining binary data and non-image rename destinations', async () => {
+    await write('old.PNG', 'image base'); await write('vector.SVG', '<svg>base</svg>');
+    await write('opaque.dat', Buffer.from([0, 255, 1])); await write('notes.txt', 'notes');
+    await write('rename-source.PNG', 'image rename source'); await write('rename-source.txt', 'text rename source'); await commit();
+    await write('old.PNG', 'changed image'); await write('vector.SVG', '<svg>changed</svg>');
+    await write('opaque.dat', Buffer.from([0, 255, 2])); await write('notes.txt', 'notes changed');
+    let review = await readGitReview(root, 'unstaged');
+    expect(review.files.map(f => f.path).sort()).toEqual(['notes.txt', 'opaque.dat']);
+    expect(file(review, 'opaque.dat').kind).toBe('binary');
+    expect((await command(['status', '--short'])).toString()).toContain('old.PNG');
+    await command(['add', '--all', '--']); review = await readGitReview(root, 'staged');
+    expect(review.files.map(f => f.path).sort()).toEqual(['notes.txt', 'opaque.dat']);
+    await command(['mv', '--', 'rename-source.PNG', 'renamed.txt']);
+    await command(['mv', '--', 'rename-source.txt', 'renamed.PNG']);
+    review = await readGitReview(root, 'staged');
+    expect(file(review, 'renamed.txt').oldPath).toBe('rename-source.PNG');
+    expect(review.files.some(f => f.path === 'renamed.PNG')).toBe(false);
+    const tracked = (await command(['ls-files', '-z'])).toString();
+    expect(tracked).toContain('renamed.txt\0'); expect(tracked).toContain('renamed.PNG\0');
+  });
   it('keeps symlinks, submodules, binary/large and mode-only changes read-only', async () => {
     await write('normal.txt', 'normal'); await commit();
     await write('binary.bin', Buffer.from([1, 0, 255])); await write('large.txt', Buffer.alloc(MAX_TEXT_BYTES + 1, 65));

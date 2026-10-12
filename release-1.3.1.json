@@ -1,0 +1,60 @@
+{
+  "id": "local.diff-view",
+  "version": "1.3.1",
+  "verifiedAt": "2026-10-11T23:25:09+08:00",
+  "package": {
+    "path": "plugin/dist/local.diff-view-1.3.1.piplug",
+    "bytes": 1769252,
+    "files": 51,
+    "sha256": "41582b2e2be929dbc37f4bad4ecc2eb2fa1b1303dace7785608728bbed550102",
+    "officialPluginCheck": "passed",
+    "officialPluginPack": "passed",
+    "allEntriesUncompressed": true,
+    "allEntriesByteMatchWorkspace": true,
+    "warnings": ["agent.extension and renderer.extension require an explicit user grant; no grant was made automatically"]
+  },
+  "versions": {
+    "project": "1.3.1",
+    "lock": "1.3.1",
+    "lockRootPackage": "1.3.1",
+    "manifest": "1.3.1",
+    "runtimePackage": "1.3.1"
+  },
+  "builtArtifactsSha256": {
+    "main.js": "42455f77a0a0a51140971fcfda837cabf8151c73ee0b048ee152c59c09c20197",
+    "agent/index.mjs": "6362f26fcecdd579fed3b4336bbd5251145f0330e236a287201d2c7eb9d8941d",
+    "renderer/index.mjs": "f346ff25f161f0c54aae552d08391308eddd2a4c6f2d65fa35ff1171043eac57",
+    "views/index.html": "0bf264940e05495f71258c0c35e4de93aca778536a26154874fa1b7af88f4079",
+    "views/index.js": "9a60515207889297b5dd380f9af6028c2a7dc886ae99be60554327d7c18fe009",
+    "views/index.css": "3828e7d6986ae0275ebd154a58b78816c7ac4c7b65929d7b3e8eb5e54091f0db"
+  },
+  "verification": {
+    "typecheck": "passed",
+    "tests": { "files": 26, "passed": 222, "skipped": 1, "skipReason": "Windows does not support the POSIX FIFO/mkfifo case in tests/integration/safety.test.ts" },
+    "build": "passed",
+    "e2e": { "passed": 80, "skipped": 0, "browser": "locally installed Google Chrome", "host": "simulated; running tests use real SnapshotStore/ReviewService and final renderer ESM" },
+    "diffCheck": "passed",
+    "screenshotReview": ["theme-git-360-light.png", "theme-session-1100-dark.png", "theme-confirm-600-light.png", "running-pill-360-light.png", "running-pill-600-dark.png"],
+    "limitedReviewPasses": 1,
+    "reviewDefectsFixedAndRetested": ["diagnostic matching of undefined task IDs", "invalid metadata timestamps and refusal to reuse an unidentified latest user"]
+  },
+  "acceptance": {
+    "1": "met in automated history/turn/session regression",
+    "2": "met: unknown/partial totals stay explicit",
+    "3": "met in browser theme, responsive layout and screenshot checks",
+    "4": "unmet for native PI-Desktop; 14 running-capsule browser tests passed",
+    "5": "unmet for native appearance/click evidence; authorized host and installed plugin were inspected read-only and distinguishable diagnostics implemented",
+    "6": "met: all four named commands passed",
+    "7": "met: official package validation and all archive bytes/versions checked"
+  },
+  "native": {
+    "inspectedHostVersion": "0.18.0",
+    "appearanceAndClickVerified": false,
+    "blocker": "Computer Use prohibits automating PI-Desktop itself; the approved contract also forbids automatic plugin installation/reload/grants, sending messages or controlling the host. Manual native validation is required.",
+    "installedAutomatically": false,
+    "permissionsGrantedAutomatically": false,
+    "hostResourcesOrDatabaseModified": false
+  },
+  "report": "docs/verification-1.3.1.md",
+  "goal": ".pi/goal/修复差异记录-git-主题及-codex-式运行悬浮框-20261011-2238.md"
+}

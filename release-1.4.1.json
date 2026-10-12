@@ -1,0 +1,48 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.1",
+  "package": "plugin/dist/local.diff-view-1.4.1.piplug",
+  "packageBytes": 1884103,
+  "packageFiles": 58,
+  "sha256": "d5d4a2f1068253150dce375313a794ff0e5492212edc6bfb896f639127b1efa1",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 31, "testsPassed": 276, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 89, "host": "mock bridge; local Git scenario uses real temporary backend", "browser": "local Chrome" },
+    "sidebarFocusedBrowser": { "testsPassed": 34, "hoverArrowThemes": ["light", "dark"] },
+    "recordedEditRecovery": {
+      "file": "package-lock.json",
+      "beforeBytes": 76124,
+      "recoveredBytes": 76124,
+      "afterSha256": "708f8002bb63bf7b1ba01b8c2b8d90a8aebfea3ff99bce053cf0fa5f1c5768bf",
+      "hashVerified": true,
+      "workspaceFileRead": false,
+      "hostWrites": false
+    },
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "packageContentsMatchLocalDirectory": true,
+    "packageStoreOnly": true,
+    "versionMetadataConsistent": true,
+    "packagedDocsCurrent": true,
+    "gitDiffCheck": "passed",
+    "screenshotVisualInspection": false
+  },
+  "changes": [
+    "Transparent file rows and file buttons in selected, expanded, hover and pressed states",
+    "Disclosure arrows hidden by default, shown only on row hover, right when collapsed and down when expanded",
+    "Recover truncated historical Edit evidence from complete historical before bytes and recorded instructions only when the entire output matches the recorded SHA-256",
+    "Retain normalized Edit instructions through structured evidence transport and persistence",
+    "Upgrade ambiguous captured changes when complete native evidence corroborates the exact session, turn and file",
+    "Preserve image exclusions and independent local Git behavior from 1.4.0"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "liveHistoryRecordsRepairedByThisVerification": false },
+  "limitations": [
+    "Missing historical before bytes, hash mismatches and unsupported Edit syntax remain unknown; current workspace bytes are never used to fabricate historical content",
+    "Native-host UI and historical record reimport must be checked after a user-initiated reload",
+    "Browser regression used a mocked host bridge; native-host visual acceptance is not claimed"
+  ],
+  "report": "docs/verification-1.4.1.md"
+}

@@ -7,20 +7,8 @@ export function fail(code: string, message: string): never { throw Object.assign
 export function digest(value: string | Uint8Array): string { return createHash('sha256').update(value).digest('hex'); }
 export function canonical(value: string): string { const p = path.resolve(value); return process.platform === 'win32' ? p.toLowerCase() : p; }
 export function inside(root: string, target: string): boolean { const rel = path.relative(canonical(root), canonical(target)); return !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`); }
-function assertPathSyntax(value: string): void {
-  if (typeof value !== 'string' || !value || value.length > 4096 || /[\0\r\n]/.test(value)) fail('INVALID_PATH', 'Invalid file path');
-  const portable = value.replace(/\\/g, '/');
-  if (portable.split('/').includes('..')) fail('PATH_DENIED', 'Traversal paths cannot be captured');
-  if (portable.startsWith('//') || portable.startsWith('/??/') || /^[a-z]:[^/]/i.test(portable) || portable.replace(/^[a-z]:\//i, '').includes(':')) fail('PATH_DENIED', 'UNC, device, drive-relative and alternate-stream paths are not reviewable');
-}
-export function assertPublicPath(value: string): void {
-  assertPathSyntax(value);
-  const parts = value.replace(/\\/g, '/').split('/');
-  for (const part of parts) {
-    const s = part.toLowerCase();
-    if (s === '..' || /[. ]$/.test(s) && s !== '.' || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || ['.git', '.ssh', '.aws', '.gnupg', '.gpg', '.npmrc', '.git-credentials', '.netrc', '_netrc', '.pi', '.claude', '.codex', '.pi-desktoooop', '.pi-desktop', '.pi-diff-view', 'node_modules'].includes(s) || s.startsWith('.env') || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) fail('PATH_DENIED', 'Credential, dependency, internal or escaping paths are not reviewable');
-  }
-}
+import { assertPathSyntax, assertPublicPath } from './public-path';
+export { assertPublicPath } from './public-path';
 /** Check every existing ancestor, refusing symlinks/junctions rather than following them. */
 export async function safeResolve(root: string, value: string): Promise<string> {
   assertPathSyntax(value);

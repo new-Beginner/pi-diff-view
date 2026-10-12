@@ -75,4 +75,16 @@ describe('review service', () => {
   for (const context of [20, -1]) expect((await service.file({ ...args, context })).totalRows).toBe(16);
   expect(await service.file({ ...args, context: 1 })).toEqual(narrow);
  });
+ it('filters stored image paths before history assembly, summaries and running totals', async () => {
+  const imageChanges: typeof run.changes = Object.create(null);
+  for (const value of ['portrait.PNG', 'vector.SVG']) imageChanges[value] = { capture: capture(value), before: snapshotOfText('image-before'), after: snapshotOfText('image-after') };
+  run.changes = Object.assign(imageChanges, run.changes);
+  run.fileCount = 3; await store.writeRun(run);
+  const summary = await service.turnSummary({ sessionId: 's', runId: run.id, limit: 1 });
+  expect(summary).toMatchObject({ fileCount: 1, additions: 1, deletions: 1 }); expect(summary.files.map(file => file.path)).toEqual(['a.txt']);
+  expect((await turn()).files.map(file => file.path)).toEqual(['a.txt']);
+  expect((await service.bootstrap('s')).runs[0].fileCount).toBe(1);
+  run.state = 'running'; run.incomplete = true; delete run.endedAt; delete run.finalReply; await store.writeRun(run, true);
+  expect(await service.runningChanges({ sessionId: 's', since: run.startedAt })).toMatchObject({ fileCount: 1, additions: 1, deletions: 1 });
+ });
 });

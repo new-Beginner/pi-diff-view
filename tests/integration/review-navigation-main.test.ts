@@ -7,7 +7,7 @@ import os from 'node:os';
 import { SnapshotStore } from '../../src/core/storage';
 import { snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureRun, ReviewSummary } from '../../src/core/contracts';
-it('built main validates navigation, promotes a file beyond the first 100 and invalidates old sessions', async () => {
+it('built main validates session-scoped navigation and restores selection after reload', async () => {
   const directory = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'review-nav-'));
   const data = path.join(directory, 'data'), root = path.join(directory, 'project'), entry = path.join(directory, 'main.cjs');
   await fs.mkdir(root); const store = new SnapshotStore(data); await store.init();
@@ -27,17 +27,24 @@ it('built main validates navigation, promotes a file beyond the first 100 and in
     let result: any;
     for (let i = 0; i < 100; i++) { result = await plugin.onRendererCall('jobPoll', job); if (result.state !== 'pending') break; await new Promise(resolve => setTimeout(resolve, 20)); }
     expect(result.state).toBe('done');
-    const selection = await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: result.result.nonce });
+    const selection = await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: result.result.nonce, sessionId: 's' });
     expect(selection.fileId).toBe(fileId);
     const review: ReviewSummary = await plugin.onPanelInvoke('diff.review', { ...selection.request, focusFileId: selection.fileId });
-    expect(review.files).toHaveLength(100); expect(review.files[0].path).toBe('file-120.txt');
+    expect(review.files.length).toBeGreaterThan(0); expect(review.files.length).toBeLessThanOrEqual(100); expect(review.files[0].path).toBe('file-0.txt');
+    const continuation = await plugin.onPanelInvoke('diff.reviewFiles', { reviewId: review.id, offset: review.nextFileOffset });
+    expect(continuation.files.at(-1).path).toBe('file-120.txt'); expect(continuation.nextOffset).toBeNull();
     const detail = await plugin.onPanelInvoke('diff.file', { reviewId: review.id, fileId }); expect(detail.file.path).toBe('file-120.txt');
     expect(detail.hunks[0].lines.some((line: any) => line.text === 'new')).toBe(true);
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 's', runId: run.id, fileId: 'missing' })).rejects.toThrow('no longer');
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 'other', runId: run.id })).rejects.toThrow('not found');
     await plugin.onRendererCall('activeReviewSession', { sessionId: 'other' });
-    await expect(plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce })).rejects.toThrow('expired');
-    await plugin.onRendererCall('activeReviewSession', { sessionId: 's' }); expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce })).request.runId).toBe(run.id);
-    await plugin.onUnload(); loaded = false; await expect(plugin.onRendererCall('readTurnSelection', { nonce: selection.nonce })).rejects.toThrow('not loaded');
+    await expect(plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce })).rejects.toThrow('会话标识');
+    await expect(plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce, sessionId: 'other' })).rejects.toThrow('不存在');
+    expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce, sessionId: 's' })).request.runId).toBe(run.id);
+    await plugin.onUnload(); loaded = false;
+    await expect(plugin.onRendererCall('readTurnSelection', { nonce: selection.nonce })).rejects.toThrow('not loaded');
+    await plugin.onLoad(); loaded = true;
+    expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce, sessionId: 's' })).fileId).toBe(fileId);
+    expect((await plugin.onRendererCall('bootstrap', {})).runs).toEqual([]);
   } finally { if (loaded) await plugin.onUnload(); home.mockRestore(); (globalThis as any).pi = oldPi; await fs.rm(directory, { recursive: true, force: true }); }
 });

@@ -1,0 +1,54 @@
+/* Shared native-view contract: host --ds-* always wins; base only selects safe fallbacks.
+ * 4/8px rhythm, system UI for controls, monospace only for paths/code.
+ * Do: prioritize actions, reflow paths, show focus. Don't: clip layout or recolor host tokens. */
+:root, .dv-theme, .dv-app, .git-management {
+  color-scheme: light;
+  --dv-fallback-bg: #fafafa;
+  --dv-fallback-ink: #20252b;
+  --dv-fallback-green: #008339;
+  --dv-fallback-red: #c52b2b;
+  --dv-bg: var(--ds-bg-dock, var(--dv-fallback-bg));
+  --dv-ink: var(--ds-text-primary, var(--dv-fallback-ink));
+  --dv-muted: var(--ds-text-muted, color-mix(in srgb, var(--dv-ink) 68%, var(--dv-bg)));
+  --dv-border: var(--ds-border-default, color-mix(in srgb, var(--dv-ink) 22%, var(--dv-bg)));
+  --dv-focus: var(--ds-focus, var(--dv-ink));
+  --dv-surface: var(--ds-bg-elevated-opaque, color-mix(in srgb, var(--dv-ink) 4%, var(--dv-bg)));
+  --dv-hover: var(--ds-bg-hover, color-mix(in srgb, var(--dv-ink) 7%, var(--dv-bg)));
+  --dv-selected: var(--ds-bg-active, color-mix(in srgb, var(--dv-ink) 11%, var(--dv-bg)));
+  --dv-green: var(--ds-success, var(--dv-fallback-green));
+  --dv-red: var(--ds-error, var(--dv-fallback-red));
+  --dv-add-bg: color-mix(in srgb, var(--dv-green) 10%, var(--dv-bg));
+  --dv-del-bg: color-mix(in srgb, var(--dv-red) 10%, var(--dv-bg));
+  --dv-add-word: color-mix(in srgb, var(--dv-green) 23%, var(--dv-bg));
+  --dv-del-word: color-mix(in srgb, var(--dv-red) 23%, var(--dv-bg));
+  --dv-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --dv-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+:root[data-base='dark'], .dv-theme[data-base='dark'], .dv-app[data-base='dark'], .git-management[data-base='dark'] {
+  color-scheme: dark;
+  --dv-fallback-bg: #212121;
+  --dv-fallback-ink: #eeeeee;
+  --dv-fallback-green: #40c977;
+  --dv-fallback-red: #ff6764;
+}
+html, body { margin: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13px/1.5 var(--dv-font); }
+#root { min-width: 0; }
+.dv-panel { height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); min-height: 240px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; color: var(--dv-ink); background: var(--dv-bg); }
+.dv-panel *, .dv-panel *::before, .dv-panel *::after { box-sizing: border-box; }
+.dv-panel-nav { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: 8px; padding: 8px; border-bottom: 1px solid var(--dv-border); }
+.dv-panel-nav button, .dv-panel-nav select, .dv-panel-message button { font: inherit; color: inherit; background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: 4px; padding: 4px 8px; min-height: 32px; }
+.dv-panel-nav button, .dv-panel-message button { cursor: pointer; }
+.dv-panel-nav button:hover:not(:disabled), .dv-panel-message button:hover:not(:disabled) { background: var(--dv-hover); }
+.dv-panel-nav button:active:not(:disabled), .dv-panel-message button:active:not(:disabled) { background: var(--dv-selected); }
+.dv-panel-nav button[aria-pressed='true'] { background: var(--dv-selected); border-color: var(--dv-focus); font-weight: 600; }
+.dv-panel-nav select { flex: 1 1 200px; width: 0; min-width: 0; max-width: 100%; }
+.dv-panel-nav :focus-visible, .dv-panel-message button:focus-visible { outline: 2px solid var(--dv-focus); outline-offset: 2px; }
+.dv-panel-nav :disabled, .dv-panel-message button:disabled { opacity: .5; cursor: not-allowed; }
+.dv-panel-content { min-width: 0; min-height: 0; overflow: auto; }
+.dv-panel-page { height: 100%; min-height: 0; min-width: 0; }
+.dv-panel-page[hidden] { display: none; }
+.dv-panel-page > .dv-app { height: 100%; min-height: 0; }
+.dv-panel-message { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; padding: 24px 16px; overflow-wrap: anywhere; color: var(--dv-muted); }
+.dv-panel-message[role='alert'] { color: var(--dv-red); }
+@keyframes dv-state-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .dv-state-enter { animation: none !important; } }

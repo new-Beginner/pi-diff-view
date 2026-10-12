@@ -7,7 +7,7 @@ export class JobQueue {
   constructor(private execute: (method: string, args: unknown) => Promise<unknown>) {}
   start(method: string, args: unknown): { jobId: string } {
     if (this.closed) fail('PLUGIN_UNLOADED', 'Diff view is closed');
-    if (!['bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'selectTurn', 'card', 'replyCards'].includes(method)) fail('JOB_DENIED', 'This method is not a background operation');
+    if (!['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'card', 'replyCards'].includes(method)) fail('JOB_DENIED', 'This method is not a background operation');
     if ([...this.jobs.values()].filter(j => j.state === 'pending').length >= 4) fail('JOB_BUSY', 'Too many pending review operations');
     for (const [id, j] of this.jobs) if (j.state !== 'pending' && (Date.now() - j.at > 60000 || this.jobs.size > 8)) this.jobs.delete(id);
     const id = randomUUID(), job: Job = { state: 'pending', at: Date.now() }; this.jobs.set(id, job);
@@ -20,5 +20,10 @@ export class JobQueue {
     return { jobId: id };
   }
   poll(id: string): Job { const j = this.jobs.get(id); if (!j || this.closed) fail('JOB_EXPIRED', 'Review operation expired'); return { ...j }; }
+  async wait(id: string, milliseconds: number): Promise<Job> {
+    const end = Date.now() + Math.max(0, Math.min(40, milliseconds));
+    while (this.poll(id).state === 'pending' && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 2));
+    return this.poll(id);
+  }
   close(): void { this.closed = true; this.jobs.clear(); }
 }

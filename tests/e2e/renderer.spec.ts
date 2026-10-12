@@ -23,18 +23,21 @@ test('latest host aggregate is queried first even with long progress and older u
   await expect(page.locator('.dv-turn-head')).toContainText('4 files changed');
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
-test('reply-end summary opens the plugin sidebar at the clicked file with no composer button or modal', async ({ page }) => {
+test('reply-end summary opens the plugin sidebar at the clicked file with no idle floating button or modal', async ({ page }) => {
   await setup(page);
-  expect(await page.evaluate(() => (window as any).__rendererDemo.positions)).toEqual([{ slot: 'entryExtra' }]);
-  await expect(page.locator('.dv-composer, [data-test-slot="composerControl"], .dv-layer')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__rendererDemo.positions)).toEqual([{ slot: 'entryExtra' }, { slot: 'composerControl' }]);
+  await expect(page.locator('.dv-running-pill, .dv-layer')).toHaveCount(0);
   await expect(page.locator('.dv-turn-head')).toContainText('4 files changed');
   await page.locator('.dv-turn-file').filter({ hasText: 'src/theme/index.ts' }).click();
   const frame = page.frameLocator('iframe[title="Diff view plugin"]');
   await expect(frame.locator('.dv-review h2')).toHaveText('src/theme/index.ts');
+  await expect(frame.getByRole('navigation', { name: 'Diff view 功能' })).toBeVisible();
   await expect(frame.getByRole('combobox', { name: 'Scope' })).toHaveValue('turn');
+  expect(await frame.getByRole('combobox', { name: 'Scope' }).locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['lastTurn', 'turn']);
+  expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.find((call: any) => call.method === 'diff.review').args)).toMatchObject({ scope: 'turn', sessionId: 'session-demo' });
   const opens = await page.evaluate(() => (window as any).__rendererDemo.opens);
   expect(opens).toHaveLength(1); expect(opens[0]).toMatchObject({ sessionId: 'session-demo', tab: { id: 'plugin:local.diff-view/review', resource: 'local.diff-view/review' } });
-  expect(opens[0].tab.location).toMatch(/^diff-view:[0-9a-f-]{36}$/);
+  expect(opens[0].tab.location).toMatch(/^diff-view:[0-9a-f-]{36}\?sessionId=session-demo$/);
   expect(await page.evaluate(() => (window as any).__rendererDemo.draft)).toBe('Existing draft. ');
   await page.evaluate(() => (window as any).__rendererDemo.unload());
   await expect(page.locator('.dv-turn-card, #demo-plugin-sidebar')).toHaveCount(0);
@@ -61,11 +64,11 @@ test('an old-session click cannot open a sidebar in the new session', async ({ p
   await expect(page.locator('.dv-layer, #demo-plugin-sidebar')).toHaveCount(0);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
-test('chat summary and sidebar visual preview uses the implemented components', async ({ page }) => {
+test('chat summary and sidebar visual preview uses the implemented components', async ({ page }, info) => {
   await page.setViewportSize({ width: 1440, height: 900 }); await setup(page, 'zh-CN');
   await page.locator('.dv-turn-file').filter({ hasText: 'src/review/index.ts' }).click();
   await expect(page.frameLocator('iframe').locator('.dv-hunk')).toHaveCount(2);
-  const destination = path.resolve('docs/screenshots/task-summary-sidebar.png'); await fs.mkdir(path.dirname(destination), { recursive: true });
+  const destination = info.outputPath('task-summary-sidebar.png'); await fs.mkdir(path.dirname(destination), { recursive: true });
   await page.screenshot({ path: destination });
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
@@ -73,7 +76,7 @@ test('an existing plugin view receives a new selection through view:open without
   await setup(page); await page.locator('.dv-turn-file').filter({ hasText: 'src/theme/index.ts' }).click();
   const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toHaveText('src/theme/index.ts');
   const nonce = await page.evaluate(async () => (await (window as any).pluginBridge.invoke('diff.selectTurn', { sessionId: 'session-demo', runId: 'run-demo', fileId: 'review' })).nonce);
-  await frame.locator('body').evaluate((_element, value) => (window as any).__demo.openLocation(`diff-view:${value}`), nonce);
+  await frame.locator('body').evaluate((_element, value) => (window as any).__demo.openLocation(`diff-view:${value}?sessionId=session-demo`), nonce);
   await expect(frame.locator('.dv-review h2')).toHaveText('src/review/index.ts');
   expect(await page.evaluate(() => (window as any).__rendererDemo.opens.length)).toBe(1);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
@@ -182,7 +185,7 @@ test('a different recorded turn switches in place and refreshes only its file li
   expect(await frame.locator('.dv-app').evaluate(node => node === (window as any).__originalApp)).toBe(true);
   expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.bootstrap').length)).toBe(1);
   expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.review').at(-1).args.runId)).toBe('another-run');
-  expect(await page.evaluate(value => (window as any).__rendererDemo.opens[0].tab.location === `diff-view:${value}`, nonce)).toBe(true);
+  expect(await page.evaluate(value => (window as any).__rendererDemo.opens[0].tab.location === `diff-view:${value}?sessionId=session-demo`, nonce)).toBe(true);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
 
@@ -195,4 +198,34 @@ for (const width of [360, 900]) test(`Codex-style card hierarchy and path contra
   expect(await file.evaluate(node => getComputedStyle(node.querySelector('.dv-path-directory')!).color !== getComputedStyle(node.querySelector('.dv-path-basename')!).color)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   await page.screenshot({ path: info.outputPath(`card-${width}.png`) }); await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+
+test('unknown statistics use a compact disclosure and stay aligned on narrow screens', async ({ page }, info) => {
+  await page.addInitScript(() => {
+    let bridge: any;
+    Object.defineProperty(window, 'pluginBridge', { configurable: true, get: () => bridge, set(value) {
+      bridge = value; const invoke = value.invoke.bind(value);
+      value.invoke = async (method: string, args: any, internal: boolean) => {
+        const result = await invoke(method, args, internal);
+        if (method === 'diff.replyCards') for (const card of result.cards) {
+          card.summary.unknownFileCount = 1;
+          card.summary.files[0] = { ...card.summary.files[0], path: 'package-lock.json', kind: 'unavailable', statsKnown: false, additions: 0, deletions: 0 };
+        }
+        return result;
+      };
+    } });
+  });
+  await setup(page, 'zh-CN', '&persisted=true');
+  await expect(page.locator('.dv-turn-file').first()).toContainText('行数未知');
+  await expect(page.locator('.dv-turn-file').first().locator('.dv-turn-counts')).toHaveCount(0);
+  await expect(page.locator('.dv-turn-card')).not.toContainText('unavailable');
+  await expect(page.locator('.dv-turn-stats-note p')).toBeHidden();
+  for (const width of [360, 900]) {
+    await page.setViewportSize({ width, height: 650 });
+    expect(await page.locator('.dv-turn-card').evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`unknown-card-${width}.png`) });
+  }
+  await page.locator('.dv-turn-stats-note summary').click();
+  await expect(page.locator('.dv-turn-stats-note p')).toBeVisible();
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
 });

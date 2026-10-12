@@ -24,6 +24,20 @@ await fs.mkdir('plugin/docs', { recursive: true });
 await fs.copyFile('docs/compatibility.md', 'plugin/docs/compatibility.md');
 await fs.copyFile('docs/native-preflight.md', 'plugin/docs/native-preflight.md');
 await fs.copyFile('docs/task-summary.md', 'plugin/docs/task-summary.md');
+await fs.copyFile('docs/performance.md', 'plugin/docs/performance.md');
+await fs.copyFile('docs/running-changes.md', 'plugin/docs/running-changes.md');
 await fs.mkdir('plugin/docs/screenshots', { recursive: true });
-for (const name of ['review-wide.png', 'review-narrow.png', 'task-summary-sidebar.png']) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
+for (const name of ['review-wide.png', 'review-narrow.png', 'task-summary-sidebar.png', 'running-pill-1100-light.png', 'running-pill-1100-dark.png', 'running-pill-360-light.png', 'running-pill-360-dark.png']) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
 try { await fs.copyFile('docs/verification.md', 'plugin/docs/verification.md'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+await fs.copyFile('docs/verification-1.3.0.md', 'plugin/docs/verification-1.3.0.md');
+await fs.copyFile('docs/verification-1.3.1.md', 'plugin/docs/verification-1.3.1.md');
+await fs.copyFile('docs/verification-1.3.2.md', 'plugin/docs/verification-1.3.2.md');
+await fs.copyFile('docs/verification-1.3.3.md', 'plugin/docs/verification-1.3.3.md');
+await fs.copyFile('docs/verification-1.3.5.md', 'plugin/docs/verification-1.3.5.md');
+for (const width of [360, 900]) await fs.copyFile(`docs/screenshots/unknown-card-1.3.5-${width}.png`, `plugin/docs/screenshots/unknown-card-1.3.5-${width}.png`);
+for (const name of await fs.readdir('docs/screenshots')) {
+  if (/^(?:theme-(?:session|git|confirm)-(?:360|600|1100)-(?:light|dark)|running-pill-600-(?:light|dark))\.png$/.test(name)) await fs.copyFile(`docs/screenshots/${name}`, `plugin/docs/screenshots/${name}`);
+}
+await fs.copyFile('docs/verification-1.4.0.md', 'plugin/docs/verification-1.4.0.md');
+await fs.copyFile('docs/verification-1.4.1.md', 'plugin/docs/verification-1.4.1.md');
+await fs.copyFile('docs/verification-1.4.2.md', 'plugin/docs/verification-1.4.2.md');

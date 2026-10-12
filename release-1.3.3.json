@@ -1,0 +1,52 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.3.3",
+  "package": "plugin/dist/local.diff-view-1.3.3.piplug",
+  "packageBytes": 1802968,
+  "packageFiles": 53,
+  "sha256": "3d4b4468cdd3cb54e9f52245d2c8ba82215d494eb47e11300f74a28fae344803",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 28, "testsPassed": 236, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "strictMainRestartRegression": { "testsPassed": 2 },
+    "browser": { "testsPassed": 81, "host": "mock", "browser": "local Chrome" },
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPack": "passed",
+    "packageContentsMatchLocalDirectory": true,
+    "packageStoreOnly": true,
+    "versionMetadataConsistent": true,
+    "gitDiffCheck": "passed",
+    "boundedReview": "no concrete defects reported"
+  },
+  "changes": [
+    "Persist sanitized structural tool evidence in plugin-private storage, scoped by session and canonical project root",
+    "Restore durable evidence before merging uploads, retaining evidence on empty or windowed transcripts",
+    "Recover missing native snapshot sides using exact hash-verified historical blobs referenced by the same session/root",
+    "Retain completed reply identity when a shortened transcript contains no newer messages",
+    "Clear durable evidence and in-memory evidence together with plugin history"
+  ],
+  "limits": { "evidenceRecordBytes": 8388608, "evidenceRecords": 200, "evidenceTotalBytes": 134217728 },
+  "warnings": ["Existing high-risk agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "hostIncident": {
+    "outboxEntries": 1024,
+    "utf8PauseLogOccurrences": 3804,
+    "outboxFullLogOccurrences": 8920,
+    "activeSessionsWithoutMessages": 8,
+    "sessionsWithPluginRunsButNoHostMessagesOrJsonl": 5,
+    "hostBundle": "out/main/chunks/index-BCpWHuBu.js",
+    "hostBundleSha256": "841d3b2dfd8a9d17cebb1204f82de23fccd604d7bd30b2263cf427ad6c5eac8a",
+    "hostBundleLines": { "queueLimit": 19844, "flushLoop": 19901, "poisonClassifier": 19977 },
+    "status": "Host persistence queue remains blocked; plugin changes do not fix host chat persistence or recreate lost chat prose. Underlying UTF-8 error source remains undetermined."
+  },
+  "deployment": {
+    "installedSource": "workspace plugin/ directory (confirmed by active locator)",
+    "localDirectoryUpdated": true,
+    "reloadPerformed": false,
+    "installationPerformed": false,
+    "hostDatabaseModified": false,
+    "hostQueueModified": false,
+    "nativeUiAcceptancePerformed": false
+  },
+  "report": "docs/verification-1.3.3.md"
+}

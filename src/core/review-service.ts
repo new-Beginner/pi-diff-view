@@ -1,31 +1,50 @@
+import { isImagePath } from './review-file-policy';
 import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Bootstrap, CapturedChange, CaptureRun, DiffHunk, GitScope, InternalFile, LineAnchor, RepositoryInfo, ReplyCard, ReplyCardsPage, ReviewActionRequest, ReviewComment, ReviewDetail, ReviewFile, ReviewRequest, ReviewSummary, RunSummary, TurnSummary } from './contracts';
-import { assertPublicPath, canonical, digest, fail, sameSnapshot } from './path-policy';
+import { MAX_TEXT_BYTES, type Bootstrap, type CapturedChange, type CaptureRun, type DiffHunk, type FileSnapshot, type GitScope, type InternalFile, type LineAnchor, type RepositoryInfo, type ReplyCard, type ReplyCardsPage, type ReviewActionRequest, type ReviewComment, type ReviewDetail, type ReviewFile, type ReviewRequest, type ReviewSummary, type RunningChanges, type RunSummary, type TurnSummary } from './contracts';
+import { assertPublicPath, canonical, digest, fail, sameSnapshot, snapshotFromBytes } from './path-policy';
 import { buildHunks, patchText, publicFile, stats } from './diff';
 import { SnapshotStore, atomicJson, readJson } from './storage';
 import { replaceSnapshot } from './rollback';
 import { discoverRepository, readGitReview, type GitReview } from '../git/repository';
 import { applyGitAction } from '../git/actions';
 export interface ServiceHost { workspace(): Promise<{ path: string; roots?: (string | { path: string })[] } | null>; settings(): Promise<Record<string, unknown>>; setSettings(value: Record<string, unknown>): Promise<void>; appearance(): Promise<{ locale?: string; base?: string }>; clipboard(text: string): Promise<void>; openPanel(): Promise<void>; }
-interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; hunksCache?: Map<string, DiffHunk[]>; }
-function runSummary(run: CaptureRun): RunSummary { return { id: run.id, sessionId: run.sessionId, root: run.root, startedAt: run.startedAt, endedAt: run.endedAt, state: run.state, fileCount: Object.values(run.changes).filter(c => !sameSnapshot(c.before, c.after)).length, incomplete: run.incomplete }; }
+interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; hunksCache?: Map<string, DiffHunk[]>; hydratedFiles?: Set<string>; }
+function runSummary(run: CaptureRun): RunSummary { return { id: run.id, sessionId: run.sessionId, root: run.root, startedAt: run.startedAt, endedAt: run.endedAt, state: run.state, fileCount: Object.keys(run.changes).filter(value => !isImagePath(value)).length, incomplete: run.incomplete }; }
 function turnNotice(run: CaptureRun): string | undefined {
   const notices: string[] = [];
   if (run.version === 1) notices.push('Legacy capture: final USER-task reply and explicit path attribution cannot be verified. Read-only; pre-installation history is not reconstructed.');
   if (run.boundary === 'uncertain') notices.push('USER-task boundary was not observed; final reply binding and restore are disabled.');
-  if (run.version === 2 && run.boundary === 'user' && run.state !== 'running' && !run.finalReply) notices.push('No verified final assistant reply was recorded; no reply card is attached.');
-  if (run.incomplete || run.state === 'running' || run.state === 'aborted') notices.push('Capture incomplete or unsettled. Only explicitly captured files are shown; Bash, unsupported tools and unobserved changes are not reconstructed.');
+  if (run.notice) notices.push(run.notice);
+  if (run.version === 2 && run.boundary === 'user' && run.state !== 'running' && !run.finalReply && !run.replyMessageId) notices.push('未找到可验证的回复关联；本轮修改仍保留在会话记录中。');
+  if (run.incomplete || run.state === 'running' || run.state === 'aborted') notices.push('记录未完整结束或部分证据缺失；仅展示有证据的修改，不以当前文件或 Git 状态补造历史。');
   return notices.length ? notices.join(' ') : undefined;
 }
 export class ReviewService {
   private reviews = new Map<string, CachedReview>();
   private allowed = new Set<string>();
   private mutableRoots = new Set<string>();
-  private summaries = new Map<string, { key: string; files: ReviewFile[]; additions: number; deletions: number; incomplete: boolean; notice?: string; createdAt: number }>();
+  private summaries = new Map<string, { key: string; files: ReviewFile[]; additions: number; deletions: number; unknownFileCount: number; incomplete: boolean; notice?: string; createdAt: number }>();
   private mutations = Promise.resolve();
+  private recoveryNotices = new Map<string, string>();
+  setRecoveryNotice(sessionId: string, notice?: string): void { if (notice) this.recoveryNotices.set(sessionId, notice); else this.recoveryNotices.delete(sessionId); }
   constructor(readonly store: SnapshotStore, readonly host: ServiceHost, readonly generation: string) {}
+  private async authorize(sessionId?: string, run?: CaptureRun): Promise<void> {
+    const workspace = await this.host.workspace();
+    const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map(r => typeof r === 'string' ? r : r.path)] : [];
+    this.mutableRoots = new Set(roots.map(canonical)); this.allowed = new Set(this.mutableRoots);
+    if (sessionId && run?.sessionId === sessionId) this.allowed.add(canonical(run.root));
+  }
+  async selectTarget(args: { runId: string; sessionId: string; fileId?: string; runningSince?: number; taskId?: string }): Promise<CaptureRun> {
+    this.validateTurn(args);
+    const run = args.runningSince == null ? await this.store.getRun(args.runId, false, false) : await this.currentRunningRun({ sessionId: args.sessionId, since: args.runningSince, taskId: args.taskId });
+    if (!run || run.id !== args.runId || run.sessionId !== args.sessionId) fail('RUN_NOT_FOUND', args.runningSince == null ? 'Recorded run not found in this session' : 'Recorded run is no longer current in this session');
+    await this.authorize(args.sessionId, run);
+    if (!this.allowed.has(canonical(run.root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
+    if (args.fileId && !Object.entries(run.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === args.fileId)) fail('FILE_MISSING', 'Recorded file no longer available; refresh');
+    return run;
+  }
   async bootstrap(sessionId?: string): Promise<Bootstrap> {
     const workspace = await this.host.workspace();
     const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map(r => typeof r === 'string' ? r : r.path)] : [];
@@ -38,55 +57,94 @@ export class ReviewService {
     }
     this.mutableRoots = new Set(this.allowed);
     const runs = await this.store.listRuns(false);
-    const filtered = runs.filter(r => (!sessionId || r.sessionId === sessionId) && (this.allowed.has(canonical(r.root)) || (!!sessionId && r.sessionId === sessionId)));
+    const filtered = sessionId ? runs.filter(r => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string })), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice: sessionId ? this.recoveryNotices.get(sessionId) : undefined, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   private validateTurn(args: { runId?: string; sessionId?: string }, requireRun = true): void {
     if (typeof args.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail('SESSION_REQUIRED', 'A valid sessionId is required for recorded turns');
     if (requireRun && (typeof args.runId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(args.runId))) fail('INVALID_ID', 'A valid runId is required');
   }
-  private turnFile(run: CaptureRun, value: string, change: CapturedChange, states: Record<string, string>): InternalFile {
+  private async hydrateSnapshot(snapshot: FileSnapshot): Promise<FileSnapshot> {
+    // Legacy persisted runs may embed historical text instead of a separate blob.
+    if (snapshot.exists && snapshot.kind === 'text' && typeof snapshot.text === 'string' && Buffer.byteLength(snapshot.text) <= MAX_TEXT_BYTES) {
+      const verified = snapshotFromBytes(Buffer.from(snapshot.text), snapshot.mode);
+      if (verified.hash === snapshot.hash && verified.kind === 'text') return verified;
+    }
+    return this.store.hydrate(snapshot);
+  }
+  private turnFile(run: CaptureRun, value: string, change: CapturedChange, states: Record<string, string>, verified = true): InternalFile {
     assertPublicPath(value);
     const { before, after, capture } = change, origin = capture?.origin ?? 'workspace';
-    const kind = before.kind !== 'text' ? before.kind : after.kind;
+    const kind = change.ambiguous ? 'unavailable' : before.kind !== 'text' ? before.kind : after.kind;
     const reverted = origin === 'workspace' && states[`${run.id}:${value}`] === 'reverted';
-    const writable = run.version === 2 && run.boundary === 'user' && run.state === 'completed' && !run.incomplete && this.mutableRoots.has(canonical(run.root)) && origin === 'workspace';
-    return { id: capture?.id ?? digest(value).slice(0, 24), path: value, origin, absolutePath: capture?.absolutePath, status: !before.exists ? 'added' : !after.exists ? 'deleted' : before.hash === after.hash ? 'mode' : 'modified', kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode])), ...kind === 'text' ? stats(before.text ?? '', after.text ?? '') : { additions: 0, deletions: 0 }, actions: kind === 'text' && writable ? [reverted ? 'reapply' : 'revert'] : [], state: reverted ? 'reverted' : 'active', note: origin === 'external' ? 'Explicit external tool capture; read-only. No filesystem mutation is authorized.' : run.version === 1 ? 'Legacy attribution cannot be verified; read-only.' : !writable ? 'Capture incomplete, unsettled or project not authorized for restore.' : kind !== 'text' ? `Cannot restore ${kind} snapshot.` : undefined };
+    const writable = !sameSnapshot(before, after) && !change.ambiguous && verified && run.version === 2 && run.boundary === 'user' && run.state === 'completed' && !run.incomplete && this.mutableRoots.has(canonical(run.root)) && origin === 'workspace';
+    const cachedStats = change.diffStats;
+    const indexed = cachedStats?.beforeHash === before.hash && cachedStats.afterHash === after.hash && Number.isSafeInteger(cachedStats.additions) && cachedStats.additions >= 0 && Number.isSafeInteger(cachedStats.deletions) && cachedStats.deletions >= 0;
+    const statsKnown = kind === 'text' && (indexed || ((!before.exists || before.text !== null) && (!after.exists || after.text !== null)));
+    const counts = !statsKnown ? { additions: 0, deletions: 0 } : indexed ? { additions: cachedStats!.additions, deletions: cachedStats!.deletions } : stats(before.text ?? '', after.text ?? '');
+    const reason = change.ambiguous ? '并发修改归属不明，不计入本会话确定统计。' : !statsKnown ? '历史内容不可验证或非文本；行数未知，不计入确定统计。' : origin === 'external' ? 'Explicit external tool capture; read-only.' : !verified ? 'Snapshot content is verified when selected; read-only until loaded.' : !writable ? 'Capture incomplete, unsettled or project not authorized for restore.' : undefined;
+    return { id: capture?.id ?? digest(value).slice(0, 24), path: value, origin, absolutePath: capture?.absolutePath, status: !before.exists ? 'added' : !after.exists ? 'deleted' : before.hash === after.hash ? 'mode' : 'modified', kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode])), ...counts, statsKnown, actions: kind === 'text' && writable ? [reverted ? 'reapply' : 'revert'] : [], state: reverted ? 'reverted' : 'active', note: [change.note, reason, statsKnown && sameSnapshot(before, after) ? '发生过修改事件；本轮净变化为零。' : undefined].filter(Boolean).join(' ') || undefined };
   }
   async turnSummary(args: { runId: string; sessionId: string; offset?: number; limit?: number }): Promise<TurnSummary> {
     this.validateTurn(args);
     const run = await this.store.getRun(args.runId, false, false);
     if (!run || run.sessionId !== args.sessionId) fail('RUN_NOT_FOUND', 'Recorded run not found in this session');
-    await this.bootstrap(args.sessionId);
+    await this.authorize(args.sessionId, run);
     if (!this.allowed.has(canonical(run.root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
     return this.summarizeRun(run, args);
   }
-  private async summarizeRun(run: CaptureRun, args: { offset?: number; limit?: number }, readOnly = false): Promise<TurnSummary> {
+  private async currentRunningRun(args: { sessionId: string; since: number; taskId?: string }): Promise<CaptureRun | null> {
+    this.validateTurn(args, false);
+    if (!Number.isSafeInteger(args.since) || args.since < 0 || args.since > Date.now() || (args.since === 0 && !args.taskId) || (args.taskId !== undefined && (typeof args.taskId !== 'string' || !args.taskId || args.taskId.length > 512 || /[\0\r\n]/.test(args.taskId)))) fail('TASK_REQUIRED', 'A valid current user-task identity is required');
+    await this.store.importInbox(this.generation);
+    const runs = (await this.store.listRuns(false, true)).filter(run => run.sessionId === args.sessionId);
+    const eligible = (run: CaptureRun) => run.version === 2 && run.boundary === 'user' && run.state === 'running' && run.endedAt == null && !Object.keys(run.bindings).length;
+    const explicit = args.taskId ? runs.filter(run => run.userMessageId === args.taskId && run.state === 'running') : [];
+    if (explicit.length) {
+      const run = explicit[0];
+      if (explicit.length !== 1 || !eligible(run) || (run.generation !== this.generation && run.source !== 'host-history' && !run.hostRecovery) || runs.some(other => other.startedAt > run.startedAt && other.userMessageId && other.userMessageId !== run.userMessageId)) return null;
+      return run;
+    }
+    if (!args.since) return null;
+    const latest = runs[0];
+    if (!latest || !eligible(latest) || latest.generation !== this.generation || latest.startedAt < args.since || (args.taskId && latest.userMessageId)) return null;
+    if (runs.filter(run => run.state === 'running' && run.startedAt >= args.since).length !== 1) return null;
+    return latest;
+  }
+  async runningChanges(args: { sessionId: string; since: number; taskId?: string }): Promise<RunningChanges | null> {
+    const run = await this.currentRunningRun(args); if (!run) return null;
+    const summary = await this.summarizeRun(run, { limit: 1 }, true, true);
+    if (!summary.fileCount) return null;
+    const appearance = await this.host.appearance();
+    return { runId: run.id, sessionId: run.sessionId, startedAt: run.startedAt, fileCount: summary.fileCount, additions: summary.additions, deletions: summary.deletions, unknownFileCount: summary.unknownFileCount, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark' };
+  }
+  private async summarizeRun(run: CaptureRun, args: { offset?: number; limit?: number }, readOnly = false, netOnly = false): Promise<TurnSummary> {
     const states = readOnly ? {} : await readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {});
     const { bindings: _bindings, cardPreview: _preview, ...content } = run;
-    const key = digest(JSON.stringify([content, states, readOnly ? [] : [...this.mutableRoots].sort(), readOnly]));
+    const key = digest(JSON.stringify(['stats-known-v1', content, states, readOnly ? [] : [...this.mutableRoots].sort(), readOnly, netOnly]));
     let cached = this.summaries.get(run.id);
     if (!cached || cached.key !== key || Date.now() - cached.createdAt > 30000) {
-      const files: ReviewFile[] = []; let additions = 0, deletions = 0, incomplete = run.incomplete || run.state !== 'completed' || run.version === 1 || run.boundary !== 'user';
+      const files: ReviewFile[] = []; let additions = 0, deletions = 0, unknownFileCount = 0, incomplete = run.incomplete || run.state !== 'completed' || run.version === 1 || run.boundary !== 'user';
       const started = Date.now();
       for (const [value, change] of Object.entries(run.changes)) {
-        if (sameSnapshot(change.before, change.after)) continue;
+        if (isImagePath(value)) continue;
         if (Date.now() - started > 4000) fail('DIFF_LIMIT', 'Turn summary exceeds computation budget');
-        const hydrated = { ...change, before: await this.store.hydrate(change.before), after: await this.store.hydrate(change.after) };
+        const hydrated = { ...change, before: await this.hydrateSnapshot(change.before), after: await this.hydrateSnapshot(change.after) };
+        if (netOnly && !change.ambiguous && hydrated.before.kind !== 'unavailable' && hydrated.after.kind !== 'unavailable' && sameSnapshot(hydrated.before, hydrated.after)) continue;
         const file = publicFile(this.turnFile(run, value, hydrated, states));
         if (readOnly) file.actions = [];
-        if (file.kind !== 'text') incomplete = true;
+        if (file.statsKnown === false) { incomplete = true; unknownFileCount++; }
         additions += file.additions; deletions += file.deletions; files.push(file);
       }
-      const notice = [turnNotice(run), files.some(f => f.kind !== 'text') ? 'Some snapshots are non-text or unavailable; line totals include only validated text diffs.' : undefined].filter(Boolean).join(' ') || undefined;
-      cached = { key, files, additions, deletions, incomplete, notice, createdAt: Date.now() }; this.summaries.set(run.id, cached);
+      const notice = [turnNotice(run), unknownFileCount ? `${unknownFileCount} 个文件行数未知；汇总仅包含可验证文本差异。` : undefined].filter(Boolean).join(' ') || undefined;
+      cached = { key, files, additions, deletions, unknownFileCount, incomplete, notice, createdAt: Date.now() }; this.summaries.set(run.id, cached);
       while (this.summaries.size > 4) this.summaries.delete(this.summaries.keys().next().value!);
     }
     const offset = Number.isFinite(args.offset) ? Math.max(0, Math.min(cached.files.length, Math.floor(args.offset!))) : 0;
     const limit = Number.isFinite(args.limit) ? Math.max(1, Math.min(100, Math.floor(args.limit!))) : 3;
-    const summary: TurnSummary = { runId: run.id, sessionId: run.sessionId, fileCount: cached.files.length, additions: cached.additions, deletions: cached.deletions, incomplete: cached.incomplete, files: [], offset, nextOffset: null, notice: cached.notice };
+    const summary: TurnSummary = { runId: run.id, sessionId: run.sessionId, fileCount: cached.files.length, additions: cached.additions, deletions: cached.deletions, unknownFileCount: cached.unknownFileCount, incomplete: cached.incomplete, files: [], offset, nextOffset: null, notice: cached.notice };
     for (const file of cached.files.slice(offset, offset + limit)) {
       summary.files.push(file); summary.nextOffset = offset + summary.files.length < cached.files.length ? offset + summary.files.length : null;
       if (Buffer.byteLength(JSON.stringify(summary)) > 28 * 1024) { summary.files.pop(); summary.nextOffset = offset + summary.files.length; break; }
@@ -96,48 +154,88 @@ export class ReviewService {
   }
   async review(request: ReviewRequest): Promise<ReviewSummary> {
     if (!request || !['unstaged', 'staged', 'commit', 'branch', 'lastTurn', 'turn'].includes(request.scope)) fail('INVALID_SCOPE', 'Unknown review scope');
-    await this.bootstrap(request.sessionId);
+    // Exact recorded-task opens do not enumerate unrelated history or run Git discovery.
     let root = request.root, files: InternalFile[] = [], git: GitReview | undefined, run: CaptureRun | undefined, notice: string | undefined;
     if (request.scope === 'lastTurn' || request.scope === 'turn') {
       this.validateTurn(request, request.scope === 'turn');
-      const runs = await this.store.listRuns(false);
-      run = runs.find(r => (!request.sessionId || r.sessionId === request.sessionId) && (!root || canonical(r.root) === canonical(root)) && (request.scope === 'lastTurn' || r.id === request.runId));
-      if (run) run = await this.store.getRun(run.id) ?? undefined;
+      await this.store.importInbox(this.generation);
+      run = request.scope === 'turn' ? await this.store.getRun(request.runId!, false, false) ?? undefined : (await this.store.listRuns(false)).find(r => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
+      if (run?.sessionId !== request.sessionId || (root && run && canonical(run.root) !== canonical(root))) run = undefined;
+      await this.authorize(request.sessionId, run);
       if (!run) { root = root ?? ''; notice = 'No recorded turn. History before installation is not reconstructed.'; }
       else {
         root = run.root;
         if (!this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
         const states = await readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {});
-        for (const [value, change] of Object.entries(run.changes)) {
-          if (sameSnapshot(change.before, change.after)) continue;
-          files.push(this.turnFile(run, value, change, states));
+        const entries = Object.entries(run.changes).filter(([value]) => !isImagePath(value));
+        for (let offset = 0; offset < entries.length; offset += 16) {
+          const currentRun = run;
+          const page = await Promise.all(entries.slice(offset, offset + 16).map(async ([value, change]) => {
+            const indexed = (!change.before.exists || change.before.text === null) && (!change.after.exists || change.after.text === null) && change.diffStats?.beforeHash === change.before.hash && change.diffStats.afterHash === change.after.hash;
+            const [before, after] = indexed ? await Promise.all([this.store.inspect(change.before), this.store.inspect(change.after)]) : await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after)]);
+            return this.turnFile(currentRun, value, { ...change, before, after }, states);
+          }));
+          files.push(...page);
         }
         notice = turnNotice(run);
       }
     } else {
+      await this.authorize();
       if (!root) root = (await this.host.workspace())?.path;
       if (!root || !this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Select an authorized project folder');
       git = await readGitReview(root, request.scope as GitScope, request.ref);
-      root = git.root; files = git.files; notice = git.notice;
+      root = git.root; files = git.files.map(file => ({ ...file, statsKnown: file.statsKnown ?? file.kind === 'text', ...(file.kind !== 'text' || file.statsKnown === false ? { additions: 0, deletions: 0 } : {}) })); notice = git.notice;
     }
     if (request.focusFileId && (request.scope === 'turn' || request.scope === 'lastTurn')) {
       if (typeof request.focusFileId !== 'string' || request.focusFileId.length > 256) fail('INVALID_ID', 'Invalid selected file identity');
       const index = files.findIndex(file => file.id === request.focusFileId);
       if (index < 0) fail('FILE_NOT_FOUND', 'Selected captured file is unavailable');
-      if (index > 0) files.unshift(...files.splice(index, 1));
     }
-    const summary: ReviewSummary = { id: randomUUID(), scope: request.scope, root: root ?? '', files: [], notice, sessionId: run?.sessionId ?? request.sessionId, runId: run?.id };
-    // Keep metadata under the renderer bridge's 64KiB combined budget.
-    let bytes = 0;
-    for (const f of files) { const dto = publicFile(f), cost = Buffer.byteLength(JSON.stringify(dto)); if (summary.files.length >= 100 || bytes + cost > 32000) { summary.notice = `${notice ?? ''} File list limited to the first ${summary.files.length} entries.`.trim(); break; } summary.files.push(dto); bytes += cost; }
-    this.reviews.set(summary.id, { summary, files, git, run, createdAt: Date.now() });
-    while (this.reviews.size > 4) this.reviews.delete(this.reviews.keys().next().value!);
+    const cached: CachedReview = { summary: null!, files, git, run, createdAt: Date.now(), hydratedFiles: new Set() };
+    // Focus controls eager hydration only; capture insertion order is chronological and immutable.
+    const focused = files.find(file => file.id === request.focusFileId) ?? files[0];
+    if (run && focused) await this.hydrateFile(cached, focused);
+    const summary: ReviewSummary = { id: randomUUID(), scope: request.scope, root: root ?? '', files: [], notice, sessionId: run?.sessionId ?? request.sessionId, runId: run?.id, ...(run ? { run: runSummary(run) } : {}) };
+    // Bounded chronological pages; targeting a later file must never reorder the list.
+    const first = this.filePage(cached, 0);
+    summary.files = first.files; summary.nextFileOffset = first.nextOffset;
+    // Empty recorded scopes also need stable identities, otherwise every idle poll repaints.
+    if (request.scope === 'turn' || request.scope === 'lastTurn') {
+      summary.id = digest(JSON.stringify([{ ...summary, id: undefined }, files.map(publicFile)])).slice(0, 32);
+      const previous = this.reviews.get(summary.id);
+      if (previous) { previous.createdAt = Date.now(); this.reviews.delete(summary.id); this.reviews.set(summary.id, previous); return previous.summary; }
+    }
+    cached.summary = summary; this.reviews.set(summary.id, cached);
+    while (this.reviews.size > 16) this.reviews.delete(this.reviews.keys().next().value!);
     return summary;
   }
+  private filePage(review: CachedReview, offset: number): { files: ReviewFile[]; nextOffset: number | null } {
+    const files: ReviewFile[] = []; let bytes = 0;
+    for (const file of review.files.slice(offset)) {
+      const dto = publicFile(file), cost = Buffer.byteLength(JSON.stringify(dto));
+      if (files.length >= 100 || bytes + cost > 32000) break;
+      files.push(dto); bytes += cost;
+    }
+    if (!files.length && offset < review.files.length) fail('SUMMARY_LIMIT', 'File metadata exceeds the bridge budget');
+    return { files, nextOffset: offset + files.length < review.files.length ? offset + files.length : null };
+  }
+  reviewFiles(args: { reviewId: string; offset: number }) {
+    const review = this.get(args.reviewId);
+    if (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > review.files.length) fail('INVALID_OFFSET', 'Invalid file-list offset');
+    return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
+  }
   private get(id: string): CachedReview { const r = this.reviews.get(id); if (!r || Date.now() - r.createdAt > 30 * 60 * 1000) fail('REVIEW_EXPIRED', 'Review expired; refresh'); return r; }
+  private async hydrateFile(review: CachedReview, file: InternalFile): Promise<void> {
+    if (!review.run || review.hydratedFiles?.has(file.id)) return;
+    const change = review.run.changes[file.path];
+    const [before, after, states] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {})]);
+    Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states));
+    review.hydratedFiles?.add(file.id);
+  }
   async file(args: { reviewId: string; fileId: string; offset?: number; limit?: number; context?: number }): Promise<ReviewDetail> {
     const review = this.get(args.reviewId), file = review.files.find(f => f.id === args.fileId);
     if (!file) fail('FILE_NOT_FOUND', 'File not in this review');
+    await this.hydrateFile(review, file);
     const context = args.context === -1 ? 1000000 : Math.min(1000000, Math.max(1, Math.floor(Number(args.context) || 3)));
     review.hunksCache ??= new Map();
     const cacheKey = `${file.id}:${context}`;
@@ -173,6 +271,7 @@ export class ReviewService {
       if (!args.confirmed) fail('CONFIRM_REQUIRED', 'Explicit confirmation is required');
       await this.bootstrap(review.summary.sessionId);
       if (!this.allowed.has(canonical(review.summary.root))) fail('ROOT_DENIED', 'Project authorization changed; refresh the review');
+      if (file) await this.hydrateFile(review, file);
       if (!file || file.fingerprint !== args.fingerprint || !file.actions.includes(args.action)) fail('ACTION_DENIED', 'Action is not available for this version');
       if (file.origin === 'external' || !this.mutableRoots.has(canonical(review.summary.root))) fail('ACTION_DENIED', 'External or historical project captures are read-only');
       if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, path.join(this.store.directory, 'backups'));
@@ -226,6 +325,7 @@ export class ReviewService {
     const review = reviews.find(r => canonical(r.summary.root) === canonical(anchor.root) && r.summary.scope === anchor.scope && r.summary.runId === anchor.runId && r.files.some(f => f.path === anchor.path && f.fingerprint === anchor.fingerprint));
     const file = review?.files.find(f => f.path === anchor.path);
     if (!file || !Number.isInteger(anchor.line) || anchor.line < 1 || !['old', 'new'].includes(anchor.side)) fail('ANCHOR_STALE', 'Refresh the review before commenting');
+    if (review) await this.hydrateFile(review, file);
     if (file.kind !== 'text' || (args.sessionId && args.sessionId !== review?.summary.sessionId && review?.run)) fail('ANCHOR_STALE', 'Only validated captured text in this session can be commented');
     const text = (anchor.side === 'old' ? file.before.text : file.after.text) ?? '';
     const lines = text.split('\n').map(s => s.endsWith('\r') ? s.slice(0, -1) : s);
@@ -246,10 +346,10 @@ export class ReviewService {
     return { text };
   }
   private cardEligible(run: CaptureRun): boolean {
-    return run.version === 2 && run.boundary === 'user' && run.state !== 'running' && run.state !== 'aborted' && Number.isFinite(run.endedAt) && !!run.finalReply && run.replies.filter(reply => reply.hash === run.finalReply!.hash && reply.timestamp === run.finalReply!.timestamp).length === 1 && Object.values(run.changes).some(change => !sameSnapshot(change.before, change.after));
+    return run.version === 2 && run.boundary === 'user' && run.state !== 'running' && Number.isFinite(run.endedAt) && Object.keys(run.changes).some(value => !isImagePath(value)) && (!!run.replyMessageId || (run.state !== 'aborted' && !!run.finalReply && run.replies.filter(reply => reply.hash === run.finalReply!.hash && reply.timestamp === run.finalReply!.timestamp).length === 1));
   }
   private async cardPreview(run: CaptureRun): Promise<TurnSummary> {
-    const key = digest(JSON.stringify([run.contentVersion, run.state, run.incomplete, run.changes]));
+    const key = digest(JSON.stringify(['review-images-v2', run.contentVersion, run.state, run.incomplete, run.changes]));
     if (run.cardPreview?.key === key && run.cardPreview.summary.runId === run.id && run.cardPreview.summary.sessionId === run.sessionId) return run.cardPreview.summary;
     const summary = await this.summarizeRun(run, { limit: 3 }, true);
     run.cardPreview = { key, summary }; return summary;
@@ -257,17 +357,18 @@ export class ReviewService {
   async replyCards(args: { sessionId: string; offset?: number; revision?: string }): Promise<ReplyCardsPage> {
     this.validateTurn(args, false);
     const runs = (await this.store.listRuns(false)).filter(run => run.sessionId === args.sessionId && this.cardEligible(run));
-    const revision = digest(JSON.stringify(runs.map(run => [run.id, run.contentVersion, run.state, run.incomplete, run.finalReply, run.bindings, run.changes])));
+    const revision = digest(JSON.stringify(['stats-known-v1', runs.map(run => [run.id, run.contentVersion, run.state, run.incomplete, run.replyMessageId, run.finalReply, run.bindings, run.changes])]));
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string }));
-    const pending = runs.filter(run => !Object.keys(run.bindings).length).map(run => run.finalReply!.timestamp);
+    const messageId = (run: CaptureRun) => run.replyMessageId ?? (run.finalReply ? run.bindings[run.finalReply.hash] : undefined);
+    const pending = runs.filter(run => !messageId(run) && run.finalReply).map(run => run.finalReply!.timestamp);
     const page: ReplyCardsPage = { cards: [], revision, pending, nextOffset: null, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark' };
     if (args.revision === revision) return { ...page, unchanged: true };
-    const bound = runs.filter(run => typeof run.bindings[run.finalReply!.hash] === 'string' && run.bindings[run.finalReply!.hash].length <= 256 && Object.values(run.bindings).every(id => id === run.bindings[run.finalReply!.hash]));
-    const unique = bound.filter(run => bound.filter(other => other.bindings[other.finalReply!.hash] === run.bindings[run.finalReply!.hash]).length === 1);
+    const bound = runs.filter(run => typeof messageId(run) === 'string' && messageId(run)!.length <= 256);
+    const unique = bound.filter(run => bound.filter(other => messageId(other) === messageId(run)).length === 1);
     const offset = Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset!)) : 0;
     for (const run of unique.slice(offset, offset + 20)) {
       const previousKey = run.cardPreview?.key, summary = await this.cardPreview(run);
-      const card: ReplyCard = { messageId: run.bindings[run.finalReply!.hash], run: runSummary(run), summary };
+      const card: ReplyCard = { messageId: messageId(run)!, run: runSummary(run), summary };
       page.cards.push(card); page.nextOffset = offset + page.cards.length < unique.length ? offset + page.cards.length : null;
       if (Buffer.byteLength(JSON.stringify(page)) > 28 * 1024) {
         page.cards.pop(); page.nextOffset = offset + page.cards.length;
@@ -283,7 +384,7 @@ export class ReviewService {
     const timestamp = Date.parse(args.createdAt); if (!Number.isFinite(timestamp)) return { run: null };
     const hashes = new Set(finalReplyCandidates(args.content).map(digest));
     const runs = await this.store.listRuns(false);
-    const matches = runs.filter(r => r.version === 2 && r.boundary === 'user' && r.state !== 'running' && r.state !== 'aborted' && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.values(r.changes).some(c => !sameSnapshot(c.before, c.after)) && r.finalReply && hashes.has(r.finalReply.hash) && Math.abs(r.finalReply.timestamp - timestamp) < 3000 && r.replies.filter(p => p.hash === r.finalReply!.hash && Math.abs(p.timestamp - timestamp) < 3000).length === 1);
+    const matches = runs.filter(r => r.version === 2 && r.boundary === 'user' && r.state !== 'running' && r.state !== 'aborted' && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.keys(r.changes).some(value => !isImagePath(value)) && r.finalReply && hashes.has(r.finalReply.hash) && Math.abs(r.finalReply.timestamp - timestamp) < 3000 && r.replies.filter(p => p.hash === r.finalReply!.hash && Math.abs(p.timestamp - timestamp) < 3000).length === 1);
     if (matches.length !== 1) return { run: null };
     const run = matches[0];
     if (Object.values(run.bindings).some(id => id !== args.messageId)) return { run: null };
@@ -295,7 +396,9 @@ export class ReviewService {
     switch (method) {
       case 'bootstrap': return this.bootstrap(args.sessionId);
       case 'review': return this.review(args);
+      case 'reviewFiles': return this.reviewFiles(args);
       case 'turnSummary': return this.turnSummary(args);
+      case 'runningChanges': return this.runningChanges(args);
       case 'file': return this.file(args);
       case 'action': return this.action(args);
       case 'batchAction': return this.batchAction(args);
@@ -305,7 +408,14 @@ export class ReviewService {
       case 'feedback': return this.feedback(args);
       case 'card': return this.card(args);
       case 'replyCards': return this.replyCards(args);
-      case 'copyPatch': { const r = this.get(args.reviewId), files = r.files.filter(f => !args.fileId || f.id === args.fileId); if (!files.length || files.some(f => f.kind === 'unavailable')) fail('FILE_NOT_FOUND', 'No validated captured content for this file'); await this.host.clipboard(files.map(patchText).join('\n')); return { ok: true }; }
+      case 'copyPatch': { const r = this.get(args.reviewId), files = r.files.filter(f => !args.fileId || f.id === args.fileId); for (const file of files) await this.hydrateFile(r, file); if (!files.length || files.some(f => f.kind === 'unavailable')) fail('FILE_NOT_FOUND', 'No validated captured content for this file'); await this.host.clipboard(files.map(patchText).join('\n')); return { ok: true }; }
+      case 'copyPath': {
+        const review = this.get(args.reviewId), file = review.files.find(file => file.id === args.fileId);
+        if (!file) fail('FILE_NOT_FOUND', 'No validated review file for this path');
+        const value = file.absolutePath ?? path.resolve(review.summary.root, file.path);
+        assertPublicPath(file.path);
+        await this.host.clipboard(value); return { ok: true };
+      }
       case 'settings': { const settings: Record<string, unknown> = {}; if (['split', 'unified'].includes(args.layout)) settings.layout = args.layout; if (typeof args.wordWrap === 'boolean') settings.wordWrap = args.wordWrap; await this.host.setSettings(settings); return; }
       case 'openPanel': return this.host.openPanel();
       case 'clearHistory': if (!args.confirmed) fail('CONFIRM_REQUIRED', 'Confirm clearing plugin history'); await this.store.importInbox(this.generation); if ((await this.store.listRuns(false, true)).some(r => r.state === 'running')) fail('AGENT_BUSY', 'Stop active captures before clearing history'); await this.store.clear(); this.reviews.clear(); this.summaries.clear(); return;

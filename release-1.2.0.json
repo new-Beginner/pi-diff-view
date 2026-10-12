@@ -1,0 +1,49 @@
+{
+  "id": "local.diff-view",
+  "version": "1.2.0",
+  "package": "plugin/dist/local.diff-view-1.2.0.piplug",
+  "bytes": 810436,
+  "files": 29,
+  "sha256": "1f286cd6e0700773be6ea231263edf961672caaaab9dc3d971d81f7860d2e70b",
+  "packager": "official PluginPack",
+  "feature": "Current running-user-task file-change capsule above its own composer; click opens the read-only diff sidebar; hidden at completion, with existing reply-end cards retained",
+  "archiveVerification": {
+    "storeOnly": true,
+    "crcPassed": true,
+    "allFilesMatchBuiltPlugin": true,
+    "manifestAndRuntimeVersion": "1.2.0",
+    "includesRunningChangesDocsAndFourLayoutScreenshots": true
+  },
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed",
+    "unitIntegration": { "passed": 159, "skipped": 1, "skipReason": "POSIX FIFO is not applicable on Windows" },
+    "browser": { "passed": 57, "engine": "installed Chrome", "runningTaskBackend": "real SnapshotStore/ReviewService with mock host UI; final renderer ESM and host import-map names" },
+    "boundedReadOnlyReview": "one pass; no concrete findings",
+    "pluginCheck": { "errors": 0, "warnings": 1, "warning": "Existing high-risk agent.extension and renderer.extension permissions require explicit user grant" },
+    "pluginPack": "passed",
+    "gitDiffWhitespace": "passed"
+  },
+  "acceptance": [
+    { "criterion": "Single centered capsule above composer; wide/narrow and light/dark", "met": true, "evidence": "running.spec.ts: four layout cases and docs/screenshots/running-pill-*.png" },
+    { "criterion": "Actual current-task net statistics, updates, no history/session mixing", "met": true, "evidence": "task-capture.test.ts: live tool hooks, repeated edits, restore-to-zero, session/new-empty/ambiguity guards; browser real snapshot service" },
+    { "criterion": "Hide on end/stop/session switch; no stale resurrection or previous-task inheritance; reply-card handoff", "met": true, "evidence": "running-changes.test.ts epoch/click races and running.spec.ts lifecycle cases" },
+    { "criterion": "Click opens exact current-task sidebar diff, no modal/list, running task is read-only", "met": true, "evidence": "Final ESM browser click and real diff contents; backend denies revert/reapply/stage/unstage on running task" },
+    { "criterion": "Reply-card regression, draft preservation, reload/unload cleanup", "met": true, "evidence": "renderer.spec.ts, renderer-entry.spec.ts and running.spec.ts: unchanged draft, single capsule, zero slots/styles/subscriptions and no residual requests" },
+    { "criterion": "All named checks pass and verification boundaries recorded", "met": true, "evidence": "typecheck/build passed, 159 backend tests passed with 1 Windows skip, 57 browser tests passed; docs/running-changes.md" },
+    { "criterion": "1.2.0 metadata and official installable package match", "met": true, "evidence": "Four version metadata files checked; official PluginCheck/PluginPack; store-only archive, all entry bytes and SHA-256 verified" }
+  ],
+  "hostVerification": {
+    "resourceInspectedVersion": "0.18.0",
+    "readOnlyInspection": "composerControl left slot, owning composer-shell, current-session running state and user-message metadata confirmed in installed resources",
+    "nativeInstallAndClickAcceptance": "not performed; browser host UI is simulated, not proof of native host acceptance"
+  },
+  "deliveryBlockers": [],
+  "remaining": ["Native PI-Desktop installation, manual permission grant and GUI click experience were not exercised"],
+  "historicalPackageNotes": [
+    "Existing 0.1.0, 1.0.0 and 1.1.0 packages were not modified; sizes and modification times remain as inspected before packaging 1.2.0",
+    "1.1.0 package SHA-256 still matches release-1.1.0.json",
+    "Existing 0.1.0 package is 1721871 bytes, SHA-256 d1ec703fb91d510b9d37cc5de3fd13acc729997e44c884d1c1c853c24f2d9931; older release-0.1.0.json records different bytes/hash. Neither old package nor old metadata was rewritten"
+  ],
+  "verificationDocument": "docs/running-changes.md"
+}

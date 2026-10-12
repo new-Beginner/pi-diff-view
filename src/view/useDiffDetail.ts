@@ -13,27 +13,39 @@ export function appendDiffPage(previous: ReviewDetail, page: ReviewDetail): Revi
   return { ...page, offset: 0, hunks };
 }
 
-const detailCache = new Map<string, ReviewDetail>();
-const pendingPrefetches = new Map<string, Promise<unknown>>();
-
+interface Cache { details: Map<string, ReviewDetail>; pending: Map<string, Promise<ReviewDetail>>; }
+const caches = new WeakMap<UiTransport, Cache>();
+function cacheFor(transport: UiTransport): Cache {
+  let cache = caches.get(transport);
+  if (!cache) { cache = { details: new Map(), pending: new Map() }; caches.set(transport, cache); }
+  return cache;
+}
+function firstPage(transport: UiTransport, key: string, reviewId: string, fileId: string, context: number): Promise<ReviewDetail> {
+  const cache = cacheFor(transport), existing = cache.pending.get(key);
+  if (existing) return existing;
+  const promise = transport.invoke<ReviewDetail>('file', { reviewId, fileId, offset: 0, limit: 80, context }).then(page => {
+    if (page.file.id !== fileId || page.offset !== 0 || (page.nextOffset != null && page.nextOffset <= 0)) throw new Error('Invalid diff page');
+    cache.details.set(key, page);
+    while (cache.details.size > 100) cache.details.delete(cache.details.keys().next().value!);
+    return page;
+  }).finally(() => cache.pending.delete(key));
+  cache.pending.set(key, promise); return promise;
+}
 export function prefetchDiffDetail(transport: UiTransport, reviewId: string | undefined, fileId: string, context = 3, reload = 0): void {
   if (!reviewId || !fileId) return;
   const key = `${reviewId}|${fileId}|${context}|${reload}`;
-  if (detailCache.has(key) || pendingPrefetches.has(key)) return;
-  const promise = transport.invoke<ReviewDetail>('file', { reviewId, fileId, offset: 0, limit: 80, context })
-    .then(page => {
-      detailCache.set(key, page);
-      while (detailCache.size > 100) detailCache.delete(detailCache.keys().next().value!);
-    })
-    .catch(() => {})
-    .finally(() => { pendingPrefetches.delete(key); });
-  pendingPrefetches.set(key, promise);
+  const cache = cacheFor(transport);
+  if (cache.details.has(key) || cache.pending.size > 0) return;
+  void firstPage(transport, key, reviewId, fileId, context).catch(() => {});
 }
 
-export function useDiffDetail(transport: UiTransport, reviewId: string | undefined, fileId: string, context: number, reload: number) {
-  const key = `${reviewId}|${fileId}|${context}|${reload}`;
+export function useDiffDetail(transport: UiTransport, reviewId: string | undefined, fileId: string, context: number, reload: number, identity = reviewId ?? '', version?: string) {
+  // New files change the review ID, not the existing file's content. Share verified pages by version.
+  const key = `${version && reviewId ? `${identity}|${version}` : reviewId}|${fileId}|${context}|${reload}`;
+  const requestKey = `${reviewId}|${fileId}|${context}|${reload}`;
+  const detailCache = cacheFor(transport).details;
   const getInitialState = () => {
-    const cached = reviewId && fileId ? detailCache.get(key) : undefined;
+    const cached = reviewId && fileId ? detailCache.get(key) ?? detailCache.get(requestKey) : undefined;
     if (cached) return { detail: cached, loading: false, loadingMore: false, error: '' };
     return { detail: null, loading: Boolean(reviewId && fileId), loadingMore: false, error: '' };
   };
@@ -42,26 +54,30 @@ export function useDiffDetail(transport: UiTransport, reviewId: string | undefin
   const liveKey = useRef(key);
   liveKey.current = key;
   const renderedKey = useRef(key);
+  const retained = useRef<{ transport: UiTransport; identity: string; fileId: string; context: number; reload: number; detail: ReviewDetail }>();
+  const prior = retained.current;
+  const previousDetail = reviewId && prior?.transport === transport && prior.identity === identity && prior.fileId === fileId && prior.context === context && prior.reload === reload ? prior.detail : null;
+  const previousRef = useRef(previousDetail); previousRef.current = previousDetail;
   const loadRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     let active = true, pending = false;
-    let detail: ReviewDetail | null = (reviewId && fileId ? detailCache.get(key) : null) ?? null;
+    let detail: ReviewDetail | null = (reviewId && fileId ? detailCache.get(key) ?? detailCache.get(requestKey) : null) ?? null;
     renderedKey.current = key;
 
     if (detail) {
       setState({ detail, loading: false, loadingMore: false, error: '' });
     } else {
-      setState({ detail: null, loading: Boolean(reviewId && fileId), loadingMore: false, error: '' });
+      setState({ detail: previousRef.current, loading: Boolean(reviewId && fileId), loadingMore: false, error: '' });
     }
 
     const load = async () => {
       if (!active || liveKey.current !== key || pending || !reviewId || !fileId || (detail && detail.nextOffset == null)) return;
       pending = true;
       const offset = detail?.nextOffset ?? 0;
-      setState({ detail, loading: !detail, loadingMore: Boolean(detail), error: '' });
+      setState({ detail: detail ?? previousRef.current, loading: !detail, loadingMore: Boolean(detail), error: '' });
       try {
-        const page = await transport.invoke<ReviewDetail>('file', { reviewId, fileId, offset, limit: 80, context });
+        const page = offset === 0 ? await firstPage(transport, requestKey, reviewId, fileId, context) : await transport.invoke<ReviewDetail>('file', { reviewId, fileId, offset, limit: 80, context });
         if (!active || liveKey.current !== key) return;
         if (page.file.id !== fileId || page.offset !== offset || (page.nextOffset != null && page.nextOffset <= offset)) throw new Error('无效的差异分页 / Invalid diff page');
         detail = detail ? appendDiffPage(detail, page) : page;
@@ -69,16 +85,17 @@ export function useDiffDetail(transport: UiTransport, reviewId: string | undefin
         while (detailCache.size > 100) detailCache.delete(detailCache.keys().next().value!);
         setState({ detail, loading: false, loadingMore: false, error: '' });
       } catch (error) {
-        if (active && liveKey.current === key) setState({ detail, loading: false, loadingMore: false, error: error instanceof Error ? error.message : String(error) });
+        if (active && liveKey.current === key) setState({ detail: detail ?? previousRef.current, loading: false, loadingMore: false, error: error instanceof Error ? error.message : String(error) });
       } finally { pending = false; }
     };
     loadRef.current = load;
     if (!detail) void load();
     return () => { active = false; loadRef.current = null; };
-  }, [transport, key]);
+  }, [transport, key, identity, reviewId]);
 
   const loadMore = useCallback(() => { void loadRef.current?.(); }, []);
-  const currentCached = reviewId && fileId ? detailCache.get(key) : undefined;
-  const effectiveState = renderedKey.current === key ? state : (currentCached ? { detail: currentCached, loading: false, loadingMore: false, error: '' } : { detail: null, loading: Boolean(reviewId && fileId), loadingMore: false, error: '' });
+  const currentCached = reviewId && fileId ? detailCache.get(key) ?? detailCache.get(requestKey) : undefined;
+  const effectiveState = renderedKey.current === key ? state : (currentCached ? { detail: currentCached, loading: false, loadingMore: false, error: '' } : { detail: previousDetail, loading: Boolean(reviewId && fileId), loadingMore: false, error: '' });
+  if (effectiveState.detail && reviewId) retained.current = { transport, identity, fileId, context, reload, detail: effectiveState.detail };
   return { ...effectiveState, loadMore };
 }

@@ -1,0 +1,34 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.3.5",
+  "package": "plugin/dist/local.diff-view-1.3.5.piplug",
+  "packageBytes": 1862131,
+  "packageFiles": 56,
+  "sha256": "f9044d2e3d6ec666ad19776bf77427cb32f6459dad5b50e0450d95f13741a1ba",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 28, "testsPassed": 240, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 84, "host": "mock", "browser": "local Chrome" },
+    "finalBundleFocusedBrowser": { "testsPassed": 6 },
+    "build": "passed",
+    "pluginPackValidation": "passed",
+    "packageContentsMatchLocalDirectory": true,
+    "packageStoreOnly": true,
+    "versionMetadataConsistent": true,
+    "gitDiffCheck": "passed",
+    "narrowScreenshotInspected": true
+  },
+  "changes": [
+    "Keep file and diff nodes mounted during polling, preserve folding and reuse unchanged review identities",
+    "Continue latest-turn synchronization after completion and import tool snapshots on review requests",
+    "Scope explicit-file capture leases to their targets rather than the whole project",
+    "Capture root files before descending into large directories",
+    "Do not acknowledge newer inbox versions before they have actually been imported",
+    "Show compact expandable statistics help and keep unknown counts aligned",
+    "Show the turn selector only for recorded-turn scope"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false },
+  "limitations": ["Missing complete historical snapshots cannot be recreated from current workspace files", "Synchronization is bounded polling after tool-result snapshots, not zero-latency filesystem monitoring"],
+  "report": "docs/verification-1.3.5.md"
+}

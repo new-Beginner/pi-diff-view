@@ -8,7 +8,7 @@ import { SnapshotStore } from '../../src/core/storage';
 import { canonical, digest, snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureRun } from '../../src/core/contracts';
 let directory: string, store: SnapshotStore, service: ReviewService;
-const host = { workspace: vi.fn(async () => { throw new Error('Card restoration must not scan Git/workspace'); }), settings: async () => ({}), setSettings: async () => {}, appearance: async () => ({ locale: 'zh-CN', base: 'light' }), clipboard: async () => {}, openPanel: async () => {} };
+const host = { workspace: vi.fn(async (): Promise<{ path: string } | null> => { throw new Error('Card restoration must not scan Git/workspace'); }), settings: async () => ({}), setSettings: async () => {}, appearance: async () => ({ locale: 'zh-CN', base: 'light' }), clipboard: async () => {}, openPanel: async () => {} };
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'reply-cards-'));
   store = new SnapshotStore(path.join(directory, 'data')); await store.init();
@@ -62,7 +62,7 @@ it('rebuilds a preview when captured content changes and never restores another 
   expect(next.revision).not.toBe(first.revision); expect(next.cards[0].summary.additions).toBe(7);
   expect((await service.replyCards({ sessionId: 'another' })).cards).toEqual([]);
 });
-it('omits ambiguous message bindings, uncertain boundaries, legacy, aborted and zero-change tasks', async () => {
+it('omits unreliable bindings while retaining evidenced net-zero task cards', async () => {
   const a = await seed(0), b = await seed(1);
   for (const run of [a, b]) { run.bindings[run.finalReply!.hash] = 'duplicate-message'; await store.writeRun(run); }
   for (const [i, state] of ['uncertain', 'legacy', 'aborted', 'running', 'zero'].entries()) {
@@ -73,6 +73,36 @@ it('omits ambiguous message bindings, uncertain boundaries, legacy, aborted and 
     if (state === 'zero') for (const change of Object.values(run.changes)) change.after = change.before;
     await store.writeRun(run);
   }
-  expect((await service.replyCards({ sessionId: 'session' })).cards).toEqual([]);
+  const cards = (await service.replyCards({ sessionId: 'session' })).cards;
+  expect(cards).toHaveLength(1); expect(cards[0].messageId).toBe('invalid-4');
+  expect(cards[0].summary).toMatchObject({ fileCount: 4, additions: 0, deletions: 0 });
+  expect(cards[0].summary.files[0].note).toContain('净变化为零');
   await expect(service.replyCards({ sessionId: '' })).rejects.toThrow('sessionId');
+});
+it('binds stopped tasks by stable native reply ID without text or timestamp guesses', async () => {
+  const run = await seed(); run.state = 'aborted'; run.replyMessageId = 'native-reply'; delete run.finalReply; run.bindings = {};
+  await store.writeRun(run);
+  const cards = (await service.replyCards({ sessionId: 'session' })).cards;
+  expect(cards).toHaveLength(1); expect(cards[0].messageId).toBe('native-reply');
+  expect(host.workspace).not.toHaveBeenCalled(); host.workspace.mockResolvedValue({ path: run.root });
+  expect(cards[0].summary.additions).toBe((await service.turnSummary({ sessionId: 'session', runId: run.id })).additions);
+});
+it('omits legacy image paths from card totals and does not make image-only tasks eligible', async () => {
+  const run = await seed(0, 1);
+  for (const value of ['poster.PNG', 'logo.SVG']) {
+    const absolutePath = path.join(run.root, value), identity = canonical(absolutePath);
+    run.changes[value] = { capture: { id: digest(identity).slice(0, 24), identity, path: value, absolutePath, origin: 'workspace' }, before: snapshotOfText('old\n'), after: snapshotOfText('new\nextra\n') };
+  }
+  run.fileCount = 3; await store.writeRun(run);
+  const stored = (await store.getRun(run.id, false, false))!;
+  stored.cardPreview = { key: digest(JSON.stringify(['stats-known-v1', stored.contentVersion, stored.state, stored.incomplete, stored.changes])), summary: { runId: stored.id, sessionId: stored.sessionId, fileCount: 3, additions: 999, deletions: 999, unknownFileCount: 0, incomplete: false, files: [{ path: 'poster.PNG' }], offset: 0, nextOffset: null } as any };
+  await store.writeRun(stored);
+  const bound = await bind(stored);
+  expect(bound.run?.fileCount).toBe(1); expect(bound.summary).toMatchObject({ fileCount: 1, additions: 2, deletions: 1 });
+  expect(bound.summary?.files.map(file => file.path)).toEqual(['file-0.txt']);
+  const imagesOnly = await seed(1, 0), image = 'only.PNG';
+  const absolutePath = path.join(imagesOnly.root, image), identity = canonical(absolutePath);
+  imagesOnly.changes[image] = { capture: { id: digest(identity).slice(0, 24), identity, path: image, absolutePath, origin: 'workspace' }, before: snapshotOfText('old\n'), after: snapshotOfText('new\n') };
+  imagesOnly.fileCount = 1; imagesOnly.replyMessageId = 'image-only-reply'; await store.writeRun(imagesOnly);
+  expect((await service.replyCards({ sessionId: 'session' })).cards.map(card => card.run.id)).toEqual([run.id]);
 });

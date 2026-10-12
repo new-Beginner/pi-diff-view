@@ -1,0 +1,27 @@
+{
+  "id": "local.diff-view",
+  "version": "1.1.0",
+  "package": "plugin/dist/local.diff-view-1.1.0.piplug",
+  "bytes": 728801,
+  "files": 24,
+  "sha256": "4e01651a13def388a8369dc8418237a5dc8c07b00ac283add9907041d4cc1e7f",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "passed": 139, "skipped": 1 },
+    "browser": { "passed": 48, "engine": "installed Chrome" },
+    "build": "passed",
+    "pluginPack": "passed; existing high-risk permissions require explicit user grant"
+  },
+  "performance": {
+    "fixture": "256 captured paths sharing before/after snapshots of about 1002 lines each; OS cache not flushed",
+    "backendOpenMs": [34.1, 32.2, 31.1],
+    "browserFirstPaintMs": [109.8, 133.1, 107.4],
+    "baselineBrowserFirstPaintMs": [1031.7, 1020.6, 1040.2],
+    "measurement": "actual snapshot service via localhost test bridge; excludes PI-Desktop iframe creation and host click-to-tab scheduling"
+  },
+  "remaining": [
+    "Real PI-Desktop installation and host end-to-end 200ms acceptance not performed",
+    "Full Git scans with 2000 tracked / 600 changed files remain about 1.7-2.6 seconds",
+    "Older captures without indexed statistics retain the accurate hydration fallback"
+  ]
+}

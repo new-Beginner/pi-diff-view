@@ -1,0 +1,52 @@
+@import './theme.css';
+.git-management { position: relative; padding: 16px; min-width: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13px/1.5 var(--dv-font); }
+.git-management *, .git-management *::before, .git-management *::after { box-sizing: border-box; }
+.git-management h2 { margin: 0; font-size: 18px; line-height: 24px; }
+.git-management h3 { font-size: 14px; margin: 8px 0; }
+.git-management p, .git-management small { overflow-wrap: anywhere; }
+.git-management button, .git-management input, .git-management textarea { font: inherit; color: inherit; }
+.git-management button { border: 1px solid var(--dv-border); background: var(--dv-bg); border-radius: 4px; padding: 4px 8px; min-height: 32px; max-width: 100%; overflow-wrap: anywhere; cursor: pointer; }
+.git-management button:hover:not(:disabled) { background: var(--dv-hover); }
+.git-management button:active:not(:disabled) { background: var(--dv-selected); }
+.git-management button[aria-pressed='true'] { background: var(--dv-selected); border-color: var(--dv-focus); font-weight: 600; }
+.git-management :is(button, input, textarea):disabled { opacity: .5; cursor: not-allowed; }
+.git-management :focus-visible { outline: 2px solid var(--dv-focus); outline-offset: 2px; }
+.git-management input:not([type='checkbox']), .git-management textarea { background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: 4px; padding: 8px; min-width: 0; max-width: 100%; }
+.git-management input[type='checkbox'] { accent-color: var(--dv-focus); width: 16px; height: 16px; margin: 0; }
+.git-management textarea { min-height: 80px; resize: vertical; width: 100%; }
+.git-management nav, .git-management .gm-toolbar, .git-management .gm-header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; min-width: 0; }
+.git-management .gm-header { justify-content: space-between; }
+.git-management .gm-header > div { flex: 1 1 200px; min-width: 0; }
+.git-management .gm-header small { color: var(--dv-muted); }
+.git-management .gm-root { overflow-wrap: anywhere; color: var(--dv-muted); margin: 8px 0 16px; }
+.git-management .gm-controls { min-width: 0; margin: 0; padding: 0; border: 0; }
+.git-management .gm-controls > label:not(.gm-field), .git-management .gm-toolbar > label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.git-management .gm-toolbar label input { flex: 1 1 160px; width: 160px; }
+.git-management .gm-field { display: flex; flex-direction: column; gap: 4px; margin: 16px 0 12px; min-width: 0; }
+.git-management .gm-list { list-style: none; padding: 0; margin: 12px 0; min-width: 0; }
+.git-management .gm-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--dv-border); padding: 8px 4px; min-width: 0; }
+.git-management .gm-list code { white-space: pre; font: 12px/20px var(--dv-mono); }
+.git-management .gm-files li { display: grid; grid-template-columns: 16px 20px minmax(0, 1fr) auto; }
+.git-management .gm-files li.dv-state-enter { animation: dv-state-enter 180ms cubic-bezier(.2,.9,.3,1.15) both; }
+.git-management .gm-files li:nth-child(2) { animation-delay: 16ms; }
+.git-management .gm-files li:nth-child(3) { animation-delay: 32ms; }
+.git-management .gm-path { flex: 1 1 160px; text-align: left; overflow-wrap: anywhere; min-width: 0; font-family: var(--dv-mono); }
+.git-management .gm-selected { background: var(--dv-selected); box-shadow: inset 3px 0 var(--dv-focus); }
+.git-management .gm-commit { width: 100%; text-align: left; overflow-wrap: anywhere; }
+.git-management .gm-commit small { display: block; color: var(--dv-muted); }
+.git-management .gm-hint { color: var(--dv-muted); }
+.git-management .gm-protected { margin: 12px 0; padding: 8px; border: 1px solid var(--dv-border); border-radius: 4px; background: var(--dv-surface); }
+.git-management .gm-protected summary { cursor: pointer; overflow-wrap: anywhere; }
+.git-management .gm-protected .gm-list { margin-bottom: 0; }
+.git-management .gm-error { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dv-red); border: 1px solid currentColor; border-radius: 4px; padding: 12px; }
+.git-management .gm-notice { color: var(--dv-green); }
+.git-management .gm-detail { min-width: 0; margin-top: 16px; border-top: 1px solid var(--dv-border); padding-top: 12px; }
+.git-management .gm-detail pre { overflow: auto; max-width: 100%; max-height: 65vh; padding: 12px; background: var(--dv-surface); tab-size: 4; font: 12px/20px var(--dv-mono); }
+.git-management .gm-dialog { color: var(--dv-ink); background: var(--dv-bg); width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 24px; border: 1px solid var(--dv-border); border-radius: 8px; animation: dv-state-enter 180ms cubic-bezier(.2,.9,.3,1.15) both; }
+.git-management .gm-dialog::backdrop { background: rgb(0 0 0 / .4); }
+.git-management .gm-dialog h3 { margin-top: 0; font-size: 16px; }
+.git-management .gm-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+.git-management .gm-primary { color: var(--dv-bg); background: var(--dv-ink); border-color: var(--dv-ink); }
+.git-management .gm-primary:hover:not(:disabled) { background: var(--dv-muted); }
+@media (max-width: 460px) { .git-management { padding: 12px; } .git-management .gm-dialog { padding: 16px; } }
+@media (prefers-reduced-motion: reduce) { .git-management .gm-files li.dv-state-enter, .git-management .gm-dialog { animation: none; } }

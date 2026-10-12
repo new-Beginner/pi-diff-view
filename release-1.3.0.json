@@ -1,0 +1,23 @@
+{
+  "id": "local.diff-view",
+  "version": "1.3.0",
+  "package": "plugin/dist/local.diff-view-1.3.0.piplug",
+  "bytes": 889673,
+  "files": 30,
+  "sha256": "a8c230d9e802bb7cf95b82bfe49de1fc6acaf227428d7075d35d88f5d95318e6",
+  "validation": {
+    "typecheck": "passed",
+    "test": { "passed": 198, "skipped": 1, "reason": "POSIX FIFO/mkfifo test is not applicable on Windows" },
+    "build": "passed",
+    "test:e2e": { "passed": 63, "browser": "installed Google Chrome", "nativeHost": false },
+    "PluginCheck": "passed; agent/renderer explicit permission grant warning",
+    "archive": "store-only, matching runtime assets and version metadata verified"
+  },
+  "overallAcceptance": "partial",
+  "remaining": [
+    "Real PI-Desktop native UI acceptance blocked by computer-use tool boundary; no installation or permission approval performed",
+    "Bounded Shell/Task endpoint capture cannot guarantee all background writes or uninstrumented external authors",
+    "Historical recovery dry-run succeeded; live host plugin data was not migrated"
+  ],
+  "report": "docs/verification-1.3.0.md"
+}

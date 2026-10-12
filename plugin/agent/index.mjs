@@ -1,8 +1,8 @@
 // src/agent/capture.ts
-import fs3 from "node:fs/promises";
-import path3 from "node:path";
+import fs5 from "node:fs/promises";
+import path5 from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/core/path-policy.ts
 import fs from "node:fs/promises";
@@ -12,6 +12,34 @@ import { createHash } from "node:crypto";
 
 // src/core/contracts.ts
 var MAX_TEXT_BYTES = 2 * 1024 * 1024;
+
+// src/core/public-path.ts
+function deny(code, message) {
+  throw Object.assign(new Error(message), { code });
+}
+function assertPathSyntax(value) {
+  if (typeof value !== "string" || !value || value.length > 4096 || /[\0\r\n]/.test(value)) deny("INVALID_PATH", "Invalid file path");
+  const portable = value.replace(/\\/g, "/");
+  if (portable.split("/").includes("..")) deny("PATH_DENIED", "Traversal paths cannot be captured");
+  if (portable.startsWith("//") || portable.startsWith("/??/") || /^[a-z]:[^/]/i.test(portable) || portable.replace(/^[a-z]:\//i, "").includes(":")) deny("PATH_DENIED", "UNC, device, drive-relative and alternate-stream paths are not reviewable");
+}
+function hostScratchRoot(value) {
+  const portable = value.replace(/\\/g, "/");
+  if (!/^(?:[a-z]:\/|\/[^/])/i.test(portable)) return void 0;
+  const match = /\/(?:\.pi-desktoooop|\.pi-desktop)\/data\/scratch\/[a-zA-Z0-9-]{1,80}(?=\/|$)/gi;
+  let found, root;
+  while (found = match.exec(portable)) root = portable.slice(0, found.index + found[0].length);
+  return root;
+}
+function assertPublicPath(value) {
+  assertPathSyntax(value);
+  const portable = value.replace(/\\/g, "/"), parts = portable.split("/");
+  for (const [index, part] of parts.entries()) {
+    const s = part.toLowerCase();
+    if ([".pi-desktoooop", ".pi-desktop"].includes(s) && /^(?:[a-z]:\/|\/[^/])/i.test(portable) && parts[index + 1]?.toLowerCase() === "data" && parts[index + 2]?.toLowerCase() === "scratch" && /^[a-zA-Z0-9-]{1,80}$/.test(parts[index + 3] ?? "")) continue;
+    if (s === ".." || /[. ]$/.test(s) && s !== "." || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi", ".claude", ".codex", ".pi-desktoooop", ".pi-desktop", ".pi-diff-view", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) deny("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
+  }
+}
 
 // src/core/path-policy.ts
 function fail(code, message) {
@@ -27,20 +55,6 @@ function canonical(value) {
 function inside(root, target) {
   const rel = path.relative(canonical(root), canonical(target));
   return !path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`);
-}
-function assertPathSyntax(value) {
-  if (typeof value !== "string" || !value || value.length > 4096 || /[\0\r\n]/.test(value)) fail("INVALID_PATH", "Invalid file path");
-  const portable = value.replace(/\\/g, "/");
-  if (portable.split("/").includes("..")) fail("PATH_DENIED", "Traversal paths cannot be captured");
-  if (portable.startsWith("//") || portable.startsWith("/??/") || /^[a-z]:[^/]/i.test(portable) || portable.replace(/^[a-z]:\//i, "").includes(":")) fail("PATH_DENIED", "UNC, device, drive-relative and alternate-stream paths are not reviewable");
-}
-function assertPublicPath(value) {
-  assertPathSyntax(value);
-  const parts = value.replace(/\\/g, "/").split("/");
-  for (const part of parts) {
-    const s = part.toLowerCase();
-    if (s === ".." || /[. ]$/.test(s) && s !== "." || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi", ".claude", ".codex", ".pi-desktoooop", ".pi-desktop", ".pi-diff-view", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) fail("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
-  }
 }
 async function safeResolve(root, value) {
   assertPathSyntax(value);
@@ -173,6 +187,400 @@ import fs2 from "node:fs/promises";
 import path2 from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
+
+// node_modules/diff/libesm/diff/base.js
+var Diff = class {
+  diff(oldStr, newStr, options = {}) {
+    let callback;
+    if (typeof options === "function") {
+      callback = options;
+      options = {};
+    } else if ("callback" in options) {
+      callback = options.callback;
+    }
+    const oldString = this.castInput(oldStr, options);
+    const newString = this.castInput(newStr, options);
+    const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
+    const newTokens = this.removeEmpty(this.tokenize(newString, options));
+    return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
+  }
+  diffWithOptionsObj(oldTokens, newTokens, options, callback) {
+    var _a;
+    const done = (value) => {
+      value = this.postProcess(value, options);
+      if (callback) {
+        setTimeout(function() {
+          callback(value);
+        }, 0);
+        return void 0;
+      } else {
+        return value;
+      }
+    };
+    const newLen = newTokens.length, oldLen = oldTokens.length;
+    let editLength = 1;
+    let maxEditLength = newLen + oldLen;
+    if (options.maxEditLength != null) {
+      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
+    }
+    const maxExecutionTime = (_a = options.timeout) !== null && _a !== void 0 ? _a : Infinity;
+    const abortAfterTimestamp = Date.now() + maxExecutionTime;
+    const bestPath = [{ oldPos: -1, lastComponent: void 0 }];
+    let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
+    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+      return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
+    }
+    let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
+    const execEditLength = () => {
+      for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
+        let basePath;
+        const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
+        if (removePath) {
+          bestPath[diagonalPath - 1] = void 0;
+        }
+        let canAdd = false;
+        if (addPath) {
+          const addPathNewPos = addPath.oldPos - diagonalPath;
+          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
+        }
+        const canRemove = removePath && removePath.oldPos + 1 < oldLen;
+        if (!canAdd && !canRemove) {
+          bestPath[diagonalPath] = void 0;
+          continue;
+        }
+        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
+          basePath = this.addToPath(addPath, true, false, 0, options);
+        } else {
+          basePath = this.addToPath(removePath, false, true, 1, options);
+        }
+        newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
+        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+          return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
+        } else {
+          bestPath[diagonalPath] = basePath;
+          if (basePath.oldPos + 1 >= oldLen) {
+            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
+          }
+          if (newPos + 1 >= newLen) {
+            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
+          }
+        }
+      }
+      editLength++;
+    };
+    if (callback) {
+      (function exec() {
+        setTimeout(function() {
+          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
+            return callback(void 0);
+          }
+          if (!execEditLength()) {
+            exec();
+          }
+        }, 0);
+      })();
+    } else {
+      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
+        const ret = execEditLength();
+        if (ret) {
+          return ret;
+        }
+      }
+    }
+  }
+  addToPath(path6, added, removed, oldPosInc, options) {
+    const last = path6.lastComponent;
+    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
+      return {
+        oldPos: path6.oldPos + oldPosInc,
+        lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
+      };
+    } else {
+      return {
+        oldPos: path6.oldPos + oldPosInc,
+        lastComponent: { count: 1, added, removed, previousComponent: last }
+      };
+    }
+  }
+  extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
+    const newLen = newTokens.length, oldLen = oldTokens.length;
+    let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
+    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
+      newPos++;
+      oldPos++;
+      commonCount++;
+      if (options.oneChangePerToken) {
+        basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
+      }
+    }
+    if (commonCount && !options.oneChangePerToken) {
+      basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
+    }
+    basePath.oldPos = oldPos;
+    return newPos;
+  }
+  equals(left, right, options) {
+    if (options.comparator) {
+      return options.comparator(left, right);
+    } else {
+      return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
+    }
+  }
+  removeEmpty(array) {
+    const ret = [];
+    for (let i = 0; i < array.length; i++) {
+      if (array[i]) {
+        ret.push(array[i]);
+      }
+    }
+    return ret;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  castInput(value, options) {
+    return value;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  tokenize(value, options) {
+    return Array.from(value);
+  }
+  join(chars) {
+    return chars.join("");
+  }
+  postProcess(changeObjects, options) {
+    return changeObjects;
+  }
+  get useLongestToken() {
+    return false;
+  }
+  buildValues(lastComponent, newTokens, oldTokens) {
+    const components = [];
+    let nextComponent;
+    while (lastComponent) {
+      components.push(lastComponent);
+      nextComponent = lastComponent.previousComponent;
+      delete lastComponent.previousComponent;
+      lastComponent = nextComponent;
+    }
+    components.reverse();
+    const componentLen = components.length;
+    let componentPos = 0, newPos = 0, oldPos = 0;
+    for (; componentPos < componentLen; componentPos++) {
+      const component = components[componentPos];
+      if (!component.removed) {
+        if (!component.added && this.useLongestToken) {
+          let value = newTokens.slice(newPos, newPos + component.count);
+          value = value.map(function(value2, i) {
+            const oldValue = oldTokens[oldPos + i];
+            return oldValue.length > value2.length ? oldValue : value2;
+          });
+          component.value = this.join(value);
+        } else {
+          component.value = this.join(newTokens.slice(newPos, newPos + component.count));
+        }
+        newPos += component.count;
+        if (!component.added) {
+          oldPos += component.count;
+        }
+      } else {
+        component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
+        oldPos += component.count;
+      }
+    }
+    return components;
+  }
+};
+
+// node_modules/diff/libesm/diff/line.js
+var LineDiff = class extends Diff {
+  constructor() {
+    super(...arguments);
+    this.tokenize = tokenize;
+  }
+  equals(left, right, options) {
+    if (options.ignoreWhitespace) {
+      if (!options.newlineIsToken || !left.includes("\n")) {
+        left = left.trim();
+      }
+      if (!options.newlineIsToken || !right.includes("\n")) {
+        right = right.trim();
+      }
+    } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
+      if (left.endsWith("\n")) {
+        left = left.slice(0, -1);
+      }
+      if (right.endsWith("\n")) {
+        right = right.slice(0, -1);
+      }
+    }
+    return super.equals(left, right, options);
+  }
+};
+var lineDiff = new LineDiff();
+function diffLines(oldStr, newStr, options) {
+  return lineDiff.diff(oldStr, newStr, options);
+}
+function tokenize(value, options) {
+  if (options.stripTrailingCr) {
+    value = value.replace(/\r\n/g, "\n");
+  }
+  const retLines = [], linesAndNewlines = value.split(/(\n|\r\n)/);
+  if (!linesAndNewlines[linesAndNewlines.length - 1]) {
+    linesAndNewlines.pop();
+  }
+  for (let i = 0; i < linesAndNewlines.length; i++) {
+    const line = linesAndNewlines[i];
+    if (i % 2 && !options.newlineIsToken) {
+      retLines[retLines.length - 1] += line;
+    } else {
+      retLines.push(line);
+    }
+  }
+  return retLines;
+}
+
+// node_modules/diff/libesm/patch/create.js
+function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
+  let optionsObj;
+  if (!options) {
+    optionsObj = {};
+  } else if (typeof options === "function") {
+    optionsObj = { callback: options };
+  } else {
+    optionsObj = options;
+  }
+  if (typeof optionsObj.context === "undefined") {
+    optionsObj.context = 4;
+  }
+  const context = optionsObj.context;
+  if (optionsObj.newlineIsToken) {
+    throw new Error("newlineIsToken may not be used with patch-generation functions, only with diffing functions");
+  }
+  if (!optionsObj.callback) {
+    return diffLinesResultToPatch(diffLines(oldStr, newStr, optionsObj));
+  } else {
+    const { callback } = optionsObj;
+    diffLines(oldStr, newStr, Object.assign(Object.assign({}, optionsObj), { callback: (diff) => {
+      const patch = diffLinesResultToPatch(diff);
+      callback(patch);
+    } }));
+  }
+  function diffLinesResultToPatch(diff) {
+    if (!diff) {
+      return;
+    }
+    diff.push({ value: "", lines: [] });
+    function contextLines(lines) {
+      return lines.map(function(entry) {
+        return " " + entry;
+      });
+    }
+    const hunks = [];
+    let oldRangeStart = 0, newRangeStart = 0, curRange = [], oldLine = 1, newLine = 1;
+    for (let i = 0; i < diff.length; i++) {
+      const current = diff[i], lines = current.lines || splitLines(current.value);
+      current.lines = lines;
+      if (current.added || current.removed) {
+        if (!oldRangeStart) {
+          const prev = diff[i - 1];
+          oldRangeStart = oldLine;
+          newRangeStart = newLine;
+          if (prev) {
+            curRange = context > 0 ? contextLines(prev.lines.slice(-context)) : [];
+            oldRangeStart -= curRange.length;
+            newRangeStart -= curRange.length;
+          }
+        }
+        for (const line of lines) {
+          curRange.push((current.added ? "+" : "-") + line);
+        }
+        if (current.added) {
+          newLine += lines.length;
+        } else {
+          oldLine += lines.length;
+        }
+      } else {
+        if (oldRangeStart) {
+          if (lines.length <= context * 2 && i < diff.length - 2) {
+            for (const line of contextLines(lines)) {
+              curRange.push(line);
+            }
+          } else {
+            const contextSize = Math.min(lines.length, context);
+            for (const line of contextLines(lines.slice(0, contextSize))) {
+              curRange.push(line);
+            }
+            const hunk = {
+              oldStart: oldRangeStart,
+              oldLines: oldLine - oldRangeStart + contextSize,
+              newStart: newRangeStart,
+              newLines: newLine - newRangeStart + contextSize,
+              lines: curRange
+            };
+            hunks.push(hunk);
+            oldRangeStart = 0;
+            newRangeStart = 0;
+            curRange = [];
+          }
+        }
+        oldLine += lines.length;
+        newLine += lines.length;
+      }
+    }
+    for (const hunk of hunks) {
+      for (let i = 0; i < hunk.lines.length; i++) {
+        if (hunk.lines[i].endsWith("\n")) {
+          hunk.lines[i] = hunk.lines[i].slice(0, -1);
+        } else {
+          hunk.lines.splice(i + 1, 0, "\\ No newline at end of file");
+          i++;
+        }
+      }
+    }
+    return {
+      oldFileName,
+      newFileName,
+      oldHeader,
+      newHeader,
+      hunks
+    };
+  }
+}
+function splitLines(text) {
+  const hasTrailingNl = text.endsWith("\n");
+  const result = text.split("\n").map((line) => line + "\n");
+  if (hasTrailingNl) {
+    result.pop();
+  } else {
+    result.push(result.pop().slice(0, -1));
+  }
+  return result;
+}
+
+// src/core/diff.ts
+function buildHunks(before, after, context = 3) {
+  const patch = structuredPatch("before", "after", before, after, "", "", { context, maxEditLength: 2e5, timeout: 1e3 });
+  if (!patch) throw Object.assign(new Error("Diff exceeds computation budget"), { code: "DIFF_LIMIT" });
+  return patch.hunks.map((h, index) => {
+    let old = h.oldStart, next = h.newStart;
+    const lines = h.lines.map((line) => {
+      const sign = line[0];
+      if (sign === "\\") return { kind: "notice", text: line, oldLine: null, newLine: null };
+      const kind = sign === "+" ? "add" : sign === "-" ? "del" : "context";
+      return { kind, text: line.slice(1), oldLine: kind === "add" ? null : old++, newLine: kind === "del" ? null : next++ };
+    });
+    return { id: `${index}:${h.oldStart}:${h.newStart}`, header: `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, oldStart: h.oldStart, oldLines: h.oldLines, newStart: h.newStart, newLines: h.newLines, lines };
+  });
+}
+function stats(before, after) {
+  let additions = 0, deletions = 0;
+  for (const hunk of buildHunks(before, after)) for (const line of hunk.lines) {
+    if (line.kind === "add") additions++;
+    if (line.kind === "del") deletions++;
+  }
+  return { additions, deletions };
+}
+
+// src/core/storage.ts
 var MAX_RUNS = 200;
 var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
 async function atomicJson(file, value) {
@@ -206,11 +614,11 @@ async function resolveLocator(file, pluginRoot2) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(await fs2.realpath(locator.dataPath)) !== canonical(locator.dataPath)) fail("BRIDGE_INVALID", "Unsafe plugin storage root");
   return locator;
 }
-function validId(id) {
-  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) fail("INVALID_ID", "Invalid record identifier");
+function validId(id2) {
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id2)) fail("INVALID_ID", "Invalid record identifier");
 }
-function validRun(run, id) {
-  if (!run || ![1, 2].includes(run.version) || run.id !== id || typeof run.sessionId !== "string" || !path2.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
+function validRun(run, id2) {
+  if (!run || ![1, 2].includes(run.version) || run.id !== id2 || typeof run.sessionId !== "string" || !path2.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
   try {
     for (const [value, change] of Object.entries(run.changes)) {
       assertPublicPath(value);
@@ -235,7 +643,7 @@ var SnapshotStore = class {
     this.directory = directory;
   }
   async init() {
-    for (const sub of ["blobs", "inbox", "runs", "backups"]) await fs2.mkdir(path2.join(this.directory, sub), { recursive: true, mode: 448 });
+    for (const sub of ["blobs", "inbox", "runs", "backups", "evidence"]) await fs2.mkdir(path2.join(this.directory, sub), { recursive: true, mode: 448 });
   }
   async captureLock(work) {
     const lock = path2.join(this.directory, "capture.lock");
@@ -302,6 +710,17 @@ var SnapshotStore = class {
     }
     return { ...snapshot, text: null };
   }
+  async inspect(snapshot) {
+    if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
+    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
+    try {
+      const stat = await fs2.lstat(path2.join(this.directory, "blobs", snapshot.hash));
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024 || stat.size !== snapshot.size) throw new Error("Unsafe blob");
+      return { ...snapshot, text: null };
+    } catch {
+      return { ...snapshot, kind: "unavailable", text: null };
+    }
+  }
   async hydrate(snapshot) {
     if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
     if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
@@ -321,7 +740,7 @@ var SnapshotStore = class {
       validId(run.id);
       const changes = /* @__PURE__ */ Object.create(null);
       if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
-      const fileCount = Object.values(run.changes).filter((c) => !sameSnapshot(c.before, c.after)).length;
+      const fileCount = Object.keys(run.changes).length;
       if (!fileCount) {
         if (run.state === "running") {
           const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run;
@@ -331,16 +750,26 @@ var SnapshotStore = class {
         }
         return;
       }
-      for (const [p, c] of Object.entries(run.changes)) changes[p] = { ...c, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      for (const [p, c] of Object.entries(run.changes)) {
+        let diffStats = c.diffStats;
+        if (diffStats?.beforeHash !== c.before.hash || diffStats?.afterHash !== c.after.hash) diffStats = void 0;
+        if (!diffStats && c.before.kind === "text" && c.after.kind === "text" && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
+          try {
+            diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? "", c.after.text ?? "") };
+          } catch {
+          }
+        }
+        changes[p] = { ...c, diffStats, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      }
       await atomicJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, fileCount, changes });
     };
     if (inbox) await this.captureLock(save);
     else await save();
   }
-  async getRun(id, inbox = false, hydrate = true) {
-    validId(id);
-    const run = await readJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${id}.json`), null);
-    if (!run || !validRun(run, id)) return null;
+  async getRun(id2, inbox = false, hydrate = true) {
+    validId(id2);
+    const run = await readJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${id2}.json`), null);
+    if (!run || !validRun(run, id2)) return null;
     if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
     return run;
   }
@@ -348,11 +777,12 @@ var SnapshotStore = class {
     await this.captureLock(async () => {
       const entries = (await fs2.readdir(path2.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
       for (const entry of entries) {
-        const id = entry.slice(0, -5);
+        const id2 = entry.slice(0, -5);
         try {
-          const run = await this.getRun(id, true, false);
+          const run = await this.getRun(id2, true, false);
           if (!run) continue;
-          const current = await this.getRun(id, false, false);
+          const current = await this.getRun(id2, false, false);
+          if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
           const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
           run.bindings = sameReply ? current?.bindings ?? {} : {};
           if (run.generation !== generation && run.state === "running") {
@@ -369,12 +799,16 @@ var SnapshotStore = class {
   async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await fs2.readdir(path2.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
     const runs = [];
-    for (const file of files.slice(-MAX_RUNS * 2)) {
-      try {
-        const run = await this.getRun(file.slice(0, -5), false, hydrate);
-        if (run && (includeUnchanged || Object.values(run.changes).some((c) => !sameSnapshot(c.before, c.after)))) runs.push(run);
-      } catch {
-      }
+    const selected = files.slice(-MAX_RUNS * 2);
+    for (let offset = 0; offset < selected.length; offset += 16) {
+      const page = await Promise.all(selected.slice(offset, offset + 16).map(async (file) => {
+        try {
+          return await this.getRun(file.slice(0, -5), false, hydrate);
+        } catch {
+          return null;
+        }
+      }));
+      for (const run of page) if (run && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
     }
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
@@ -414,7 +848,7 @@ var SnapshotStore = class {
         const run = await this.getRun(file.slice(0, -5), inbox, false);
         if (run?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
       }
-      for (const sub of ["runs", "inbox", "blobs", "backups"]) {
+      for (const sub of ["runs", "inbox", "blobs", "backups", "evidence"]) {
         const dir = path2.join(this.directory, sub);
         if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
         for (const file of await fs2.readdir(dir)) {
@@ -429,7 +863,202 @@ var SnapshotStore = class {
   }
 };
 
+// src/core/review-file-policy.ts
+var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
+  "png",
+  "apng",
+  "jpg",
+  "jpeg",
+  "jfif",
+  "pjpeg",
+  "pjp",
+  "gif",
+  "webp",
+  "bmp",
+  "dib",
+  "ico",
+  "cur",
+  "icns",
+  "tif",
+  "tiff",
+  "avif",
+  "avifs",
+  "heic",
+  "heif",
+  "heics",
+  "heifs",
+  "svg",
+  "svgz",
+  "jxl",
+  "psd",
+  "raw",
+  "dng",
+  "cr2",
+  "cr3",
+  "nef",
+  "nrw",
+  "arw",
+  "orf",
+  "raf",
+  "rw2",
+  "pef",
+  "srw",
+  "x3f",
+  "tga",
+  "qoi",
+  "exr",
+  "hdr",
+  "jp2",
+  "j2k",
+  "jpf",
+  "jpx",
+  "jpm",
+  "mj2",
+  "wmf",
+  "emf"
+]);
+function isImagePath(filePath) {
+  const basename = filePath.slice(Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1);
+  const dot = basename.lastIndexOf(".");
+  return dot > 0 && dot < basename.length - 1 && IMAGE_EXTENSIONS.has(basename.slice(dot + 1).toLowerCase());
+}
+
+// src/agent/workspace-capture.ts
+import fs4 from "node:fs/promises";
+import path4 from "node:path";
+import { randomUUID as randomUUID2 } from "node:crypto";
+
+// src/core/capture-context.ts
+import fs3 from "node:fs/promises";
+import path3 from "node:path";
+var CAPTURE_CONTEXT_TTL = 6e3;
+var id = (v) => typeof v === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(v);
+async function readCaptureContext(directory, generation, sessionId, root, now = Date.now()) {
+  try {
+    const file = path3.join(directory, "capture-contexts.json"), stat = await fs3.lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128 * 1024) return null;
+    const document = JSON.parse(await fs3.readFile(file, "utf8"));
+    if (document.version !== 1 || document.generation !== generation || !Array.isArray(document.contexts) || document.contexts.length > 200) return null;
+    const context = document.contexts.find((v) => v?.sessionId === sessionId);
+    if (!context || context.running !== true || !id(context.taskId) || typeof context.root !== "string" || !path3.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
+    return context;
+  } catch {
+    return null;
+  }
+}
+async function checkScratchAncestry(value) {
+  if (!hostScratchRoot(value)) return;
+  const absolute = path3.resolve(value);
+  let cursor = path3.parse(absolute).root;
+  for (const segment of absolute.slice(cursor.length).split(path3.sep)) {
+    cursor = path3.join(cursor, segment);
+    const stat = await fs3.lstat(cursor);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Unsafe scratch capture ancestry");
+  }
+}
+
+// src/agent/workspace-capture.ts
+var WORKSPACE_NOTICE = "Workspace capture: at most 256 files, 4096 directory entries, 16 MiB text and 3 seconds per snapshot; credentials, private paths, dependencies and symlinks excluded. Only observed endpoints are retained; transient changes and uninstrumented/background writers cannot be proven. Renames are represented as deletion/addition.";
+async function snapshotWorkspace(root, privatePaths) {
+  const result = { paths: [], complete: true, notice: WORKSPACE_NOTICE };
+  const deadline = Date.now() + 3e3;
+  let entries = 0, bytes = 0;
+  const walk = async (directory) => {
+    if (Date.now() > deadline || entries >= 4096 || result.paths.length >= 256) {
+      result.complete = false;
+      return;
+    }
+    let dir;
+    const directories = [];
+    try {
+      if (directory !== root) await safeResolve(root, directory);
+      if (privatePaths.some((p) => inside(p, directory))) return;
+      dir = await fs4.opendir(directory);
+      for await (const entry of dir) {
+        if (++entries > 4096 || Date.now() > deadline || result.paths.length >= 256) {
+          result.complete = false;
+          break;
+        }
+        const absolute = path4.join(directory, entry.name), relative = path4.relative(root, absolute);
+        try {
+          try {
+            assertPublicPath(relative);
+          } catch {
+            continue;
+          }
+          if (privatePaths.some((p) => inside(p, absolute)) || entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) directories.push(absolute);
+          else if (entry.isFile() && !isImagePath(relative)) {
+            const capture = await resolveCapturePath(root, relative, privatePaths);
+            let before = await readCapturedSnapshot(root, capture, privatePaths);
+            if (before.text !== null) {
+              bytes += before.size;
+              if (bytes > 16 * 1024 * 1024) {
+                before = { ...before, kind: "unavailable", text: null };
+                result.complete = false;
+              }
+            }
+            result.paths.push({ capture, before });
+          } else if (entry.isFile()) continue;
+          else result.complete = false;
+        } catch {
+          result.complete = false;
+        }
+      }
+      for (const child of directories) await walk(child);
+    } catch {
+      result.complete = false;
+    } finally {
+      await dir?.close().catch(() => {
+      });
+    }
+  };
+  try {
+    assertPublicPath(root);
+    await checkScratchAncestry(root);
+    await walk(root);
+  } catch {
+    result.complete = false;
+  }
+  return result;
+}
+async function journal(store, work) {
+  return store.captureLock(async () => {
+    const file = path4.join(store.directory, "capture-leases.json");
+    let data;
+    try {
+      const stat = await fs4.stat(file);
+      if (stat.size > 1024 * 1024) throw new Error("Capture lease journal exceeds limit");
+      data = JSON.parse(await fs4.readFile(file, "utf8"));
+      if (data.version !== 1 || !Array.isArray(data.leases) || data.leases.some((l) => typeof l.id !== "string" || typeof l.root !== "string" || typeof l.ambiguous !== "boolean")) throw new Error("Invalid capture lease journal");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      data = { version: 1, leases: [] };
+    }
+    const result = work(data);
+    await atomicJson(file, data);
+    return result;
+  });
+}
+async function beginCaptureLease(store, root, owner, scopes = []) {
+  return journal(store, (data) => {
+    if (data.leases.length >= 256) throw new Error("Capture lease limit reached; unresolved/background operations require a fresh store");
+    const lease = { id: randomUUID2(), root, scopes: scopes.length ? [...new Set(scopes)] : [root], owner, ambiguous: false };
+    for (const other of data.leases) if ((other.scopes ?? [other.root]).some((a) => lease.scopes.some((b) => inside(a, b) || inside(b, a)))) other.ambiguous = lease.ambiguous = true;
+    data.leases.push(lease);
+    return lease.id;
+  });
+}
+async function endCaptureLease(store, id2) {
+  return journal(store, (data) => {
+    const lease = data.leases.find((l) => l.id === id2);
+    data.leases = data.leases.filter((l) => l.id !== id2);
+    return !lease || lease.ambiguous;
+  });
+}
+
 // src/agent/capture.ts
+var toolName = (name) => String(name).split(".").pop().toLowerCase();
 var MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
 function textContent(message) {
   if (typeof message?.content === "string") return message.content;
@@ -437,20 +1066,35 @@ function textContent(message) {
 }
 function toolPaths(name, input) {
   const p = input?.path ?? input?.file_path;
-  if (typeof p !== "string" || !["Write", "Edit", "write", "edit"].includes(name)) return [];
-  const paths = [p];
+  if (typeof p !== "string" || !["write", "edit"].includes(name)) return { targets: [], hadTargets: false, truncated: false };
+  const targets = /* @__PURE__ */ new Set();
+  let hadTargets = false, truncated = false;
+  const add = (target) => {
+    hadTargets = true;
+    if (!isImagePath(target)) targets.add(target);
+  };
+  add(p);
   if (/^edit$/i.test(name) && typeof input.ops === "string") {
+    let scanned = 0;
     for (const line of input.ops.split("\n")) if (line.startsWith("MV ")) {
-      paths.push(line.slice(3).trim());
-      if (paths.length > 256) break;
+      if (++scanned > 4096) {
+        truncated = true;
+        break;
+      }
+      add(line.slice(3).trim());
+      if (targets.size > 256) {
+        truncated = true;
+        break;
+      }
     }
   }
-  return [...new Set(paths)];
+  return { targets: [...targets], hadTargets, truncated };
 }
 function createCaptureExtension(options) {
   return (pi) => {
     let run = null, store = null;
-    let pending = /* @__PURE__ */ new Map();
+    const pending = /* @__PURE__ */ new Map();
+    const waits = /* @__PURE__ */ new Set();
     let seen = /* @__PURE__ */ new Set(), retired = /* @__PURE__ */ new Set(), warned = false, disposed = false, tail = Promise.resolve();
     let lastReply, privatePaths = [], observed = /* @__PURE__ */ new Set(), settled = false;
     const serial = (fn, ctx) => {
@@ -472,12 +1116,18 @@ function createCaptureExtension(options) {
     const bridge = async () => resolveLocator(options.locator ?? await locatorPath(options.pluginRoot), options.pluginRoot);
     const check = async (target) => {
       const locator = await bridge();
-      if (locator.generation !== target.generation) throw new Error("Capture generation changed; reload the Agent session");
+      if (locator.generation !== target.generation || locator.dataPath !== store?.directory) {
+        store = new SnapshotStore(locator.dataPath);
+        await store.init();
+        target.generation = locator.generation;
+        privatePaths = [.../* @__PURE__ */ new Set([...privatePaths, await fs5.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)])];
+        if (!target.notice?.includes("Capture locator refreshed")) target.notice = `${target.notice ?? ""} Capture locator refreshed during the current user task.`.trim();
+      }
       return locator;
     };
     const persist = async (target) => {
       await check(target);
-      target.fileCount = Object.values(target.changes).filter((c) => !sameSnapshot(c.before, c.after)).length;
+      target.fileCount = Object.values(target.changes).filter((c) => !c.ambiguous && !sameSnapshot(c.before, c.after)).length;
       target.contentVersion = (target.contentVersion ?? 0) + 1;
       await store.writeRun(target, true);
     };
@@ -490,7 +1140,7 @@ function createCaptureExtension(options) {
       }
       return snapshot;
     };
-    const begin = async (ctx, uncertain = false) => {
+    const begin = async (ctx, uncertain = false, event) => {
       if (disposed) return;
       const locator = await bridge();
       if (run?.state === "running") {
@@ -502,11 +1152,18 @@ function createCaptureExtension(options) {
       }
       store = new SnapshotStore(locator.dataPath);
       await store.init();
-      privatePaths = [await fs3.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)];
-      run = { version: 2, contentVersion: 0, boundary: uncertain ? "uncertain" : "user", id: randomUUID2(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root: await fs3.realpath(ctx.cwd), startedAt: Date.now(), state: "running", fileCount: 0, incomplete: uncertain, changes: /* @__PURE__ */ Object.create(null), replies: [], bindings: {} };
-      for (const id of seen) retired.add(id);
+      privatePaths = [await fs5.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)];
+      await checkScratchAncestry(ctx.cwd);
+      const root = await fs5.realpath(ctx.cwd);
+      const identity = await readCaptureContext(locator.dataPath, locator.generation, ctx.sessionManager.getSessionId(), root);
+      run = { version: 2, contentVersion: 0, boundary: uncertain && !identity ? "uncertain" : "user", id: randomUUID3(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root, startedAt: Date.now(), state: "running", fileCount: 0, incomplete: uncertain, changes: /* @__PURE__ */ Object.create(null), replies: [], bindings: {} };
+      const userId = event?.userMessageId ?? (event?.message?.role === "user" ? event.message.id : void 0) ?? identity?.taskId;
+      if (typeof userId === "string" && userId.length > 0 && userId.length <= 256) run.userMessageId = userId;
+      if (uncertain && identity) run.notice = "\u8FD0\u884C\u8EAB\u4EFD\u5DF2\u7531\u540C\u4F1A\u8BDD\u3001\u540C\u9879\u76EE\u7684\u5BBF\u4E3B\u5143\u6570\u636E\u6838\u9A8C\uFF1B\u4EC5\u8BB0\u5F55\u91C7\u96C6\u5F00\u59CB\u540E\u7684\u6709\u754C\u53D8\u66F4\u3002";
+      for (const id2 of seen) retired.add(id2);
       while (retired.size > 4096) retired.delete(retired.keys().next().value);
       pending.clear();
+      waits.clear();
       seen.clear();
       observed.clear();
       warned = false;
@@ -514,9 +1171,9 @@ function createCaptureExtension(options) {
       settled = false;
       await persist(run);
     };
-    pi.on("before_agent_start", (_event, ctx) => serial(() => begin(ctx), ctx));
+    pi.on("before_agent_start", (event, ctx) => serial(() => begin(ctx, false, event), ctx));
     pi.on("agent_start", (_event, ctx) => serial(async () => {
-      if (disposed || settled || !run || run.state === "running" || run.state === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs3.realpath(ctx.cwd)) return;
+      if (disposed || settled || !run || run.state === "running" || run.state === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs5.realpath(ctx.cwd)) return;
       await check(run);
       run.state = "running";
       delete run.endedAt;
@@ -545,53 +1202,122 @@ function createCaptureExtension(options) {
       }
       await check(run);
       seen.add(event.toolCallId);
-      const name = String(event.toolName), targets = toolPaths(name, event.input ?? event.args);
-      if (!targets.length) {
-        if (/^(Bash|bash|Task|task|Write|write|Edit|edit)$/.test(name) || name.startsWith("plugin_")) {
+      const name = toolName(event.toolName), targetSet = toolPaths(name, event.input ?? event.args), targets = targetSet.targets;
+      const workspace = ["bash", "shell", "task"].includes(name);
+      if (name === "taskwait" || name === "task_wait") {
+        waits.add(event.toolCallId);
+        return;
+      }
+      if (targetSet.hadTargets && targets.length === 0 && !targetSet.truncated) return;
+      if (!targets.length && !workspace) {
+        if (["write", "edit"].includes(name) || name.startsWith("plugin_")) {
           run.incomplete = true;
           await persist(run);
         }
         return;
       }
-      if (targets.length > 256) run.incomplete = true;
-      const captures = [];
-      for (const [index, target] of targets.slice(0, 256).entries()) {
-        try {
-          const capture = await resolveCapturePath(run.root, target, privatePaths, /^write$/i.test(name) || index > 0);
-          if (!observed.has(capture.identity) && observed.size >= 256) throw new Error("Turn exceeds 256 explicitly captured files");
-          observed.add(capture.identity);
-          const before = bounded(await readCapturedSnapshot(run.root, capture, privatePaths), captures.map((e) => e.before));
-          if (before.kind !== "text") run.incomplete = true;
-          captures.push({ capture, before });
-        } catch {
-          run.incomplete = true;
+      const leaseStore = store, lease = await beginCaptureLease(leaseStore, run.root, run.id, targets.slice(0, 256).map((p) => path5.resolve(run.root, p)));
+      const captured = { run, paths: [], store: leaseStore, lease, name, workspace, complete: true, task: name === "task" };
+      pending.set(event.toolCallId, captured);
+      if (workspace) {
+        const snapshot = await snapshotWorkspace(run.root, privatePaths);
+        captured.complete = snapshot.complete;
+        for (const entry of snapshot.paths) captured.paths.push({ ...entry, before: bounded(entry.before) });
+        run.notice = WORKSPACE_NOTICE + (captured.task ? " Task is sampled at TaskWait/agent_end, not at launch; child runners should load this extension. Parent endpoints are ambiguous and do not prove child completion." : " Shell coverage ends at tool_result; background writes after return are unsupported.");
+        if (!snapshot.complete || captured.task) run.incomplete = true;
+      } else {
+        if (targetSet.truncated || targets.length > 256) run.incomplete = true;
+        for (const [index, target] of targets.slice(0, 256).entries()) {
+          try {
+            const capture = await resolveCapturePath(run.root, target, privatePaths, name === "write" || index > 0);
+            if (!observed.has(capture.identity) && observed.size >= 256) throw new Error("Turn exceeds 256 explicitly captured files");
+            observed.add(capture.identity);
+            const before = bounded(await readCapturedSnapshot(run.root, capture, privatePaths), captured.paths.map((e) => e.before));
+            if (before.kind !== "text") run.incomplete = true;
+            captured.paths.push({ capture, before });
+          } catch {
+            run.incomplete = true;
+          }
         }
       }
-      pending.set(event.toolCallId, { run, paths: captures });
       await persist(run);
     }, ctx));
-    pi.on("tool_result", (event, ctx) => serial(async () => {
-      const captured = pending.get(event.toolCallId);
-      if (!captured || disposed) return;
-      pending.delete(event.toolCallId);
+    const finish = async (id2, captured, isError = false, sample = false) => {
       const target = captured.run;
-      if (target !== run || target.state !== "running" || target.sessionId !== ctx.sessionManager.getSessionId()) return;
       await check(target);
-      lastReply = void 0;
-      for (const entry of captured.paths) {
+      const pairs = [];
+      const retain = (snapshot) => bounded(snapshot, pairs.map((pair) => pair.after));
+      if (captured.workspace) {
+        const current = await snapshotWorkspace(target.root, privatePaths);
+        if (!current.complete) target.incomplete = true;
+        const remaining = new Map(current.paths.map((e) => [e.capture.identity, e]));
+        for (const entry of captured.paths) {
+          const live = remaining.get(entry.capture.identity);
+          remaining.delete(entry.capture.identity);
+          try {
+            pairs.push({ entry, after: retain(live?.before ?? await readCapturedSnapshot(target.root, entry.capture, privatePaths)) });
+          } catch {
+            target.incomplete = true;
+          }
+        }
+        for (const entry of remaining.values()) pairs.push({ entry: { capture: entry.capture, before: absentSnapshot() }, after: retain(entry.before), uncertain: !captured.complete });
+      } else for (const entry of captured.paths) {
         try {
-          const after = bounded(await readCapturedSnapshot(target.root, entry.capture, privatePaths), captured.paths.map((e) => e.before));
-          if (event.isError || after.kind !== "text") target.incomplete = true;
-          const priorKey = Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === entry.capture.identity);
-          const prior = priorKey ? target.changes[priorKey] : void 0;
-          if (prior && !sameSnapshot(prior.after, entry.before)) target.incomplete = true;
-          target.changes[priorKey ?? entry.capture.path] = { capture: prior?.capture ?? entry.capture, before: prior?.before ?? entry.before, after };
+          pairs.push({ entry, after: retain(await readCapturedSnapshot(target.root, entry.capture, privatePaths)) });
         } catch {
           target.incomplete = true;
         }
       }
+      const overlap = sample ? true : await endCaptureLease(captured.store, captured.lease) || captured.store.directory !== store.directory;
+      if (!sample) pending.delete(id2);
+      if (isError) target.incomplete = true;
+      for (const { entry, after: rawAfter, uncertain } of pairs) {
+        if (sameSnapshot(entry.before, rawAfter)) continue;
+        const priorKey = Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === entry.capture.identity);
+        const prior = priorKey ? target.changes[priorKey] : void 0;
+        if (!prior && Object.keys(target.changes).length >= 256) {
+          target.incomplete = true;
+          continue;
+        }
+        const ambiguous = !!(overlap || uncertain || captured.task || prior?.ambiguous || prior && !sameSnapshot(prior.after, entry.before));
+        let before = prior?.before ?? entry.before, after = bounded(rawAfter, captured.paths.map((e) => e.before));
+        if (ambiguous) {
+          before = { ...before, text: null, kind: "unavailable" };
+          after = { ...after, text: null, kind: "unavailable" };
+          target.incomplete = true;
+        }
+        if (after.kind !== "text") target.incomplete = true;
+        target.changes[priorKey ?? entry.capture.path] = {
+          capture: prior?.capture ?? entry.capture,
+          before,
+          after,
+          evidence: [...prior?.evidence ?? [], `${captured.name}:${id2}`].slice(-32),
+          ...captured.workspace && !ambiguous ? { note: "Observed workspace endpoints during a tool interval, not authoritative process-level authorship evidence." } : {},
+          ...ambiguous ? { ambiguous: true, note: "Overlapping, discontinuous or delegated capture interval: file ownership is uncertain; diff and line counts unavailable." } : {}
+        };
+      }
+      if (sample) {
+        captured.paths = [];
+        for (const pair of pairs.slice(0, 256)) captured.paths.push({ capture: pair.entry.capture, before: bounded(pair.after) });
+      }
       await persist(target);
-      return void 0;
+    };
+    pi.on("tool_result", (event, ctx) => serial(async () => {
+      if (disposed || !run || run.sessionId !== ctx.sessionManager.getSessionId()) return;
+      const captured = pending.get(event.toolCallId);
+      if (!captured) {
+        if (waits.delete(event.toolCallId) || ["taskwait", "task_wait"].includes(toolName(event.toolName))) {
+          for (const [id2, task] of pending) if (task.task) await finish(id2, task, !!event.isError, true);
+        }
+        return;
+      }
+      if (captured.run !== run || run.state !== "running") return;
+      lastReply = void 0;
+      if (captured.task) {
+        await persist(run);
+        return;
+      }
+      await finish(event.toolCallId, captured, !!event.isError);
     }, ctx));
     pi.on("message_end", (event, ctx) => serial(async () => {
       if (!run || run.state !== "running" || run.sessionId !== ctx.sessionManager.getSessionId() || event.message?.role !== "assistant") return;
@@ -619,20 +1345,11 @@ function createCaptureExtension(options) {
     pi.on("agent_end", (event, ctx) => serial(async () => {
       if (!run || run.state !== "running" || run.sessionId !== ctx.sessionManager.getSessionId()) return;
       await check(run);
+      for (const [id2, captured] of pending) if (captured.task) await finish(id2, captured, false, true);
       if (pending.size) {
         run.incomplete = true;
         pending.clear();
         lastReply = void 0;
-      }
-      for (const change of Object.values(run.changes)) if (change.capture) {
-        try {
-          const after = bounded(await readCapturedSnapshot(run.root, change.capture, privatePaths));
-          if (!sameSnapshot(change.after, after)) run.incomplete = true;
-          change.after = after;
-        } catch {
-          run.incomplete = true;
-          change.after = { ...change.after, kind: "unavailable", text: null };
-        }
       }
       const messages = Array.isArray(event.messages) ? event.messages : void 0;
       if (messages) {
@@ -669,7 +1386,7 @@ function createCaptureExtension(options) {
     }, ctx));
   };
 }
-var pluginRoot = path3.resolve(path3.dirname(fileURLToPath(import.meta.url)), "..");
+var pluginRoot = path5.resolve(path5.dirname(fileURLToPath(import.meta.url)), "..");
 var capture_default = createCaptureExtension({ pluginRoot });
 export {
   createCaptureExtension,

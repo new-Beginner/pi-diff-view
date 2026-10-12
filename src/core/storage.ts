@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { assertPublicPath, canonical, digest, fail, inside, sameSnapshot } from './path-policy';
+import { stats } from './diff';
 import type { CaptureRun, FileSnapshot, ReviewComment } from './contracts';
 export const MAX_RUNS = 200;
 export const MAX_HISTORY_BYTES = 128 * 1024 * 1024;
@@ -46,7 +47,7 @@ function validRun(run: CaptureRun, id: string): boolean {
 }
 export class SnapshotStore {
   constructor(readonly directory: string) {}
-  async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'backups']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
+  async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'backups', 'evidence']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
   async captureLock<T>(work: () => Promise<T>): Promise<T> {
     const lock = path.join(this.directory, 'capture.lock'); let handle: fs.FileHandle | undefined;
     for (let attempt = 0; attempt < 80 && !handle; attempt++) {
@@ -87,6 +88,15 @@ export class SnapshotStore {
     }
     return { ...snapshot, text: null };
   }
+  async inspect(snapshot: FileSnapshot): Promise<FileSnapshot> {
+    if (!snapshot.exists || snapshot.kind !== 'text') return { ...snapshot };
+    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: 'unavailable', text: null };
+    try {
+      const stat = await fs.lstat(path.join(this.directory, 'blobs', snapshot.hash));
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024 || stat.size !== snapshot.size) throw new Error('Unsafe blob');
+      return { ...snapshot, text: null };
+    } catch { return { ...snapshot, kind: 'unavailable', text: null }; }
+  }
   async hydrate(snapshot: FileSnapshot): Promise<FileSnapshot> {
     if (!snapshot.exists || snapshot.kind !== 'text') return { ...snapshot };
     if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: 'unavailable', text: null };
@@ -102,7 +112,7 @@ export class SnapshotStore {
     const save = async () => {
       validId(run.id); const changes: CaptureRun['changes'] = Object.create(null);
       if (Object.keys(run.changes).length > 256) fail('STORE_LIMIT', 'Turn exceeds 256 captured files');
-      const fileCount = Object.values(run.changes).filter(c => !sameSnapshot(c.before, c.after)).length;
+      const fileCount = Object.keys(run.changes).length;
       if (!fileCount) {
         // Keep only a live marker for clear/prune safety; never retain empty-turn conversations.
         if (run.state === 'running') {
@@ -113,7 +123,14 @@ export class SnapshotStore {
         }
         return;
       }
-      for (const [p, c] of Object.entries(run.changes)) changes[p] = { ...c, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      for (const [p, c] of Object.entries(run.changes)) {
+        let diffStats = c.diffStats;
+        if (diffStats?.beforeHash !== c.before.hash || diffStats?.afterHash !== c.after.hash) diffStats = undefined;
+        if (!diffStats && c.before.kind === 'text' && c.after.kind === 'text' && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
+          try { diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? '', c.after.text ?? '') }; } catch { /* Legacy/expensive diffs remain on-demand. */ }
+        }
+        changes[p] = { ...c, diffStats, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+      }
       await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, fileCount, changes });
     };
     if (inbox) await this.captureLock(save); else await save();
@@ -133,6 +150,9 @@ export class SnapshotStore {
       try {
         const run = await this.getRun(id, true, false); if (!run) continue;
         const current = await this.getRun(id, false, false);
+        // A stale inbox must not undo hash-verified native recovery or host settlement.
+        // A genuinely newer capture version is still imported normally.
+        if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
         // Main owns bindings, but a steering continuation invalidates the previous final reply.
         const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
         run.bindings = sameReply ? current?.bindings ?? {} : {};
@@ -147,7 +167,14 @@ export class SnapshotStore {
   async listRuns(hydrate = true, includeUnchanged = false): Promise<CaptureRun[]> {
     const files = (await fs.readdir(path.join(this.directory, 'runs'))).filter(e => /^[\w-]+\.json$/.test(e));
     const runs: CaptureRun[] = [];
-    for (const file of files.slice(-MAX_RUNS * 2)) { try { const run = await this.getRun(file.slice(0, -5), false, hydrate); if (run && (includeUnchanged || Object.values(run.changes).some(c => !sameSnapshot(c.before, c.after)))) runs.push(run); } catch { /* isolated corrupt record */ } }
+    // Bounded parallel metadata reads; history size must not serialize hundreds of disk round trips.
+    const selected = files.slice(-MAX_RUNS * 2);
+    for (let offset = 0; offset < selected.length; offset += 16) {
+      const page = await Promise.all(selected.slice(offset, offset + 16).map(async file => {
+        try { return await this.getRun(file.slice(0, -5), false, hydrate); } catch { return null; }
+      }));
+      for (const run of page) if (run && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
+    }
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
   async comments(): Promise<ReviewComment[]> { return readJson<ReviewComment[]>(path.join(this.directory, 'comments.json'), []); }
@@ -175,7 +202,7 @@ export class SnapshotStore {
         const run = await this.getRun(file.slice(0, -5), inbox, false);
         if (run?.state === 'running') fail('AGENT_BUSY', 'Stop active captures before clearing history');
       }
-      for (const sub of ['runs', 'inbox', 'blobs', 'backups']) {
+      for (const sub of ['runs', 'inbox', 'blobs', 'backups', 'evidence']) {
         const dir = path.join(this.directory, sub);
         if (!inside(this.directory, dir)) fail('STORE_ESCAPE', 'Invalid store path');
         for (const file of await fs.readdir(dir)) { const target = path.join(dir, file); const s = await fs.lstat(target); if (s.isFile() && !s.isSymbolicLink()) await fs.unlink(target); }

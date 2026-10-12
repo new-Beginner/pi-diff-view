@@ -37,7 +37,7 @@ const host = {
     openLayer() { throw new Error('No review surface should open automatically during startup'); }
   },
   slots: { register(options: any) {
-    if (options.slot !== 'entryExtra') throw new Error('Input-area controls must not be registered');
+    if (!['entryExtra', 'composerControl'].includes(options.slot)) throw new Error('Unexpected slot');
     state.slots.push(options.slot);
     const container = document.createElement('div'); container.setAttribute('data-pi-plugin', 'local.diff-view'); container.dataset.testSlot = options.slot;
     document.body.append(container); const root = ReactDomClient.createRoot(container); roots.push(root);

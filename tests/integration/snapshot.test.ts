@@ -60,7 +60,10 @@ describe('snapshots and guarded restore', () => {
     await fs.writeFile(path.join(root, 'a.txt'), 'late'); await h.emit('tool_result', { toolCallId: 'old' });
     await fs.writeFile(path.join(root, 'b.txt'), 'new'); await h.emit('tool_result', { toolCallId: 'new' }); await h.emit('agent_end');
     const runs = await imported(); expect(runs).toHaveLength(1); expect(runs.every(r => r.incomplete)).toBe(true);
-    expect(runs.find(r => r.fileCount === 1)?.changes['b.txt'].after.text).toBe('new');
+    // The unresolved explicit a.txt lease must not invalidate the retry's distinct b.txt target.
+    expect(runs[0].changes['b.txt']).toMatchObject({ after: { text: 'new', kind: 'text', hash: digest('new') } });
+    expect(runs[0].changes['b.txt'].ambiguous).toBeUndefined();
+    expect(runs[0].changes['b.txt'].diffStats).toMatchObject({ additions: 1, deletions: 0 });
     expect(runs.every(r => !r.changes['a.txt'])).toBe(true);
   });
   it('captures plan execution without a prompt, deletion and explicit moves with real before/after', async () => {
@@ -72,12 +75,15 @@ describe('snapshots and guarded restore', () => {
     const [run] = await imported(); expect(run.incomplete).toBe(true); expect(run.boundary).toBe('uncertain'); expect(run.finalReply).toBeUndefined(); expect(run.changes['from.txt'].before.text).toBe('original');
     expect(run.changes['from.txt'].after.exists).toBe(false); expect(run.changes['to.txt'].before.exists).toBe(false); expect(run.changes['to.txt'].after.exists).toBe(false);
   });
-  it('detects external edits between tools, duplicate calls and unsupported writers', async () => {
+  it('marks discontinuous external edits ambiguous, deduplicates calls and flags unfinished shell capture', async () => {
     const h = harness(); await h.emit('before_agent_start'); const call = { toolName: 'Write', toolCallId: 'one', input: { path: 'a.txt' } };
     await h.emit('tool_call', call); await fs.writeFile(path.join(root, 'a.txt'), 'one'); await h.emit('tool_call', call); await h.emit('tool_result', { toolCallId: 'one' });
     await fs.writeFile(path.join(root, 'a.txt'), 'external'); await h.emit('tool_call', { ...call, toolCallId: 'two' }); await fs.writeFile(path.join(root, 'a.txt'), 'two'); await h.emit('tool_result', { toolCallId: 'two' });
     await h.emit('tool_call', { toolName: 'Bash', toolCallId: 'bash', input: {} }); await h.emit('agent_end');
-    const [run] = await imported(); expect(run.incomplete).toBe(true); expect(run.changes['a.txt'].before.exists).toBe(false); expect(run.changes['a.txt'].after.text).toBe('two');
+    const [run] = await imported(); expect(run.incomplete).toBe(true); expect(run.changes['a.txt'].before.exists).toBe(false);
+    expect(run.changes['a.txt']).toMatchObject({ ambiguous: true, after: { text: null, kind: 'unavailable', hash: digest('two') } });
+    expect(run.changes['a.txt'].note).toContain('discontinuous'); expect(run.changes['a.txt'].diffStats).toBeUndefined();
+    expect(run.changes['a.txt'].evidence).toEqual(['write:one', 'write:two']);
   });
   it('imports old-generation running captures as incomplete and preserves main-owned bindings', async () => {
     const h = harness(); await h.emit('before_agent_start'); await h.emit('tool_call', { toolName: 'Write', toolCallId: 'a', input: { path: 'a.txt' } });

@@ -1,19 +1,149 @@
+// src/core/review-file-policy.ts
+var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
+  "png",
+  "apng",
+  "jpg",
+  "jpeg",
+  "jfif",
+  "pjpeg",
+  "pjp",
+  "gif",
+  "webp",
+  "bmp",
+  "dib",
+  "ico",
+  "cur",
+  "icns",
+  "tif",
+  "tiff",
+  "avif",
+  "avifs",
+  "heic",
+  "heif",
+  "heics",
+  "heifs",
+  "svg",
+  "svgz",
+  "jxl",
+  "psd",
+  "raw",
+  "dng",
+  "cr2",
+  "cr3",
+  "nef",
+  "nrw",
+  "arw",
+  "orf",
+  "raf",
+  "rw2",
+  "pef",
+  "srw",
+  "x3f",
+  "tga",
+  "qoi",
+  "exr",
+  "hdr",
+  "jp2",
+  "j2k",
+  "jpf",
+  "jpx",
+  "jpm",
+  "mj2",
+  "wmf",
+  "emf"
+]);
+function isImagePath(filePath) {
+  const basename = filePath.slice(Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1);
+  const dot = basename.lastIndexOf(".");
+  return dot > 0 && dot < basename.length - 1 && IMAGE_EXTENSIONS.has(basename.slice(dot + 1).toLowerCase());
+}
+
+// src/core/public-path.ts
+function deny(code, message) {
+  throw Object.assign(new Error(message), { code });
+}
+function assertPathSyntax(value) {
+  if (typeof value !== "string" || !value || value.length > 4096 || /[\0\r\n]/.test(value)) deny("INVALID_PATH", "Invalid file path");
+  const portable = value.replace(/\\/g, "/");
+  if (portable.split("/").includes("..")) deny("PATH_DENIED", "Traversal paths cannot be captured");
+  if (portable.startsWith("//") || portable.startsWith("/??/") || /^[a-z]:[^/]/i.test(portable) || portable.replace(/^[a-z]:\//i, "").includes(":")) deny("PATH_DENIED", "UNC, device, drive-relative and alternate-stream paths are not reviewable");
+}
+function assertPublicPath(value) {
+  assertPathSyntax(value);
+  const portable = value.replace(/\\/g, "/"), parts = portable.split("/");
+  for (const [index, part] of parts.entries()) {
+    const s = part.toLowerCase();
+    if ([".pi-desktoooop", ".pi-desktop"].includes(s) && /^(?:[a-z]:\/|\/[^/])/i.test(portable) && parts[index + 1]?.toLowerCase() === "data" && parts[index + 2]?.toLowerCase() === "scratch" && /^[a-zA-Z0-9-]{1,80}$/.test(parts[index + 3] ?? "")) continue;
+    if (s === ".." || /[. ]$/.test(s) && s !== "." || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi", ".claude", ".codex", ".pi-desktoooop", ".pi-desktop", ".pi-diff-view", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) deny("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
+  }
+}
+
+// src/core/host-transcript.ts
+function hostEvidenceMessages(messages) {
+  return messages.flatMap((value) => {
+    if (!value || typeof value.id !== "string" || typeof value.role !== "string") return [];
+    const meta = { status: value.status ?? value.meta?.status, parentMessageId: value.parentToolCallId ?? value.meta?.parentMessageId, userMessageId: value.meta?.userMessageId, steering: value.steering ?? value.meta?.steering };
+    const blocks = [];
+    if (value.role === "assistant" && (typeof value.content === "string" && value.content.trim() || value.blocks?.some((b) => b.type === "text"))) blocks.push({ type: "text" });
+    const candidates = value.toolCallId ? [{ type: "tool_call", callId: value.toolCallId, name: value.toolName, args: value.toolArgs, status: value.toolStatus, result: value.toolResult, isError: value.isError }] : value.blocks ?? [];
+    for (const b of candidates) {
+      if (b.type !== "tool_call" || typeof b.callId !== "string") continue;
+      const name = String(b.name).split(".").pop().toLowerCase();
+      const args = b.args ?? {}, result = b.result ?? {}, review = result.details?.review;
+      if (isImagePath(String(review?.path ?? args.path ?? args.file_path ?? ""))) continue;
+      try {
+        if (args.path !== void 0 || args.file_path !== void 0) assertPublicPath(args.path ?? args.file_path);
+        if (review?.path !== void 0) assertPublicPath(review.path);
+        if (review?.oldPath !== void 0) assertPublicPath(review.oldPath);
+        if (name === "edit" && typeof args.ops === "string") {
+          for (const line of args.ops.split("\n")) if (line.startsWith("MV ")) assertPublicPath(line.slice(3).trim());
+        }
+      } catch {
+        continue;
+      }
+      const safeReview = review && typeof review === "object" ? Object.fromEntries(["version", "sessionId", "messageId", "path", "oldPath", "operation", "status", "state", "beforeExists", "afterExists", "beforeHash", "afterHash", "hunks"].filter((key) => review[key] !== void 0).map((key) => [key, review[key]])) : void 0;
+      const editArgs = name === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
+      blocks.push({ type: "tool_call", callId: b.callId, name, status: b.status, args: ["write", "edit"].includes(name) ? { path: args.path ?? args.file_path, ...editArgs, ...name === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...safeReview ? { details: { review: safeReview } } : {} } });
+    }
+    return [{ type: "message", id: value.id, role: value.role, createdAt: value.createdAt, meta, blocks }];
+  });
+}
+function transcriptEvidence(messages) {
+  return JSON.stringify(hostEvidenceMessages(messages));
+}
+function evidenceChunks(text) {
+  const chunks = [], encoder2 = new TextEncoder();
+  for (let offset = 0; offset < text.length; ) {
+    let length = Math.min(24e3, text.length - offset);
+    while (encoder2.encode(JSON.stringify(text.slice(offset, offset + length))).length > 28e3) length = Math.floor(length / 2);
+    chunks.push(text.slice(offset, offset + length));
+    offset += length;
+  }
+  return chunks;
+}
+function evidenceRevision(text) {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+  return `${text.length}-${hash >>> 0}`;
+}
+
 // src/renderer/index.tsx
-import React4, { useEffect as useEffect2, useState as useState2 } from "react";
+import React5, { useEffect as useEffect3, useState as useState3 } from "react";
 
 // src/view/transport.ts
 var realm = globalThis;
-var queue = realm.__piDiffQueue ??= { tail: Promise.resolve(), last: 0 };
-var background = /* @__PURE__ */ new Set(["bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "selectTurn", "card", "replyCards"]);
+var queue = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
+var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "card", "replyCards"]);
 function boundedTransport(invoke) {
   const wire = (method, args) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error("Request exceeds the bridge payload limit (48 KiB)."));
     if (method === "saveComment" && bytes > 24e3) return Promise.reject(new Error("Comment payload too large; shorten the comment or excerpt."));
     const request = queue.tail.catch(() => void 0).then(async () => {
-      const wait = 160 - (Date.now() - queue.last);
-      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-      queue.last = Date.now();
+      queue.starts = queue.starts.filter((at) => Date.now() - at < 1e3);
+      if (queue.starts.length >= 6) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 1001 - (Date.now() - queue.starts[0]))));
+      queue.starts = queue.starts.filter((at) => Date.now() - at < 1e3);
+      queue.starts.push(Date.now());
       let timer;
       try {
         const response = await Promise.race([
@@ -33,13 +163,17 @@ function boundedTransport(invoke) {
   };
   return { async invoke(method, args) {
     if (!background.has(method)) return wire(method, args);
-    const { jobId } = await wire("jobStart", { method, args });
+    const started = await wire("jobStart", { method, args, waitMs: 40 });
+    if (started.state === "done") return started.result;
+    if (started.state === "error") throw Object.assign(new Error(started.error?.message ?? "Review failed"), { code: started.error?.code });
     const deadline = Date.now() + 12e4;
+    let delay = 40;
     while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const job = await wire("jobPoll", { jobId });
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      const job = await wire("jobPoll", { jobId: started.jobId });
       if (job.state === "done") return job.result;
       if (job.state === "error") throw Object.assign(new Error(job.error?.message ?? "Review failed"), { code: job.error?.code });
+      delay = Math.min(300, delay * 2);
     }
     throw new Error("Background operation is still running. Refresh to check the result; it was not retried.");
   } };
@@ -90,9 +224,7 @@ function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpe
   useEffect(() => {
     let active = true;
     live.current = true;
-    setSummary(initialSummary ?? null);
     setError("");
-    setExpanded(false);
     if (!initialSummary) transport.invoke("turnSummary", { runId: run.id, sessionId: run.sessionId, limit: 3 }).then((data) => {
       if (active) setSummary(data);
     }).catch((err) => {
@@ -103,6 +235,13 @@ function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpe
       live.current = false;
     };
   }, [transport, run.id, run.sessionId, initialSummary]);
+  useEffect(() => {
+    setSummary(initialSummary ?? null);
+    setExpanded(false);
+  }, [run.id, run.sessionId]);
+  useEffect(() => {
+    if (initialSummary) setSummary((previous) => previous && previous.fileCount === initialSummary.fileCount && previous.additions === initialSummary.additions && previous.deletions === initialSummary.deletions && previous.unknownFileCount === initialSummary.unknownFileCount && initialSummary.files.every((file) => previous.files.some((old) => old.id === file.id && old.fingerprint === file.fingerprint && old.kind === file.kind && old.statsKnown === file.statsKnown)) ? { ...initialSummary, files: previous.files, nextOffset: previous.nextOffset } : initialSummary);
+  }, [initialSummary]);
   const open = async (file) => {
     if (busy) return;
     setBusy(true);
@@ -141,7 +280,11 @@ function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpe
   };
   if (summary?.fileCount === 0 && !error) return null;
   const files = summary ? expanded ? summary.files : summary.files.slice(0, 3) : [];
-  return /* @__PURE__ */ React2.createElement("section", { className: "dv-turn-card dv-reply", "data-base": base, "aria-label": zh ? "\u672C\u6B21\u4EFB\u52A1\u6587\u4EF6\u53D8\u66F4" : "Files changed in this task" }, /* @__PURE__ */ React2.createElement("header", { className: "dv-turn-head" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-icon", "aria-hidden": "true" }, /* @__PURE__ */ React2.createElement("svg", { viewBox: "0 0 24 24", width: "22", height: "22", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React2.createElement("rect", { x: "4", y: "3", width: "16", height: "18", rx: "4" }), /* @__PURE__ */ React2.createElement("path", { d: "M9 9h6M12 6v6M9 16h6" }))), /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-label" }, /* @__PURE__ */ React2.createElement("strong", null, summary ? zh ? `\u5DF2\u7F16\u8F91 ${summary.fileCount} \u4E2A\u6587\u4EF6` : `${summary.fileCount} files changed` : zh ? "\u6B63\u5728\u8BFB\u53D6\u672C\u6B21\u53D8\u66F4\u2026" : "Loading task changes\u2026"), summary && /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", summary.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", summary.deletions))), /* @__PURE__ */ React2.createElement("button", { className: "dv-turn-open", disabled: busy || !summary, onClick: () => void open() }, busy ? zh ? "\u6253\u5F00\u4E2D\u2026" : "Opening\u2026" : zh ? "\u67E5\u770B\u53D8\u66F4" : "View changes")), !!files.length && /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-files" }, files.map((file) => /* @__PURE__ */ React2.createElement("button", { key: file.id, className: "dv-turn-file", title: file.absolutePath ?? file.path, disabled: busy, onClick: () => void open(file) }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-path" }, /* @__PURE__ */ React2.createElement(FilePath, { path: file.path }), file.origin === "external" && /* @__PURE__ */ React2.createElement("small", null, zh ? "\u5DE5\u4F5C\u533A\u5916 \xB7 \u53EA\u8BFB" : "Outside workspace \xB7 read-only"), file.kind !== "text" && /* @__PURE__ */ React2.createElement("small", null, file.kind)), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", file.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", file.deletions))))), summary && summary.fileCount > 3 && /* @__PURE__ */ React2.createElement("footer", { className: "dv-turn-foot" }, /* @__PURE__ */ React2.createElement("button", { "aria-expanded": expanded, disabled: busy, onClick: () => void expand() }, expanded ? zh ? "\u6536\u8D77\u6587\u4EF6" : "Collapse files" : zh ? `\u518D\u663E\u793A ${Math.max(0, summary.fileCount - 3)} \u4E2A\u6587\u4EF6` : `Show ${Math.max(0, summary.fileCount - 3)} more files`, " ", /* @__PURE__ */ React2.createElement("span", { "aria-hidden": "true" }, expanded ? "\u2303" : "\u2304")), expanded && summary.nextOffset != null && /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => void expand(true) }, zh ? "\u52A0\u8F7D\u66F4\u591A" : "Load more")), error && /* @__PURE__ */ React2.createElement("p", { className: "dv-turn-error", role: "alert" }, error));
+  return /* @__PURE__ */ React2.createElement("section", { className: "dv-turn-card dv-reply", "data-base": base, "aria-label": zh ? "\u672C\u6B21\u4EFB\u52A1\u6587\u4EF6\u53D8\u66F4" : "Files changed in this task" }, /* @__PURE__ */ React2.createElement("header", { className: "dv-turn-head" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-icon", "aria-hidden": "true" }, /* @__PURE__ */ React2.createElement("svg", { viewBox: "0 0 24 24", width: "22", height: "22", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React2.createElement("rect", { x: "4", y: "3", width: "16", height: "18", rx: "4" }), /* @__PURE__ */ React2.createElement("path", { d: "M9 9h6M12 6v6M9 16h6" }))), /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-label" }, /* @__PURE__ */ React2.createElement("strong", null, summary ? zh ? `\u5DF2\u7F16\u8F91 ${summary.fileCount} \u4E2A\u6587\u4EF6` : `${summary.fileCount} files changed` : zh ? "\u6B63\u5728\u8BFB\u53D6\u672C\u6B21\u53D8\u66F4\u2026" : "Loading task changes\u2026"), summary && /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, (summary.unknownFileCount ?? 0) < summary.fileCount && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", summary.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", summary.deletions)), !!summary.unknownFileCount && /* @__PURE__ */ React2.createElement("span", null, zh ? summary.unknownFileCount >= summary.fileCount ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : "Partial / unknown totals"))), /* @__PURE__ */ React2.createElement("button", { className: "dv-turn-open", disabled: busy || !summary, onClick: () => void open() }, busy ? zh ? "\u6253\u5F00\u4E2D\u2026" : "Opening\u2026" : zh ? "\u67E5\u770B\u53D8\u66F4" : "View changes")), !!files.length && /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-files" }, files.map((file) => {
+    const known2 = file.kind === "text" && file.statsKnown !== false;
+    const label = file.kind === "binary" ? zh ? "\u4E8C\u8FDB\u5236\u6587\u4EF6" : "Binary file" : file.kind === "large" ? zh ? "\u6587\u4EF6\u8FC7\u5927" : "Large file" : zh ? "\u5FEB\u7167\u4E0D\u5B8C\u6574" : "Incomplete snapshot";
+    return /* @__PURE__ */ React2.createElement("button", { key: file.id, className: "dv-turn-file", title: [file.absolutePath ?? file.path, file.note].filter(Boolean).join("\n"), disabled: busy, onClick: () => void open(file) }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-path" }, /* @__PURE__ */ React2.createElement(FilePath, { path: file.path }), file.origin === "external" && /* @__PURE__ */ React2.createElement("small", null, zh ? "\u5DE5\u4F5C\u533A\u5916 \xB7 \u53EA\u8BFB" : "Outside workspace \xB7 read-only")), known2 ? /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", file.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", file.deletions)) : /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-unknown", title: label }, zh ? "\u884C\u6570\u672A\u77E5" : "Unknown totals"));
+  })), summary?.unknownFileCount || summary?.files.some((file) => file.statsKnown === false || file.kind !== "text") ? /* @__PURE__ */ React2.createElement("details", { className: "dv-turn-stats-note" }, /* @__PURE__ */ React2.createElement("summary", null, zh ? "\u7EDF\u8BA1\u8BF4\u660E" : "About these totals"), /* @__PURE__ */ React2.createElement("p", null, zh ? "\u4EC5\u7EDF\u8BA1\u6709\u5B8C\u6574\u5FEB\u7167\u7684\u6587\u672C\u6587\u4EF6\uFF1B\u7F3A\u5931\u5386\u53F2\u5185\u5BB9\u7684\u6587\u4EF6\u4E0D\u8BA1\u5165\u884C\u6570\u3002" : "Totals include text files with complete snapshots; missing historical content is excluded.")) : null, summary && summary.fileCount > 3 && /* @__PURE__ */ React2.createElement("footer", { className: "dv-turn-foot" }, /* @__PURE__ */ React2.createElement("button", { "aria-expanded": expanded, disabled: busy, onClick: () => void expand() }, expanded ? zh ? "\u6536\u8D77\u6587\u4EF6" : "Collapse files" : zh ? `\u518D\u663E\u793A ${Math.max(0, summary.fileCount - 3)} \u4E2A\u6587\u4EF6` : `Show ${Math.max(0, summary.fileCount - 3)} more files`, " ", /* @__PURE__ */ React2.createElement("span", { "aria-hidden": "true" }, expanded ? "\u2303" : "\u2304")), expanded && summary.nextOffset != null && /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => void expand(true) }, zh ? "\u52A0\u8F7D\u66F4\u591A" : "Load more")), error && /* @__PURE__ */ React2.createElement("p", { className: "dv-turn-error", role: "alert" }, error));
 }
 
 // src/renderer/summary-style.ts
@@ -151,6 +294,7 @@ var summary_style_default = `
 .dv-turn-card *{box-sizing:border-box}.dv-turn-card button{font:inherit;color:inherit;background:transparent;border:0;cursor:pointer}.dv-turn-card button:hover:not(:disabled){background:var(--tc-hover)}.dv-turn-card button:focus-visible{outline:2px solid var(--ds-focus,currentColor);outline-offset:-3px}.dv-turn-card button:disabled{opacity:.55;cursor:wait}
 .dv-turn-head{display:flex;align-items:center;gap:12px;padding:12px 14px}.dv-turn-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:10px;color:var(--tc-muted);background:color-mix(in srgb,currentColor 4%,transparent)}.dv-turn-label{display:flex;flex-direction:column;align-items:flex-start;gap:2px;flex:1;min-width:0}.dv-turn-label strong{font-size:14px;font-weight:600}.dv-turn-counts{display:inline-flex;gap:5px;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums}.dv-turn-add{color:var(--tc-add)}.dv-turn-del{color:var(--tc-del)}.dv-turn-card .dv-turn-open{border:1px solid var(--tc-border);border-radius:10px;padding:4px 10px;white-space:nowrap;font-size:13px}
 .dv-turn-files{border-top:1px solid var(--tc-border);padding:2px 0}.dv-turn-card .dv-turn-file{display:flex;align-items:center;gap:12px;width:100%;padding:8px 12px;text-align:left;min-height:38px}.dv-turn-path{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--tc-ink)}.dv-turn-card .dv-path-directory{color:var(--tc-muted)}.dv-turn-card .dv-path-basename{color:var(--tc-ink)}.dv-turn-path small{font-size:11px;margin-left:8px;display:inline-block;color:var(--tc-muted)}.dv-turn-foot{padding:0 6px 5px;display:flex;gap:8px}.dv-turn-foot button{padding:6px}.dv-turn-error{margin:0;padding:8px 12px;border-top:1px solid var(--tc-border);font-size:12px;overflow-wrap:anywhere;color:var(--tc-del)}
+.dv-turn-card .dv-turn-file{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:14px;padding:9px 14px}.dv-turn-unknown{color:var(--tc-muted);font-size:11px;white-space:nowrap}.dv-turn-stats-note{border-top:1px solid var(--tc-border);padding:8px 14px;color:var(--tc-muted);font-size:12px}.dv-turn-stats-note summary{cursor:pointer;width:fit-content}.dv-turn-stats-note p{margin:6px 0 0;max-width:60ch;line-height:1.6}.dv-turn-foot{border-top:1px solid var(--tc-border);padding:3px 8px}.dv-turn-foot button{font-size:12px;color:var(--tc-muted)}
 @media(max-width:420px){.dv-turn-head{padding:10px;gap:9px}.dv-turn-icon{width:36px;height:36px;flex-basis:36px}.dv-turn-label strong{font-size:13px}.dv-turn-card .dv-turn-open{font-size:12px;padding:4px 8px}.dv-turn-card .dv-turn-file{padding:7px 10px;gap:8px;font-size:13px}}
 `;
 
@@ -163,6 +307,32 @@ var PluginReviewError = class extends Error {
     this.code = code;
   }
 };
+function activityDiagnostic(state) {
+  const id = state.activeSessionId;
+  if (!id || state.selectingSessionId || state.page !== "chat" || (state.runningSessions?.[id] ?? state.isRunning) !== true) return "running-idle";
+  return (runningActivity(state)?.since ?? 0) > 0 ? "running-ready" : "running-identity-missing";
+}
+function runningActivity(state) {
+  const sessionId = state.activeSessionId;
+  if (!sessionId || state.selectingSessionId || state.page !== "chat" || (state.runningSessions?.[sessionId] ?? state.isRunning) !== true) return null;
+  const sources = [state.messages ?? [], state.retainedTranscripts?.[sessionId] ?? []].map((messages) => messages.filter((message) => message.role === "user" && !message.steering && !message.parentToolCallId));
+  const users = sources.flat();
+  const time = (message) => {
+    const value = typeof message.createdAt === "number" ? message.createdAt : Date.parse(message.createdAt ?? "");
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  };
+  const turnId = state.agentStatuses?.[sessionId]?.currentTurnId;
+  const unavailable = () => turnId ? { sessionId, taskId: `turn:${turnId}`, since: 0, turnId } : null;
+  for (const source of sources) {
+    const last = source.at(-1);
+    if (last && (!last.id || !time(last)) && !users.some((other) => other.id === last.id && time(other) > 0)) return unavailable();
+  }
+  users.sort((a, b) => time(b) - time(a));
+  const user = users[0], since = user ? time(user) : 0;
+  if (!user?.id || since <= 0 || since > Date.now()) return unavailable();
+  if (users.some((other) => time(other) === since && other.id !== user.id)) return null;
+  return { sessionId, taskId: user.id, since, turnId };
+}
 var denied = (code, message) => {
   throw new PluginReviewError(code, message);
 };
@@ -221,9 +391,23 @@ function createPluginReviewAdapter(options = {}) {
         if (closed || stopped) return;
         const sessionId = state.selectingSessionId ? null : state.activeSessionId ?? null;
         if (sessionId !== null && typeof sessionId !== "string") denied("SIDEBAR_CONTRACT", "\u65E0\u6548\u7684\u5BBF\u4E3B\u4F1A\u8BDD\u72B6\u6001 / Invalid host session state");
-        if (sessionId !== previous) {
-          previous = sessionId;
-          listener(sessionId);
+        const activity = runningActivity(state);
+        const context = sessionId ? { sessionId, root: state.sessions?.find((s) => s.id === sessionId)?.projectPath, running: (state.runningSessions?.[sessionId] ?? state.isRunning) === true, taskId: activity?.taskId, since: activity?.since, turnId: activity?.turnId } : void 0;
+        if (context) {
+          const rows = new Map((state.retainedTranscripts?.[sessionId] ?? []).map((m) => [m.id, m]));
+          for (const m of state.messages ?? []) rows.set(m.id, m);
+          context.evidence = transcriptEvidence([...rows.values()]);
+          context.evidenceRevision = evidenceRevision(context.evidence);
+        }
+        const key = JSON.stringify([sessionId, context && { ...context, evidence: void 0 }]);
+        if (key !== previous) {
+          previous = key;
+          listener(sessionId, context);
+        }
+        const tab = state.workPanelTabs?.find((t) => t.id === REVIEW_TAB_ID);
+        if (sessionId && tab && state.workPanelOpen && state.activeWorkPanelTabId === REVIEW_TAB_ID) {
+          const suffix = `?sessionId=${encodeURIComponent(sessionId)}`;
+          if (!tab.location?.endsWith(suffix)) state.openWorkPanelTabForSession(sessionId, { ...tab, location: `diff-session:${encodeURIComponent(sessionId)}${suffix}` });
         }
       };
       const unsubscribe = modules.store.subscribe(publish);
@@ -243,10 +427,43 @@ function createPluginReviewAdapter(options = {}) {
         throw error;
       }
     },
-    async open(sessionId, location) {
-      if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
+    async subscribeActivity(listener, diagnose) {
       const modules = await inspect();
       alive();
+      if (typeof modules.store.subscribe !== "function") return denied("SIDEBAR_CONTRACT", "Host activity subscription unavailable");
+      let previous, stopped = false;
+      const publish = (state) => {
+        if (closed || stopped) return;
+        const activity = runningActivity(state), key = JSON.stringify(activity);
+        if (key !== previous) {
+          previous = key;
+          diagnose?.(activityDiagnostic(state));
+          listener(activity);
+        }
+      };
+      const unsubscribe = modules.store.subscribe(publish);
+      const dispose = () => {
+        if (!stopped) {
+          stopped = true;
+          subscriptions.delete(dispose);
+          unsubscribe();
+        }
+      };
+      subscriptions.add(dispose);
+      try {
+        publish(modules.store.getState());
+        return dispose;
+      } catch (error) {
+        dispose();
+        throw error;
+      }
+    },
+    async open(sessionId, location, guard) {
+      if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
+      location = `${location}?sessionId=${encodeURIComponent(sessionId)}`;
+      const modules = await inspect();
+      alive();
+      guard?.();
       const state = modules.store.getState();
       if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u70B9\u51FB / Session changed");
       if (!Array.isArray(state.pluginViews) || !state.pluginViews.some((view) => view.pluginId === "local.diff-view" && view.viewId === "review")) denied("SIDEBAR_VIEW", "Diff view \u9875\u7B7E\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Diff view tab unavailable");
@@ -264,6 +481,181 @@ function createPluginReviewAdapter(options = {}) {
   };
 }
 
+// src/renderer/RunningChangePill.tsx
+import React4, { useEffect as useEffect2, useLayoutEffect, useRef as useRef2, useState as useState2 } from "react";
+import { createPortal } from "react-dom";
+
+// src/renderer/running-changes.ts
+function createRunningChangesController(transport, adapter, publish, report2 = () => {
+}) {
+  let activity = null, epoch = 0, disposed = false;
+  let timer;
+  let view = { summary: null, busy: false, error: "" };
+  let lastDiagnostic = "";
+  const diagnose = (stage) => {
+    if (stage !== lastDiagnostic) {
+      lastDiagnostic = stage;
+      report2(stage);
+    }
+  };
+  const emit = (next) => {
+    view = next;
+    if (!disposed) publish(view);
+  };
+  const valid = (version) => !disposed && epoch === version && activity !== null;
+  const matches = (result, task) => result !== null && result.sessionId === task.sessionId && result.startedAt >= task.since && result.fileCount > 0;
+  async function poll(version, task) {
+    try {
+      const result = await transport.invoke("runningChanges", { sessionId: task.sessionId, since: task.since, taskId: task.taskId });
+      if (!valid(version)) return;
+      const summary = matches(result, task) ? result : null;
+      diagnose(summary ? "running-visible" : "running-query-empty");
+      emit({ ...view, summary, error: "" });
+    } catch {
+      if (valid(version)) {
+        diagnose("running-query-error");
+        emit({ summary: null, busy: false, error: "" });
+      }
+    } finally {
+      if (valid(version)) timer = setTimeout(() => {
+        timer = void 0;
+        void poll(version, task);
+      }, 1e3);
+    }
+  }
+  return {
+    setActivity(next) {
+      if (disposed) return;
+      activity = next;
+      const version = ++epoch;
+      if (timer) clearTimeout(timer);
+      timer = void 0;
+      emit({ summary: null, busy: false, error: "" });
+      diagnose(next ? next.since > 0 ? "running-ready" : "running-identity-missing" : "running-idle");
+      if (next) void poll(version, next);
+    },
+    async open() {
+      const task = activity, summary = view.summary, version = epoch;
+      if (!task || !summary || view.busy || disposed) return;
+      const guard = () => {
+        if (!valid(version) || view.summary?.runId !== summary.runId) throw new Error("\u4EFB\u52A1\u5DF2\u7ED3\u675F\u6216\u5207\u6362 / Task ended or changed");
+      };
+      emit({ ...view, busy: true, error: "" });
+      try {
+        const result = await transport.invoke("runningChanges", { sessionId: task.sessionId, since: task.since, taskId: task.taskId });
+        guard();
+        if (!matches(result, task) || result.runId !== summary.runId) {
+          emit({ summary: null, busy: false, error: "" });
+          return;
+        }
+        await transport.invoke("activeReviewSession", { sessionId: task.sessionId });
+        guard();
+        const selection = await transport.invoke("selectTurn", { sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
+        guard();
+        await adapter.open(task.sessionId, `diff-view:${selection.nonce}`, guard);
+        guard();
+      } catch (error) {
+        if (valid(version) && view.summary?.runId === summary.runId) {
+          diagnose("running-click-error");
+          emit({ ...view, error: String(error.message ?? error) });
+        }
+      } finally {
+        if (valid(version)) emit({ ...view, busy: false });
+      }
+    },
+    dispose() {
+      disposed = true;
+      epoch++;
+      if (timer) clearTimeout(timer);
+      timer = void 0;
+      activity = null;
+      view = { summary: null, busy: false, error: "" };
+    }
+  };
+}
+
+// src/renderer/RunningChangePill.tsx
+var anchors = /* @__PURE__ */ new Set();
+var hidden = { left: 0, top: 0, width: 0, visible: false };
+function RunningChangePill({ transport, adapter, report: report2 }) {
+  const anchor = useRef2(null);
+  const controller = useRef2();
+  const [view, setView] = useState2({ summary: null, busy: false, error: "" });
+  const [position, setPosition] = useState2(hidden);
+  useEffect2(() => {
+    let live = true, unsubscribe, retry;
+    const current = createRunningChangesController(transport, adapter, (next) => {
+      if (live) setView(next);
+    }, report2);
+    controller.current = current;
+    report2("composer-mounted");
+    const subscribe = () => void adapter.subscribeActivity((activity) => {
+      if (live) current.setActivity(activity);
+    }, report2).then((dispose) => {
+      if (live) unsubscribe = dispose;
+      else dispose();
+    }).catch(() => {
+      if (live) {
+        current.setActivity(null);
+        report2("composer-source-error");
+        retry = setTimeout(subscribe, 2e3);
+      }
+    });
+    subscribe();
+    return () => {
+      live = false;
+      if (retry) clearTimeout(retry);
+      current.dispose();
+      unsubscribe?.();
+      controller.current = void 0;
+    };
+  }, [transport, adapter, report2]);
+  useLayoutEffect(() => {
+    const owner = anchor.current;
+    if (!view.summary || !owner) {
+      setPosition(hidden);
+      return;
+    }
+    anchors.add(owner);
+    let frame = 0, lastStage = "";
+    const rectOf = (node) => {
+      const shell = node.closest(".composer-shell"), rect = shell?.getBoundingClientRect();
+      return shell?.isConnected && shell.getClientRects().length && rect && rect.width > 80 && rect.top > 48 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth ? rect : null;
+    };
+    const update = () => {
+      const shell = owner.closest(".composer-shell"), rect = rectOf(owner);
+      const first = [...anchors].find((node) => rectOf(node));
+      const visible = Boolean(rect && first === owner);
+      const stage = !shell ? "composer-anchor-missing" : !rect ? "composer-anchor-offscreen" : "composer-positioned";
+      if (stage !== lastStage) {
+        lastStage = stage;
+        report2(stage);
+      }
+      const next = visible && rect ? { left: rect.left + rect.width / 2, top: rect.top - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible } : hidden;
+      setPosition((previous) => previous.visible === next.visible && previous.left === next.left && previous.top === next.top && previous.width === next.width ? previous : next);
+      frame = requestAnimationFrame(update);
+    };
+    update();
+    return () => {
+      cancelAnimationFrame(frame);
+      anchors.delete(owner);
+    };
+  }, [view.summary?.runId, report2]);
+  const summary = view.summary, zh = summary?.locale.startsWith("zh");
+  const unknown = summary?.unknownFileCount ?? 0, allUnknown = !!summary && unknown >= summary.fileCount;
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { ref: anchor, className: "dv-running-anchor", "aria-hidden": "true" }), summary && position.visible && createPortal(/* @__PURE__ */ React4.createElement("div", { className: "dv-running-float", "data-base": summary.base, style: { left: position.left, top: position.top, maxWidth: position.width } }, /* @__PURE__ */ React4.createElement("button", { type: "button", className: "dv-running-pill", disabled: view.busy, "aria-busy": view.busy, title: zh ? "\u67E5\u770B\u672C\u8F6E\u5DF2\u6355\u83B7\u53D8\u66F4\uFF1B\u4EC5\u7EDF\u8BA1\u53EF\u9A8C\u8BC1\u6587\u672C" : "Review captured changes in this task; verified text counts only", onClick: () => void controller.current?.open() }, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-label" }, zh ? `${summary.fileCount} \u4E2A\u6587\u4EF6\u5DF2\u66F4\u6539` : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} changed`), !allUnknown && /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-add" }, "+", summary.additions), /* @__PURE__ */ React4.createElement("span", { className: "dv-running-del" }, "-", summary.deletions)), unknown > 0 && /* @__PURE__ */ React4.createElement("span", { className: "dv-running-unknown" }, zh ? allUnknown ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : allUnknown ? "Unknown lines" : "Partial totals")), view.error && /* @__PURE__ */ React4.createElement("p", { className: "dv-running-error", role: "alert" }, view.error)), document.body));
+}
+var runningPillStyle = `
+.dv-running-anchor{display:none!important}
+.dv-running-float{position:fixed;z-index:20;transform:translate(-50%,-100%);font:14px/1.4 system-ui,-apple-system,'Segoe UI',sans-serif;--rp-add:var(--ds-success,#008f39);--rp-del:var(--ds-error,#d63232);--rp-bg:var(--ds-bg-elevated-opaque,#fff);--rp-ink:var(--ds-text-secondary,#7c7c7c);--rp-border:var(--ds-border-subtle,#ececec)}
+.dv-running-float[data-base=dark]{--rp-add:var(--ds-success,#40c977);--rp-del:var(--ds-error,#ff6764);--rp-bg:var(--ds-bg-elevated-opaque,#252525);--rp-ink:var(--ds-text-secondary,#b5b5b5);--rp-border:var(--ds-border-subtle,#3a3a3a)}
+.dv-running-pill{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:5px;max-width:100%;min-height:34px;padding:7px 12px;border:1px solid var(--rp-border);border-radius:14px;background:var(--rp-bg);color:var(--rp-ink);font:inherit;cursor:pointer;white-space:nowrap;font-variant-numeric:tabular-nums;box-shadow:0 2px 10px rgb(0 0 0 / .025)}
+.dv-running-label{overflow:hidden;text-overflow:ellipsis;min-width:0}.dv-running-add,.dv-running-del,.dv-running-unknown{flex:none;font-size:12px}.dv-running-add{color:var(--rp-add)}.dv-running-del{color:var(--rp-del)}
+.dv-running-pill:hover:not(:disabled){border-color:color-mix(in srgb,var(--rp-ink) 30%,var(--rp-border))}.dv-running-pill:focus-visible{outline:2px solid var(--ds-focus,#4384f5);outline-offset:3px}.dv-running-pill:disabled{cursor:wait;opacity:.65}
+.dv-running-error{margin:5px 0 0;padding:6px 10px;border:1px solid var(--rp-border);border-radius:8px;background:var(--rp-bg);color:var(--rp-del);font-size:12px;overflow-wrap:anywhere;white-space:normal}
+@media(max-width:420px){.dv-running-pill{font-size:13px;padding:7px 10px}}
+`;
+
 // src/renderer/index.tsx
 var hub = null;
 var realm2 = globalThis;
@@ -274,19 +666,55 @@ function same(current) {
   return Boolean(current && current === hub && !current.disposed);
 }
 function report(current, stage) {
-  if (!same(current) || current.reported.has(stage)) return;
+  if (!same(current)) return;
+  const dynamic = stage.startsWith("running-") || stage.startsWith("composer-");
+  if (!dynamic && current.reported.has(stage)) return;
   current.reported.add(stage);
   void current.transport.invoke("rendererReport", { stage }).catch(() => {
   });
 }
 function trackSession(current) {
-  return current.sessionReady ??= current.adapter.subscribeSession((sessionId) => {
-    if (same(current) && current.activeSession !== sessionId) {
+  let queued, publishing = false, uploaded;
+  const publish = async () => {
+    if (publishing) return;
+    publishing = true;
+    try {
+      while (queued && same(current)) {
+        const context = queued;
+        queued = void 0;
+        const { evidence, ...metadata } = context;
+        const key = JSON.stringify([context.sessionId, context.root, context.evidenceRevision]);
+        if (evidence && key !== uploaded) {
+          if (new TextEncoder().encode(evidence).length > 8 * 1024 * 1024) throw new Error("Host evidence exceeds 8 MiB");
+          const chunks = evidenceChunks(evidence);
+          for (const [index, chunk] of chunks.entries()) {
+            if (!same(current)) return;
+            await current.transport.invoke("sessionEvidence", { sessionId: context.sessionId, root: context.root, revision: context.evidenceRevision, index, chunk, final: index === chunks.length - 1 });
+          }
+          uploaded = key;
+        }
+        await current.transport.invoke("sessionContext", metadata);
+        wake(current);
+      }
+    } catch {
+      report(current, "session-source-error");
+    } finally {
+      publishing = false;
+      if (queued && same(current)) void publish();
+    }
+  };
+  return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
+    if (!same(current)) return;
+    if (current.activeSession !== sessionId) {
       current.activeSession = sessionId;
       current.sessionVersion++;
-      void current.transport.invoke("activeReviewSession", { sessionId }).catch(() => {
-      });
     }
+    if (context) {
+      queued = context;
+      void publish();
+    }
+    void current.transport.invoke("activeReviewSession", { sessionId }).catch(() => {
+    });
   }).then((dispose) => {
     if (same(current)) {
       current.unsubscribeSession = dispose;
@@ -296,6 +724,11 @@ function trackSession(current) {
     if (same(current)) {
       current.sessionReady = void 0;
       report(current, "session-source-error");
+      if (!current.sessionRetry) current.sessionRetry = setTimeout(() => {
+        current.sessionRetry = void 0;
+        if (same(current)) void trackSession(current).catch(() => {
+        });
+      }, 2e3);
     }
     throw error;
   });
@@ -403,10 +836,10 @@ async function refresh(current) {
 }
 function EntryExtra(props) {
   const current = hub, key = cardKey(props.sessionId, props.messageId);
-  const [value, setValue] = useState2(() => ({ key, card: current?.cache.get(key) ?? null }));
-  const [, redraw] = useState2(0);
+  const [value, setValue] = useState3(() => ({ key, card: current?.cache.get(key) ?? null }));
+  const [, redraw] = useState3(0);
   const contentKey = props.message?.content;
-  useEffect2(() => {
+  useEffect3(() => {
     if (!same(current)) return;
     const listener = () => redraw((count) => count + 1);
     current.listeners.add(listener);
@@ -414,8 +847,8 @@ function EntryExtra(props) {
       current.listeners.delete(listener);
     };
   }, [current]);
-  useEffect2(() => {
-    if (!same(current) || !props.sessionId || !props.messageId || typeof contentKey !== "string" || !contentKey || !Number.isFinite(timestamp(props))) return;
+  useEffect3(() => {
+    if (!same(current) || !props.sessionId || !props.messageId || props.message?.role && props.message.role !== "assistant") return;
     report(current, "reply-slot-mounted");
     let item = current.cards.get(key);
     if (!item) {
@@ -441,7 +874,7 @@ function EntryExtra(props) {
   const card = value.key === key ? value.card : current?.cache.get(key);
   if (!card || !same(current)) return null;
   const run = card.run;
-  return /* @__PURE__ */ React4.createElement(TurnChangeSummary, { run, initialSummary: card.summary, transport: current.transport, locale: current.appearance.locale, base: current.appearance.base, onOpen: async (file) => {
+  return /* @__PURE__ */ React5.createElement(TurnChangeSummary, { run, initialSummary: card.summary, transport: current.transport, locale: current.appearance.locale, base: current.appearance.base, onOpen: async (file) => {
     await trackSession(current);
     const version = current.sessionVersion;
     const guard = () => {
@@ -455,6 +888,13 @@ function EntryExtra(props) {
     report(current, "sidebar-opened");
   } });
 }
+function composerReport(stage) {
+  if (hub) report(hub, stage);
+}
+function ComposerControl() {
+  const current = hub;
+  return same(current) ? /* @__PURE__ */ React5.createElement(RunningChangePill, { transport: current.transport, adapter: current.adapter, report: composerReport }) : null;
+}
 function onLoad(pi, options = {}) {
   realm2.__piDiffRenderer?.dispose();
   onUnload();
@@ -465,8 +905,11 @@ function onLoad(pi, options = {}) {
   const current = { transport, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: /* @__PURE__ */ new Map(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
   hub = current;
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
-  disposers.push(pi.ui.injectStyle(summary_style_default));
+  disposers.push(pi.ui.injectStyle(summary_style_default + runningPillStyle));
   disposers.push(pi.slots.register({ slot: "entryExtra", component: EntryExtra }));
+  disposers.push(pi.slots.register({ slot: "composerControl", positions: ["left"], component: ComposerControl }));
+  void trackSession(current).catch(() => {
+  });
   report(current, "entry-loaded");
 }
 function onUnload() {
@@ -474,6 +917,7 @@ function onUnload() {
   if (current) {
     current.disposed = true;
     if (current.timer) clearTimeout(current.timer);
+    if (current.sessionRetry) clearTimeout(current.sessionRetry);
     current.unsubscribeSession?.();
     current.cards.clear();
     current.cache.clear();

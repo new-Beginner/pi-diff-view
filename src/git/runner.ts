@@ -69,3 +69,55 @@ export async function headCommit(root: string): Promise<string | undefined> {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) fail('GIT_FAILED', 'Invalid HEAD object');
   return value;
 }
+
+export interface GitBlob { size: number; bytes?: Buffer; }
+/** OIDs only: never paths, filters, textconv, replacement objects or lazy fetches. */
+export async function readGitBlobs(root: string, requested: readonly string[], options: {
+  budget: number; maxSize: number; deadline: number;
+}): Promise<Map<string, GitBlob>> {
+  const oids = [...new Set(requested)], result = new Map<string, GitBlob>();
+  if (!oids.length) return result;
+  if (oids.length > 20000 || oids.some(oid => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)))
+    fail('GIT_LIMIT', 'Invalid or excessive Git object request');
+  const timeout = () => {
+    const left = options.deadline - Date.now();
+    if (left <= 0) fail('GIT_TIMEOUT', 'Review exceeded the time budget');
+    return Math.min(15000, left);
+  };
+  const input = (values: string[]) => Buffer.from(`${values.join('\n')}\n`, 'ascii');
+  const checked = await git(root, ['cat-file', '--batch-check'], { input: input(oids), timeout: timeout() });
+  const rows = checked.stdout.toString('ascii').split('\n');
+  if (rows.pop() !== '' || rows.length !== oids.length) fail('GIT_FAILED', 'Invalid Git batch size response');
+  const selected: string[] = [];
+  let budget = Math.max(0, Math.min(OUTPUT_LIMIT, options.budget)), wireSize = 0;
+  for (let i = 0; i < oids.length; i++) {
+    const match = /^([a-f0-9]{40,64}) blob (\d+)$/.exec(rows[i]);
+    const size = match ? Number(match[2]) : NaN;
+    if (!match || match[1] !== oids[i] || !Number.isSafeInteger(size) || size < 0)
+      fail('GIT_FAILED', 'Invalid Git batch blob metadata');
+    result.set(oids[i], { size });
+    // Account for framing as well as payload; git() still enforces OUTPUT_LIMIT.
+    const frameSize = Buffer.byteLength(rows[i], 'ascii') + size + 2;
+    if (size <= options.maxSize && size <= budget && wireSize + frameSize <= OUTPUT_LIMIT) {
+      selected.push(oids[i]); budget -= size; wireSize += frameSize;
+    }
+  }
+  if (!selected.length) return result;
+  const output = (await git(root, ['cat-file', '--batch'], {
+    input: input(selected), timeout: timeout(), limit: OUTPUT_LIMIT,
+  })).stdout;
+  let offset = 0;
+  for (const oid of selected) {
+    const blob = result.get(oid)!;
+    const header = Buffer.from(`${oid} blob ${blob.size}\n`, 'ascii');
+    if (!output.subarray(offset, offset + header.length).equals(header)) fail('GIT_FAILED', 'Invalid Git batch header');
+    offset += header.length;
+    // Payload is arbitrary bytes, including NUL/newlines/invalid UTF-8, not records.
+    const end = offset + blob.size;
+    if (end >= output.length || output[end] !== 10) fail('GIT_FAILED', 'Truncated Git batch payload');
+    blob.bytes = output.subarray(offset, end);
+    offset = end + 1;
+  }
+  if (offset !== output.length) fail('GIT_FAILED', 'Unexpected Git batch data');
+  return result;
+}

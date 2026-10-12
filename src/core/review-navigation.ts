@@ -2,22 +2,29 @@ import { randomUUID } from 'node:crypto';
 import type { ReviewRequest } from './contracts';
 import { fail } from './path-policy';
 export interface ReviewNavigation { nonce: string; revision: number; sessionId: string; request: ReviewRequest; fileId?: string; at: number; }
-/** Plugin-owned volatile UI selections only, never transcript/database edits. */
+/** Persistable selections; request-time session identity, not a process-global window, guards reads. */
 export class ReviewNavigationStore {
   private activeSession: string | null | undefined;
-  setActiveSession(sessionId: string | null) { this.activeSession = sessionId; }
   private selections = new Map<string, ReviewNavigation>();
+  setActiveSession(sessionId: string | null) { this.activeSession = sessionId; }
   set(request: ReviewRequest, fileId?: string): ReviewNavigation {
     if (!request.sessionId || request.scope !== 'turn' || !request.runId) fail('NAVIGATION_INVALID', 'A recorded task/session is required');
-    this.prune();
     const previous = this.selections.get(request.sessionId);
-    // A stable view capability keeps the native panel alive; revisions select files within it.
     const entry = { nonce: previous?.nonce ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sessionId: request.sessionId, request, fileId, at: Date.now() };
-    this.selections.delete(request.sessionId); this.selections.set(request.sessionId, entry);
-    while (this.selections.size > 32) this.selections.delete(this.selections.keys().next().value!);
+    this.selections.set(request.sessionId, entry);
     return entry;
   }
-  get(nonce: string): ReviewNavigation | null { this.prune(); return [...this.selections.values()].find(entry => entry.nonce === nonce && (this.activeSession === undefined || entry.sessionId === this.activeSession)) ?? null; }
+  get(nonce: string, sessionId?: string | null): ReviewNavigation | null {
+    const expected = sessionId === undefined ? this.activeSession : sessionId;
+    return [...this.selections.values()].find(entry => entry.nonce === nonce && (expected === undefined || entry.sessionId === expected)) ?? null;
+  }
+  export(): ReviewNavigation[] { return [...this.selections.values()]; }
+  restore(entries: unknown): void {
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      if (!entry || !/^[0-9a-f-]{36}$/i.test(entry.nonce) || typeof entry.sessionId !== 'string' || !entry.sessionId || entry.request?.scope !== 'turn' || entry.request.sessionId !== entry.sessionId || !/^[a-zA-Z0-9-]{1,80}$/.test(entry.request.runId) || !Number.isSafeInteger(entry.revision)) continue;
+      this.selections.set(entry.sessionId, entry);
+    }
+  }
   clear() { this.selections.clear(); this.activeSession = undefined; }
-  private prune() { for (const [key, value] of this.selections) if (Date.now() - value.at > 30 * 60 * 1000) this.selections.delete(key); }
 }

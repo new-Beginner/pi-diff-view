@@ -11,7 +11,7 @@
     makeFile('created', 'src/theme/index.ts', { status: 'added', additions: 3, deletions: 0 }),
     makeFile('long', 'src/generated/long.ts', { additions: 1000, deletions: 1000 }),
     makeFile('renamed', 'src/new-name.ts', { status: 'renamed', oldPath: 'src/old-name.ts' }),
-    makeFile('binary', 'assets/logo.png', { kind: 'binary', additions: 0, deletions: 0, actions: [] }),
+    makeFile('binary', 'assets/data.bin', { kind: 'binary', additions: 0, deletions: 0, actions: [] }),
     makeFile('missing', 'src/historical.ts', { kind: 'unavailable', actions: [], note: 'Demo: snapshot missing / 演示：快照缺失' }),
     ...['large', 'symlink', 'submodule', 'conflict'].map(kind => makeFile(kind, `special/${kind}`, { kind, actions: [] }))
   ];
@@ -35,6 +35,7 @@
     return [first, second];
   };
   const state = window.__demo = { calls: [], comments: [], failFile: scenario === 'file-error', conflict: scenario === 'conflict', stale: scenario === 'stale', settings: { layout: 'unified', wordWrap: true }, review: null, runs: [run], appearance: { locale: params.get('lang') || 'en', base: params.get('base') || 'light' }, changeAppearance(value) { this.appearance = value; listeners.get('appearance:changed')?.(value); } };
+  if (scenario === 'panel') state.runs = ['session-a', 'session-b'].map(sessionId => ({ ...run, sessionId, id: `run-${sessionId}` }));
   state.navigation = new Map();
   state.openLocation = path => listeners.get('view:open')?.({ path });
   const preview = (record = run) => ({ runId: record.id, sessionId: record.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(0, 3).map(file => ({ ...file, actions: [] })), offset: 0, nextOffset: 3 });
@@ -53,20 +54,21 @@
       if (method === 'diff.jobStart') {
         const jobId = `job-${jobs.size + 1}`, job = { state: 'pending' }; jobs.set(jobId, job);
         // Background work is intentionally not part of the short bridge round trip.
-        window.pluginBridge.invoke(`diff.${args.method}`, args.args || {}, true).then(result => Object.assign(job, { state: 'done', result: result ?? null }), error => Object.assign(job, { state: 'error', error: { code: 'DEMO_ERROR', message: error.message } }));
-        return { jobId };
+        const work = window.pluginBridge.invoke(`diff.${args.method}`, args.args || {}, true).then(result => Object.assign(job, { state: 'done', result: result ?? null }), error => Object.assign(job, { state: 'error', error: { code: 'DEMO_ERROR', message: error.message } }));
+        if (args.waitMs) await Promise.race([work, new Promise(resolve => setTimeout(resolve, Math.min(40, args.waitMs)))]);
+        return job.state === 'pending' ? { jobId } : { jobId, ...job };
       }
       if (method === 'diff.jobPoll') return jobs.get(args.jobId);
       if (internal) state.calls.push({ method, args, at: Date.now(), internal: true });
       await new Promise(resolve => setTimeout(resolve, scenario === 'slow' ? 800 : scenario === 'long-job' && ['diff.bootstrap', 'diff.review'].includes(method) ? 2300 : 20));
       if (method === 'diff.bootstrap') {
         if (scenario === 'boot-error') throw new Error('Demo bridge denied access');
-        return { repositories: scenario === 'no-roots' ? [] : [{ root, name: 'diff-view', git: true, branch: 'main' }], runs: scenario === 'no-roots' ? [] : state.runs, locale: state.appearance.locale, base: state.appearance.base, settings: state.settings };
+        return { repositories: scenario === 'no-roots' ? [] : [{ root, name: 'diff-view', git: true, branch: 'main' }], runs: scenario === 'no-roots' ? [] : state.runs.filter(record => !args.sessionId || record.sessionId === args.sessionId), locale: state.appearance.locale, base: state.appearance.base, settings: state.settings };
       }
       if (method === 'diff.review') {
-        if (args.focusFileId) { const index = files.findIndex(file => file.id === args.focusFileId); if (index > 0) files.unshift(...files.splice(index, 1)); }
         const listed = scenario === 'renderer' && ['turn', 'lastTurn'].includes(args.scope) ? turnFiles : files;
         const mapped = args.scope === 'staged' || scenario === 'empty' ? [] : listed.map(file => ({ ...file, fingerprint: state.stale ? `${file.fingerprint}-changed` : file.fingerprint, actions: file.origin === 'external' ? [] : ['turn', 'lastTurn'].includes(args.scope) ? file.kind === 'text' ? ['revert'] : [] : ['commit', 'branch'].includes(args.scope) ? [] : file.actions }));
+        if (scenario === 'panel') for (const file of mapped) file.path = `${args.sessionId}/${file.path}`;
         state.review = { id: `review-${state.calls.length}`, root, scope: args.scope, sessionId: args.sessionId, runId: args.runId, files: mapped, notice: 'Demo data · mocked backend / 演示数据 · 模拟后端' }; return state.review;
       }
       if (method === 'diff.file') {
@@ -83,11 +85,13 @@
       if (method === 'diff.action') { if (args.confirmed !== true) throw new Error('Confirmation required'); if (state.conflict) return { ok: false, message: 'Demo FILE_CONFLICT: version changed.' }; return { ok: true, message: 'Demo operation completed' }; }
       if (method === 'diff.batchAction') return { results: args.targets.map((target, i) => ({ path: files.find(file => file.id === target.fileId).path, ok: i !== 1, message: i === 1 ? 'Demo FILE_CONFLICT: changed file' : 'Demo operation completed' })) };
       if (method === 'diff.copyPatch') return { ok: true };
+      if (method === 'diff.copyPath') return { ok: true };
       if (method === 'diff.settings') { Object.assign(state.settings, args); return; }
       if (method === 'diff.clearHistory') { if (!args.confirmed) throw new Error('Confirmation required'); state.runs = []; state.comments = []; state.replyBindings.clear(); return; }
       if (method === 'diff.turnSummary') { const offset = args.offset || 0, limit = args.limit || 3; return { runId: run.id, sessionId: run.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(offset, offset + limit), offset, nextOffset: offset + limit < turnFiles.length ? offset + limit : null }; }
-      if (method === 'diff.selectTurn') { const previous = [...state.navigation.values()].find(item => item.sessionId === run.sessionId); const nonce = previous?.nonce || `00000000-0000-4000-8000-${String(state.navigation.size + 1).padStart(12, '0')}`; const selection = { nonce, revision: (previous?.revision || 0) + 1, sessionId: run.sessionId, request: { scope: 'turn', root, sessionId: run.sessionId, runId: args.runId || run.id }, fileId: args.fileId, at: Date.now() }; state.navigation.set(nonce, selection); return selection; }
-      if (method === 'diff.readTurnSelection') { const selections = window.parent !== window ? window.parent.__demo.navigation : state.navigation; const selected = selections.get(args.nonce); if (!selected) throw new Error('Demo selection expired'); return selected; }
+      if (method === 'diff.selectTurn') { const sessionId = args.sessionId; if (!sessionId) throw new Error('Demo session required'); const previous = [...state.navigation.values()].find(item => item.sessionId === sessionId); const nonce = previous?.nonce || `00000000-0000-4000-8000-${String(state.navigation.size + 1).padStart(12, '0')}`; const selection = { nonce, revision: (previous?.revision || 0) + 1, sessionId, request: { scope: 'turn', root, sessionId, runId: args.runId || run.id }, fileId: args.fileId, at: Date.now() }; state.navigation.set(nonce, selection); return selection; }
+      if (method === 'diff.readTurnSelection') { const selections = window.parent !== window ? window.parent.__demo.navigation : state.navigation; const selected = selections.get(args.nonce); if (!selected) throw new Error('Demo selection expired'); if (!args.sessionId || selected.sessionId !== args.sessionId) throw new Error('Demo selection belongs to another session'); return selected; }
+      if (method === 'diff.gitManage' && args.operation === 'status') return { root, branch: 'main', head: 'demo-head', entries: [], truncated: false };
       if (method === 'diff.replyCards') {
         if (state.failFeed) throw new Error('Temporary feed failure');
         const all = args.sessionId === run.sessionId && state.runs.length ? [...state.replyBindings.values()] : [];
