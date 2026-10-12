@@ -2,13 +2,13 @@
 
 面向 **PI-Desktop 0.17.0+** 的本地变更审查插件。按会话和用户轮次展示修改证据、文末卡片与运行浮窗；独立的本地 Git 页面用于人工审查和操作仓库。
 
-**Version: 1.4.15 · Plugin ID: `local.diff-view` · License: MIT**
+**Version: 1.4.16 · Plugin ID: `local.diff-view` · License: MIT**
 
 源码：[new-Beginner/pi-diff-view](https://github.com/new-Beginner/pi-diff-view) · 安装包：[GitHub Releases](https://github.com/new-Beginner/pi-diff-view/releases/latest)。官方插件中心审核通过后公开上架：[plugins.aiuo.net](https://plugins.aiuo.net)。
 
 ## 安装与使用
 
-1. 从 GitHub Releases 下载 `local.diff-view-1.4.15.piplug`，在 PI-Desktop 插件页安装并手动批准所需权限。
+1. 从 GitHub Releases 下载 `local.diff-view-1.4.16.piplug`，在 PI-Desktop 插件页安装并手动批准所需权限。
 2. 在会话右侧添加 **差异审查 / Diff view**，查看当前或历史轮次的文件修改。
 3. 点击文件查看统一或并排差异，支持上下文、搜索、逐行评论和复制反馈；不会自动发送聊天。
 4. **本地 Git** 是独立入口，支持工作区、暂存区、提交、分支、历史、blame 和 stash。不提供远程 Git 操作。
@@ -45,7 +45,7 @@ npm run test:e2e
 
 ## 本次版本
 
-1.4.15 补齐中英文市场元数据与本地化窗口、命令标题，保留 1.4.14 的跨轮次归属修复。没有新增权限或运行功能。公开仓库仅包含源码、合成测试、构建配置、运行文件、说明与许可证；不包含本地开发历史、会话数据、历史报告、截图或认证令牌。
+1.4.16 将 diff 升级到 8.0.4，消除 GHSA-73rr-hh4g-fpgx 已知依赖告警；包含 1.4.15 的中英文市场元数据与兼容宿主的双语命令标题，保留 1.4.14 的跨轮次归属修复。没有新增权限或运行功能。公开仓库仅包含源码、合成测试、构建配置、运行文件、说明与许可证；不包含本地开发历史、会话数据、历史报告、截图或认证令牌。
 
 ## English summary
 
