@@ -41,3 +41,4 @@ for (const name of await fs.readdir('docs/screenshots')) {
 await fs.copyFile('docs/verification-1.4.0.md', 'plugin/docs/verification-1.4.0.md');
 await fs.copyFile('docs/verification-1.4.1.md', 'plugin/docs/verification-1.4.1.md');
 await fs.copyFile('docs/verification-1.4.2.md', 'plugin/docs/verification-1.4.2.md');
+await fs.copyFile('docs/verification-1.4.3.md', 'plugin/docs/verification-1.4.3.md');

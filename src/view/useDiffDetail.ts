@@ -38,6 +38,22 @@ export function prefetchDiffDetail(transport: UiTransport, reviewId: string | un
   if (cache.details.has(key) || cache.pending.size > 0) return;
   void firstPage(transport, key, reviewId, fileId, context).catch(() => {});
 }
+/** Prepare a replacement off-screen, never shrink a previously loaded diff to its first page. */
+export async function prepareDiffDetail(transport: UiTransport, reviewId: string, fileId: string, context: number, reload: number, previous?: ReviewDetail | null, cancelled: () => boolean = () => false): Promise<void> {
+  const key = `${reviewId}|${fileId}|${context}|${reload}`, cache = cacheFor(transport);
+  let detail = cache.details.get(key) ?? await firstPage(transport, key, reviewId, fileId, context);
+  const rows = previous?.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0) ?? 80;
+  const complete = previous?.nextOffset === null;
+  const oldEnd = previous?.hunks.reduce((end, hunk) => hunk.lines.reduce((end, line) => Math.max(end, line.oldLine ?? 0), end), 0) ?? 0;
+  const covered = () => detail.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0) >= rows && detail.hunks.some(hunk => hunk.lines.some(line => (line.oldLine ?? 0) >= oldEnd));
+  while (!cancelled() && detail.nextOffset != null && (complete || !covered())) {
+    const page = await transport.invoke<ReviewDetail>('file', { reviewId, fileId, offset: detail.nextOffset, limit: 80, context });
+    if (page.file.id !== fileId || (page.nextOffset != null && page.nextOffset <= page.offset)) throw new Error('Invalid diff page');
+    detail = appendDiffPage(detail, page);
+  }
+  if (!cancelled()) cache.details.set(key, detail);
+  while (cache.details.size > 100) cache.details.delete(cache.details.keys().next().value!);
+}
 
 export function useDiffDetail(transport: UiTransport, reviewId: string | undefined, fileId: string, context: number, reload: number, identity = reviewId ?? '', version?: string) {
   // New files change the review ID, not the existing file's content. Share verified pages by version.
@@ -66,6 +82,7 @@ export function useDiffDetail(transport: UiTransport, reviewId: string | undefin
     renderedKey.current = key;
 
     if (detail) {
+      detailCache.set(key, detail);
       setState({ detail, loading: false, loadingMore: false, error: '' });
     } else {
       setState({ detail: previousRef.current, loading: Boolean(reviewId && fileId), loadingMore: false, error: '' });
@@ -82,6 +99,7 @@ export function useDiffDetail(transport: UiTransport, reviewId: string | undefin
         if (page.file.id !== fileId || page.offset !== offset || (page.nextOffset != null && page.nextOffset <= offset)) throw new Error('无效的差异分页 / Invalid diff page');
         detail = detail ? appendDiffPage(detail, page) : page;
         detailCache.set(key, detail);
+        detailCache.set(requestKey, detail);
         while (detailCache.size > 100) detailCache.delete(detailCache.keys().next().value!);
         setState({ detail, loading: false, loadingMore: false, error: '' });
       } catch (error) {

@@ -1,0 +1,37 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.3",
+  "package": "plugin/dist/local.diff-view-1.4.3.piplug",
+  "packageBytes": 1901004,
+  "packageFiles": 60,
+  "sha256": "a4d0146fb92141c78ee847f762faf532ada1559daa03382051b5cb6f3a908be7",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 35, "testsPassed": 294, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 101, "browser": "local Chrome", "host": "production panel bundle and mock host bridge; local Git scenarios use a real temporary backend" },
+    "silentUpdateFocusedRetest": { "testsPassed": 6, "finalVersion": "1.4.3" },
+    "newUnitTestsPassed": 10,
+    "reproduction": "4 initial new browser tests failed on 1.4.2 before the fix",
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "versionMetadataConsistent": true,
+    "packagedDocsCurrent": true,
+    "gitDiffCheck": "passed"
+  },
+  "changes": [
+    "Prepare changed selected-file diff pages off-screen through the previously loaded range before atomically publishing metadata and content",
+    "Prepare automatically followed new-turn content without an intermediate blank or loading screen",
+    "Reuse UI hunk keys by original-file anchors; retain current backend IDs for operations",
+    "Preserve viewport anchors, folding, unchanged row arrays, text selection and keyboard focus",
+    "Recheck current selection and context after asynchronous preparation; retain the existing complete view when preparation fails",
+    "Keep existing capture, Git, clipboard, session isolation, permissions and confirmation rules unchanged"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false },
+  "limitations": [
+    "Native PI-Desktop window acceptance still requires loading the new plugin version; no automatic reload performed",
+    "First load, intentional navigation, actual content removals and real errors still cause necessary UI changes; background preparation does not hide data or errors"
+  ],
+  "report": "docs/verification-1.4.3.md"
+}

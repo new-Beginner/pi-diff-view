@@ -99,7 +99,7 @@ const Code = React.memo(function Code({ text, path, changes = [] }: { text: stri
   }, [text, path, changes]);
   return <code className="dv-code">{nodes.length ? nodes : ' '}</code>;
 });
-export function DiffRows({ lines, path, layout, t }: { lines: DiffLine[]; path: string; layout: 'unified' | 'split'; t: Messages }) {
+export const DiffRows = React.memo(function DiffRows({ lines, path, layout, t }: { lines: DiffLine[]; path: string; layout: 'unified' | 'split'; t: Messages }) {
   const pairs = useMemo(() => alignLines(lines), [lines]);
   const number = (line: DiffLine | undefined, side: 'old' | 'new') => {
     const value = side === 'old' ? line?.oldLine : line?.newLine;
@@ -117,4 +117,4 @@ export function DiffRows({ lines, path, layout, t }: { lines: DiffLine[]; path: 
   return <div className="dv-rows dv-unified">{lines.map((line, index) => line.kind === 'notice' ? <div key={index} className="dv-notice-line">{line.text}</div> : <div className={`dv-row dv-${line.kind}`} key={index}>
     {number(line, line.kind === 'del' ? 'old' : 'new')}<Code text={line.text} path={path} changes={changes.get(line)} />
   </div>)}</div>;
-}
+});

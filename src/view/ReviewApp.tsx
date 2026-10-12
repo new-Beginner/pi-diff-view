@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Action, ActionResult, Bootstrap, DiffHunk, ReviewActionRequest, ReviewFile, ReviewFilesPage, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
 import { isImagePath } from '../core/review-file-policy';
 import { DiffRows } from './DiffRows';
@@ -7,7 +7,8 @@ import FileIcon from './FileIcon';
 import ReviewIcon from './ReviewIcon';
 import { messages, kindLabel } from './i18n';
 import { ensureBounded } from './transport';
-import { useDiffDetail, prefetchDiffDetail } from './useDiffDetail';
+import { useDiffDetail, prefetchDiffDetail, prepareDiffDetail } from './useDiffDetail';
+import { captureScrollAnchor, restoreScrollAnchor, reconcileHunkViews, reviewFileVersion, type HunkView, type ScrollAnchor } from './live-diff';
 import './review.css';
 
 export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; navigationKey?: string; active?: boolean; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
@@ -70,14 +71,29 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const matchingReview = review && review.scope === request.scope && (!request.root || review.root === request.root) && review.sessionId === request.sessionId && (request.scope !== 'turn' || review.runId === request.runId) ? review : null;
   const validReview = matchingReview?.files.some(file => file.id === selected) ? matchingReview : null;
   const selectedFile = matchingReview?.files.find(file => file.id === selected);
-  const detailVersion = selectedFile ? `${selectedFile.fingerprint}|${selectedFile.kind}|${selectedFile.state}|${selectedFile.actions.join(',')}|${selectedFile.statsKnown}` : undefined;
+  const detailVersion = selectedFile ? reviewFileVersion(selectedFile) : undefined;
   const { detail, loading: loadingDetail, loadingMore, error: detailError, loadMore } = useDiffDetail(transport, validReview?.id, selected, context, detailTick, `${scopeKey}|${matchingReview?.runId ?? ''}`, detailVersion);
+  const displayed = useRef({ selected, context, detailTick, detail, review: matchingReview });
+  displayed.current = { selected, context, detailTick, detail, review: matchingReview };
+  const scrollAnchor = useRef<ScrollAnchor>();
+  useLayoutEffect(() => {
+    if (scrollAnchor.current && workspaceRef.current) restoreScrollAnchor(workspaceRef.current, scrollAnchor.current);
+    scrollAnchor.current = undefined;
+  }, [review, detail]);
+  const hunkState = useRef<{ identity: string; views: HunkView[]; serial: number }>({ identity: '', views: [], serial: 0 });
+  const hunkIdentity = `${scopeKey}|${selected}|${context}`;
+  const viewHunks = useMemo(() => {
+    const state = hunkState.current;
+    const previous = state.identity === hunkIdentity ? state.views : [];
+    const views = reconcileHunkViews(previous, detail?.hunks ?? [], () => `hunk-view-${state.serial++}`);
+    state.identity = hunkIdentity; state.views = views; return views;
+  }, [detail?.hunks, hunkIdentity]);
   useEffect(() => {
     const target = continuationRef.current;
-    if (!target || !detail || detail.nextOffset == null || loadingDetail || loadingMore || detailError || fileCollapsed || detail.hunks.every(hunk => collapsed.has(hunk.id))) return;
+    if (!target || !detail || detail.nextOffset == null || loadingDetail || loadingMore || detailError || fileCollapsed || viewHunks.every(view => collapsed.has(view.key))) return;
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) loadMore(); }, { root: workspaceRef.current, rootMargin: '120px 0px' });
     observer.observe(target); return () => observer.disconnect();
-  }, [detail, loadingDetail, loadingMore, detailError, fileCollapsed, collapsed, loadMore]);
+  }, [detail, loadingDetail, loadingMore, detailError, fileCollapsed, collapsed, viewHunks, loadMore]);
   useEffect(() => {
     if (detail && initialRequest.runId && (!initialFileId || selected === initialFileId)) void transport.invoke('rendererReport', { stage: 'view-targeted' }).catch(() => {});
   }, [transport, detail?.file.id, initialRequest.runId]);
@@ -146,22 +162,39 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       if (!active) return;
       if (response.scope !== request.scope || response.sessionId !== request.sessionId || (request.scope === 'turn' && response.runId !== request.runId) || (request.root && response.root !== request.root)) throw new Error('审查结果与当前会话或轮次不匹配，请刷新。');
       if (review?.id === response.id && review.nextFileOffset == null) return;
-      if (review && review.runId !== response.runId) { setCollapsed(new Set()); setFileCollapsed(false); }
       let data: ReviewSummary = { ...response, files: response.files.filter(file => !isImagePath(file.path)), nextFileOffset: response.nextFileOffset ?? null };
-      const publish = () => {
-        setReview(data);
-        const current = data;
-        setSelected(previous => current.files.some(file => file.id === previous) ? previous : initialFileId && current.files.some(file => file.id === initialFileId) ? initialFileId : current.nextFileOffset != null ? initialFileId ?? previous : current.files[0]?.id ?? '');
+      const targetId = (id: string) => data.files.some(file => file.id === id) ? id : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.nextFileOffset != null ? initialFileId ?? id : data.files[0]?.id ?? '';
+      const publish = async () => {
+        if (matchingReview) {
+          // Prepare the replacement before publishing its metadata. Nothing currently visible is cleared.
+          while (active) {
+            const current = displayed.current;
+            const id = targetId(current.selected), nextFile = data.files.find(file => file.id === id);
+            const previous = current.detail?.file.id === id ? current.detail : null;
+            if (nextFile?.kind === 'text' && (!previous || current.review?.runId !== data.runId || reviewFileVersion(previous.file) !== reviewFileVersion(nextFile))) {
+              await prepareDiffDetail(transport, data.id, id, current.context, current.detailTick, previous, () => !active);
+            }
+            if (!active) return;
+            const latest = displayed.current;
+            if (latest.selected !== current.selected || latest.context !== current.context || latest.detailTick !== current.detailTick || latest.detail !== current.detail) continue;
+            if (workspaceRef.current) scrollAnchor.current = captureScrollAnchor(workspaceRef.current);
+            break;
+          }
+        }
+        if (!active) return;
+        const id = targetId(displayed.current.selected);
+        if (id !== displayed.current.selected) { setCollapsed(new Set()); setFileCollapsed(false); }
+        setReview(data); setSelected(id);
       };
-      const streaming = !review || review.runId !== response.runId;
-      if (streaming || data.nextFileOffset == null) publish();
+      const streaming = !matchingReview;
+      if (streaming || data.nextFileOffset == null) await publish();
       while (data.nextFileOffset != null && active) {
         const offset = data.nextFileOffset;
         const page = await transport.invoke<ReviewFilesPage>('reviewFiles', { reviewId: data.id, offset });
         if (!active) return;
         if (page.reviewId !== data.id || page.offset !== offset || (page.nextOffset != null && page.nextOffset <= offset)) throw new Error('无效的文件列表分页。');
         data = { ...data, files: [...data.files, ...page.files.filter(file => !isImagePath(file.path))], nextFileOffset: page.nextOffset };
-        if (streaming || data.nextFileOffset == null) publish();
+        if (streaming || data.nextFileOffset == null) await publish();
       }
     }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (active) { reviewPending.current = false; setLoadingReview(false); } });
     return () => { active = false; reviewPending.current = false; };
@@ -273,7 +306,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
             <label className="dv-check"><input type="checkbox" checked={wrap} onChange={event => saveSettings({ wordWrap: event.target.checked })} />{t.wrap}</label>
             <div className="dv-segment" role="group" aria-label={t.settings}><button aria-pressed={layout === 'unified'} onClick={() => saveSettings({ layout: 'unified' })}>{t.unified}</button><button aria-pressed={layout === 'split'} onClick={() => saveSettings({ layout: 'split' })}>{t.split}</button></div>
             <label>{t.context}<select aria-label={t.context} value={context} disabled={busy} onChange={event => { resetPage(); setContext(Number(event.target.value)); }}><option value={1}>1</option><option value={3}>3</option><option value={20}>20</option><option value={-1}>{t.full}</option></select></label>
-            <button disabled={!detail?.hunks.length} onClick={() => setCollapsed(new Set(detail?.hunks.map(hunk => hunk.id)))}>{locale.startsWith('zh') ? '折叠全部差异' : 'Collapse all hunks'}</button>
+            <button disabled={!detail?.hunks.length} onClick={() => setCollapsed(new Set(viewHunks.map(view => view.key)))}>{locale.startsWith('zh') ? '折叠全部差异' : 'Collapse all hunks'}</button>
             <button disabled={!detail?.hunks.length} onClick={() => setCollapsed(new Set())}>{locale.startsWith('zh') ? '展开全部差异' : 'Expand all hunks'}</button>
             <hr />
             <label className="dv-repository">{t.repository}<select aria-label={t.repository} value={request.root ?? ''} disabled={!boot || busy} onChange={event => { setFileCollapsed(false); setRequest(value => ({ ...value, root: event.target.value, runId: undefined, sessionId: initialRequest.sessionId })); setQuery(''); }}><option value="" disabled>—</option>{roots.map(root => <option key={root} value={root}>{boot?.repositories.find(repo => repo.root === root)?.name ?? root}</option>)}</select></label>
@@ -305,9 +338,9 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         {loadingReview && !matchingReview ? <div className="dv-empty" role="status">{t.loading}</div> : reviewError && !matchingReview ? <div className="dv-empty dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div> : !review ? <div className="dv-empty">{t.noRoots}</div> : !currentFile ? review.files.length || review.nextFileOffset != null ? <div className="dv-empty">{review.nextFileOffset != null ? t.loading : t.chooseFile}</div> : null : <>
           <h2 className="dv-sr-only">{currentFile.path}</h2>
           <div className={`dv-diff-pane ${wrap ? 'dv-wrap' : 'dv-nowrap'}`} ref={diffPane} tabIndex={0} aria-label={`${currentFile.path} ${t.title}`}>
-            {loadingDetail && !detail ? <div className="dv-empty" role="status">{t.loading}</div> : detailError && !detail ? <div className="dv-empty dv-error" role="alert">{detailError}<button onClick={() => setDetailTick(value => value + 1)}>{t.retry}</button></div> : currentFile.kind !== 'text' ? <div className="dv-empty">{t[currentFile.kind]}</div> : detail && !detail.hunks.length ? <div className="dv-empty">{currentFile.status === 'mode' ? t.mode : t.noHunks}</div> : detail?.hunks.map(hunk => <section className="dv-hunk" key={`${context}:${hunk.id}`}>
-              <div className="dv-hunk-heading"><button data-hunk-nav aria-expanded={!collapsed.has(hunk.id)} onClick={() => setCollapsed(value => { const next = new Set(value); next.has(hunk.id) ? next.delete(hunk.id) : next.add(hunk.id); return next; })} aria-label={`${collapsed.has(hunk.id) ? t.collapsed : t.expanded} ${hunk.header}`}><span aria-hidden="true">{collapsed.has(hunk.id) ? '▸' : '▾'}</span> <code>{hunk.header}</code></button><div className="dv-toolbar">{context === 3 && !currentFile.oldPath && review.scope !== 'turn' && review.scope !== 'lastTurn' && actionButtons(currentFile, hunk)}</div></div>
-              {!collapsed.has(hunk.id) && <DiffRows path={currentFile.path} lines={hunk.lines} layout={layout} t={t} />}
+            {loadingDetail && !detail ? <div className="dv-empty" role="status">{t.loading}</div> : detailError && !detail ? <div className="dv-empty dv-error" role="alert">{detailError}<button onClick={() => setDetailTick(value => value + 1)}>{t.retry}</button></div> : currentFile.kind !== 'text' ? <div className="dv-empty">{t[currentFile.kind]}</div> : detail && !detail.hunks.length ? <div className="dv-empty">{currentFile.status === 'mode' ? t.mode : t.noHunks}</div> : viewHunks.map(({ key, hunk }) => <section className="dv-hunk" key={key}>
+              <div className="dv-hunk-heading"><button data-hunk-nav aria-expanded={!collapsed.has(key)} onClick={() => setCollapsed(value => { const next = new Set(value); next.has(key) ? next.delete(key) : next.add(key); return next; })} aria-label={`${collapsed.has(key) ? t.collapsed : t.expanded} ${hunk.header}`}><span aria-hidden="true">{collapsed.has(key) ? '▸' : '▾'}</span> <code>{hunk.header}</code></button><div className="dv-toolbar">{context === 3 && !currentFile.oldPath && review.scope !== 'turn' && review.scope !== 'lastTurn' && actionButtons(currentFile, hunk)}</div></div>
+              {!collapsed.has(key) && <DiffRows path={currentFile.path} lines={hunk.lines} layout={layout} t={t} />}
             </section>)}
           </div>
           {detail?.nextOffset != null && <div className="dv-continuation" ref={continuationRef} aria-label={t.loadMore}>{loadingMore && <span role="status">{t.loading}</span>}{detailError && <span className="dv-error" role="alert">{detailError}<button onClick={loadMore}>{t.retry}</button></span>}</div>}
