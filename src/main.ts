@@ -64,7 +64,7 @@ export async function onLoad(): Promise<void> {
     const context = contexts.get(event.sessionId);
     if (history && context && service) {
       // Re-read actual final message evidence; do not bind the event's internal turnId.
-      const result = await history.syncSession(event.sessionId, context.root, { running: context.running, messages: evidence.messages(event.sessionId, canonical(context.root)) });
+      const result = await history.syncSession(event.sessionId, context.root, { ...context, messages: evidence.messages(event.sessionId, canonical(context.root)) });
       service.setRecoveryNotice(event.sessionId, result.warnings.join(' '));
       context.syncedAt = 0; // The renderer's settled state may arrive immediately afterwards.
     }
@@ -157,18 +157,18 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
     await evidenceStore!.restore(evidence, args.sessionId, root);
     if (!history) { const warning = '宿主历史路径契约不匹配，未导入历史。'; s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
-    const result = await history.syncSession(args.sessionId, root, { running: args.running === true, messages: evidence.messages(args.sessionId, canonical(root)) });
+    const result = await history.syncSession(args.sessionId, root, { ...contexts.get(args.sessionId)!, messages: evidence.messages(args.sessionId, canonical(root)) });
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' ')); return result;
   }
   const context = typeof args?.sessionId === 'string' ? contexts.get(args.sessionId) : undefined;
   const preparedReview = method === 'review' && history && context && (args.scope === 'turn' || args.scope === 'lastTurn');
   if (preparedReview) await store!.importInbox(generation);
   if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) {
-    const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    const result = await history.syncSession(args.sessionId, context.root, { ...context, messages: evidence.messages(args.sessionId, canonical(context.root)) });
     context.syncedAt = Date.now(); store!.acknowledgeRecovery(args.sessionId);
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
   }
-  if (preparedReview) return s.review(args, true);
+  if (method === 'review' && (args.scope === 'turn' || args.scope === 'lastTurn')) return s.review(args, Boolean(preparedReview), context);
   if (method === 'runningChanges') {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
       context.updatedAt = Date.now(); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);

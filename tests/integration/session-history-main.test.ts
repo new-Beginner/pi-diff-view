@@ -56,9 +56,14 @@ it('main imports authorized session evidence, isolates shared roots and resolves
     expect(immediate.runId).toBe(damaged.id);
     expect(immediate.files[0]).toMatchObject({ kind: 'text', statsKnown: true, additions: 1, deletions: 1 });
     expect((await plugin.onRendererCall('file', { reviewId: immediate.id, fileId: immediate.files[0].id })).hunks.length).toBeGreaterThan(0);
-    await fs.appendFile(path.join(host, 'sessions', 's1.jsonl'), '\n' + JSON.stringify({ type: 'message', id: 'new-user-s1', role: 'user', blocks: [], createdAt: new Date().toISOString(), meta: { status: 'complete' } }));
-    await plugin.onRendererCall('sessionContext', { sessionId: 's1', root, running: true });
-    expect(await plugin.onRendererCall('runningChanges', { sessionId: 's1', since: 0, taskId: 'new-user-s1' })).toBeNull();
+    const since = Date.now();
+    await fs.appendFile(path.join(host, 'sessions', 's1.jsonl'), '\n' + JSON.stringify({ type: 'message', id: 'new-user-s1', role: 'user', blocks: [], createdAt: new Date(since).toISOString(), meta: { status: 'complete' } }));
+    await plugin.onRendererCall('sessionContext', { sessionId: 's1', root, running: true, taskId: 'new-user-s1', since });
+    const current = await plugin.onRendererCall('review', { scope: 'lastTurn', sessionId: 's1', root });
+    expect(current.run).toMatchObject({ state: 'running', fileCount: 0 });
+    expect(current.runId).not.toBe(damaged.id); expect(current.files).toEqual([]);
+    expect((await plugin.onRendererCall('bootstrap', { sessionId: 's1' })).runs.filter((run: any) => run.state === 'running')).toHaveLength(1);
+    expect(await plugin.onRendererCall('runningChanges', { sessionId: 's1', since, taskId: 'new-user-s1' })).toBeNull();
     await plugin.onRendererCall('sessionContext', { sessionId: 's1', root: temp, running: false });
     expect((await plugin.onRendererCall('bootstrap', { sessionId: 's1' })).recoveryNotice).toContain('未授权');
     await expect(plugin.onRendererCall('gitManage', { operation: 'status', root: temp })).rejects.toThrow();

@@ -26,16 +26,16 @@ const host: RendererHost = {
     if (!methods.includes(payload.method)) return Promise.reject(new Error('Method not declared in renderer whitelist'));
     return window.pluginBridge!.invoke<T>(`diff.${payload.method}`, payload.args);
   },
-  ui: { injectStyle(css) { const element = document.createElement('style'); element.textContent = css; document.head.append(element); state.styles++; return () => { element.remove(); state.styles--; }; } },
+  ui: { injectStyle(css) { const element = document.createElement('style'); element.textContent = new URLSearchParams(location.search).get('scopedStyles') === 'true' ? `@scope ([data-pi-plugin="local.diff-view"]) { ${css} }` : css; document.head.append(element); state.styles++; return () => { element.remove(); state.styles--; }; } },
   slots: { register(options) {
     state.positions.push({ slot: options.slot });
     if (options.slot === 'composerControl') {
-      const element = document.createElement('div'); element.dataset.testSlot = options.slot; (document.querySelector('.mock-composer') ?? document.body).append(element);
+      const element = document.createElement('div'); element.dataset.testSlot = options.slot; element.dataset.piPlugin = 'local.diff-view'; (document.querySelector('.mock-composer') ?? document.body).append(element);
       const root = createRoot(element); root.render(React.createElement(options.component));
       return () => { root.unmount(); element.remove(); };
     }
     const params = new URLSearchParams(location.search), target = params.has('latestAtEnd') ? 11 : 0;
-    const element = document.createElement('div'); element.dataset.testSlot = options.slot; (document.getElementById('mock-reply') ?? document.body).append(element);
+    const element = document.createElement('div'); element.dataset.testSlot = options.slot; element.dataset.piPlugin = 'local.diff-view'; (document.getElementById('mock-reply') ?? document.body).append(element);
     const root = createRoot(element); const Component = options.component;
     const historyCount = Number(params.get('historyCards') || 0);
     renderReplies = visible => root.render(visible ? <>{Array.from({ length: historyCount || 12 }, (_, index) => <Component key={index} sessionId="session-demo" messageId={historyCount ? `history-${index}` : index === target ? 'reply-demo' : `unbound-${index}`} message={{ content: index === target && params.has('longReply') ? `${'进度😀\n\n'.repeat(12000)}Demo reply ${index}` : `Demo reply ${index}`, createdAt: new Date(Date.parse('2025-06-15T15:07:40.000Z') + (params.has('latestAtEnd') ? index * 1000 : 0)).toISOString() }} />)}</> : null);

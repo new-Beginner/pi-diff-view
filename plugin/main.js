@@ -1866,7 +1866,7 @@ var ReviewService = class {
       }
     }
     this.mutableRoots = new Set(this.allowed);
-    const runs = await this.store.listRuns(false);
+    const runs = (await this.store.listRuns(false, true)).filter((r) => Object.keys(r.changes).length > 0 || r.version === 2 && r.boundary === "user" && r.state === "running");
     const filtered = sessionId ? runs.filter((r) => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({})), settings = await this.host.settings();
@@ -1974,18 +1974,25 @@ var ReviewService = class {
     if (!summary.files.length && offset < cached.files.length) fail("SUMMARY_LIMIT", "File metadata exceeds summary bridge budget");
     return summary;
   }
-  async review(request, inboxImported = false) {
+  async review(request, inboxImported = false, activity) {
     if (!request || !["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(request.scope)) fail("INVALID_SCOPE", "Unknown review scope");
     let root = request.root, files = [], git2, run2, notice;
     if (request.scope === "lastTurn" || request.scope === "turn") {
       this.validateTurn(request, request.scope === "turn");
       if (!inboxImported) await this.store.importInbox(this.generation);
-      run2 = request.scope === "turn" ? await this.store.getRun(request.runId, false, false) ?? void 0 : (await this.store.listRuns(false)).find((r) => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
+      if (request.scope === "turn") run2 = await this.store.getRun(request.runId, false, false) ?? void 0;
+      else {
+        const runs = (await this.store.listRuns(false, true)).filter((r) => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
+        if (activity?.running && activity.sessionId === request.sessionId) {
+          const matches = runs.filter((r) => r.version === 2 && r.boundary === "user" && r.state === "running" && (activity.taskId ? r.userMessageId === activity.taskId : !!activity.since && r.startedAt >= activity.since));
+          if (matches.length === 1) run2 = matches[0];
+        } else run2 = (!activity ? runs.find((r) => r.version === 2 && r.boundary === "user" && r.state === "running") : void 0) ?? runs.find((r) => Object.keys(r.changes).length > 0);
+      }
       if (run2?.sessionId !== request.sessionId || root && run2 && canonical(run2.root) !== canonical(root)) run2 = void 0;
       await this.authorize(request.sessionId, run2);
       if (!run2) {
         root = root ?? "";
-        notice = "No recorded turn. History before installation is not reconstructed.";
+        notice = request.scope === "lastTurn" && activity?.running ? "\u5F53\u524D\u8F6E\u6B21\u6B63\u5728\u8FD0\u884C\uFF0C\u5C1A\u65E0\u53EF\u9A8C\u8BC1\u7684\u4FEE\u6539\u8BB0\u5F55\uFF1B\u4E0D\u4F1A\u663E\u793A\u4E0A\u4E00\u8F6E\u7684\u4FEE\u6539\u3002" : "No recorded turn. History before installation is not reconstructed.";
       } else {
         root = run2.root;
         if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
@@ -2655,15 +2662,28 @@ var HostHistoryImporter = class {
     root = import_node_path8.default.resolve(root);
     const capture = (value) => this.capture(root, value, sessionId);
     const running = typeof options === "boolean" ? options : options.running === true;
+    const taskId = typeof options !== "boolean" && typeof options.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(options.taskId) ? options.taskId : void 0;
+    const since = typeof options !== "boolean" && Number.isSafeInteger(options.since) && options.since > 0 && options.since <= Date.now() ? options.since : void 0;
     const d = { imported: 0, unchanged: 0, skipped: 0, events: 0, runIds: [], warnings: [] };
     const warn = (value) => {
       if (d.warnings.length < 100 && !d.warnings.includes(value)) d.warnings.push(value);
     };
+    if (!running || taskId) {
+      await this.store.init();
+      await this.store.captureLock(async () => {
+        for (const marker of await this.store.listRuns(false, true)) {
+          if (marker.sessionId !== sessionId || canonical(marker.root) !== canonical(root) || marker.source !== "host-history" || marker.boundary !== "user" || marker.state !== "running" || Object.keys(marker.changes).length || running && marker.userMessageId === taskId) continue;
+          marker.state = "incomplete";
+          marker.incomplete = true;
+          await this.store.writeRun(marker);
+        }
+      });
+    }
     let source;
     try {
       source = (await this.read(`sessions/${sessionId}.jsonl`, 64 * 1024 * 1024)).toString("utf8");
     } catch {
-      if (typeof options === "boolean" || !options.messages?.length) {
+      if ((typeof options === "boolean" || !options.messages?.length) && !(taskId && since)) {
         warn("Session evidence unavailable or unsafe");
         return d;
       }
@@ -2696,6 +2716,7 @@ var HostHistoryImporter = class {
       warn("Malformed/truncated session lines; no turn attribution attempted");
       return d;
     }
+    if (taskId && since && !messages.has(taskId)) messages.set(taskId, { id: taskId, role: "user", blocks: [], meta: {}, createdAt: since, order: order++ });
     const ordered = [...messages.values()].sort((a, b) => a.createdAt - b.createdAt || a.order - b.order);
     ordered.forEach((m, index) => {
       m.order = index;
@@ -2884,16 +2905,17 @@ var HostHistoryImporter = class {
       const users = ordered.filter((m) => m.role === "user" && !m.parent && !m.meta.steering);
       for (const user of users) {
         const turnEvents = events.filter((e) => owner(e.message) === user.id);
-        if (!turnEvents.length) continue;
+        const live = running && (taskId ? user.id === taskId : user === users.at(-1));
         const id = hostHistoryRunId(sessionId, user.id);
         const duplicate = existing.find((r) => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === "host-history") return false;
-          if (r.userMessageId) return r.userMessageId === user.id;
           const refs = Object.values(r.changes).flatMap((c) => c.evidence ?? []);
-          return refs.length > 0 && Object.values(r.changes).every((c) => !!c.evidence?.length) && refs.every((ref) => {
+          const linkedOwners = refs.map((ref) => {
             const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
-            return !!message && message.blocks.some((b) => b.type === "tool_call" && b.callId === callId) && owner(message) === user.id;
+            return message?.blocks.some((b) => b.type === "tool_call" && b.callId === callId) ? owner(message) : void 0;
           });
+          const verifiedOwner = linkedOwners[0] && Object.values(r.changes).every((c) => !!c.evidence?.length) && linkedOwners.every((id2) => id2 === linkedOwners[0]) ? linkedOwners[0] : void 0;
+          return verifiedOwner ? verifiedOwner === user.id : r.userMessageId === user.id;
         });
         const previous = await this.store.getRun(id);
         if (previous && (previous.source !== "host-history" || canonical(previous.root) !== canonical(root))) {
@@ -2901,9 +2923,9 @@ var HostHistoryImporter = class {
           warn("Existing run identity/root conflict");
           continue;
         }
+        if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const members = ordered.filter((m) => owner(m) === user.id && !m.parent);
         const last = members.filter((m) => m.role === "assistant" || m.role === "tool").at(-1);
-        const live = running && user === users.at(-1);
         const reply = !live && last?.role === "assistant" && last.meta.status === "complete" && last.blocks.some((b) => b.type === "text") ? last : void 0;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every((m) => m.createdAt <= saved.endedAt) ? saved.replyMessageId : void 0;
@@ -2927,7 +2949,7 @@ var HostHistoryImporter = class {
           continue;
         }
         const incomplete = Object.values(changes2).some((c) => c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
-        const run2 = { version: 2, id, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live ? void 0 : retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1).message.createdAt, state: live ? "running" : replyId ? "completed" : "incomplete", fileCount: Object.keys(changes2).length, incomplete, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
+        const run2 = { version: 2, id, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live ? void 0 : retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, state: live ? "running" : replyId ? "completed" : "incomplete", fileCount: Object.keys(changes2).length, incomplete, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
         if (duplicate) {
           const liveRun = await this.store.getRun(duplicate.id);
           const recoveredFiles = { ...liveRun.hostRecovery?.files };
@@ -2935,6 +2957,12 @@ var HostHistoryImporter = class {
           if (liveRun.userMessageId !== user.id || liveRun.boundary !== "user") {
             liveRun.userMessageId = user.id;
             liveRun.boundary = "user";
+            changed = true;
+          }
+          if (live && (liveRun.replyMessageId || liveRun.finalReply || Object.keys(liveRun.bindings).length)) {
+            delete liveRun.replyMessageId;
+            delete liveRun.finalReply;
+            liveRun.bindings = {};
             changed = true;
           }
           if (replyId && liveRun.replyMessageId !== replyId) {
@@ -3818,7 +3846,7 @@ async function onLoad() {
       await store.importInbox(generation);
       const context = contexts.get(event.sessionId);
       if (history && context && service) {
-        const result = await history.syncSession(event.sessionId, context.root, { running: context.running, messages: evidence.messages(event.sessionId, canonical(context.root)) });
+        const result = await history.syncSession(event.sessionId, context.root, { ...context, messages: evidence.messages(event.sessionId, canonical(context.root)) });
         service.setRecoveryNotice(event.sessionId, result.warnings.join(" "));
         context.syncedAt = 0;
       }
@@ -3946,7 +3974,7 @@ async function execute(s, method, args) {
       s.setRecoveryNotice(args.sessionId, warning);
       return { ok: false, warning };
     }
-    const result = await history.syncSession(args.sessionId, root, { running: args.running === true, messages: evidence.messages(args.sessionId, canonical(root)) });
+    const result = await history.syncSession(args.sessionId, root, { ...contexts.get(args.sessionId), messages: evidence.messages(args.sessionId, canonical(root)) });
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
     return result;
   }
@@ -3954,12 +3982,12 @@ async function execute(s, method, args) {
   const preparedReview = method === "review" && history && context && (args.scope === "turn" || args.scope === "lastTurn");
   if (preparedReview) await store.importInbox(generation);
   if (history && context && ["runningChanges", "replyCards", "bootstrap", "review", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
-    const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    const result = await history.syncSession(args.sessionId, context.root, { ...context, messages: evidence.messages(args.sessionId, canonical(context.root)) });
     context.syncedAt = Date.now();
     store.acknowledgeRecovery(args.sessionId);
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
   }
-  if (preparedReview) return s.review(args, true);
+  if (method === "review" && (args.scope === "turn" || args.scope === "lastTurn")) return s.review(args, Boolean(preparedReview), context);
   if (method === "runningChanges") {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
       context.updatedAt = Date.now();

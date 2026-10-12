@@ -1,0 +1,33 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.13",
+  "package": "plugin/dist/local.diff-view-1.4.13.piplug",
+  "packageBytes": 2774566,
+  "packageFiles": 85,
+  "sha256": "634c8b551e9411601f07b0e2d79e69202a662079e93521bf59f7ea5d79a88426",
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed; final code bundle hashes match the tested build",
+    "unitIntegration": { "filesPassed": 38, "testsPassed": 329, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 126, "testsFailed": 0, "browser": "local Chrome", "host": "actual components and production bundle with controlled host bridges; layout reproduces native CSS scope and ResizeObserver clipping detection, not native client acceptance" },
+    "targetedBrowser": { "testsPassed": 6, "oldImplementationReproduction": "Both new host-fold regressions failed because the previous outer viewport was still scrollable" },
+    "visualChecks": ["docs/screenshots/card-1.4.13-directory-light.png", "docs/screenshots/card-1.4.13-directory-narrow.png", "docs/screenshots/card-1.4.13-expanded-light.png", "docs/screenshots/card-1.4.13-expanded-narrow.png"],
+    "pluginCheck": "passed",
+    "pluginPack": "passed",
+    "archiveIntegrity": "SHA-256 verified; all 85 files use ZIP_STORED and match the final plugin directory",
+    "gitDiffCheck": "passed",
+    "versionConsistency": "package, lock root, manifest and runtime are 1.4.13"
+  },
+  "changes": [
+    "Replace sticky positioning with a static header that is a sibling of the independent file-directory scroll container",
+    "Make the collapsed outer viewport non-scrollable with overflow:clip; wheel and keyboard scrolling affect only the directory",
+    "Contain directory boundary scrolling and preserve header coordinates exactly during directory scrolling",
+    "Keep native clipping detection accurate using the directory's natural height without adding a second expand/collapse control",
+    "Restore natural height and visible overflow on expansion, retaining bounded automatic pagination and error retries",
+    "Track host height rewrites and content/viewport size changes, preserve unrelated scroll updates and restore latest host styles on cleanup",
+    "Preserve pre-existing 1.4.11 current-turn fixes and unrelated user changes"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostFilesModified": false, "gitStageCommitPushPerformed": false },
+  "report": "docs/verification-1.4.13.md"
+}

@@ -88,16 +88,30 @@ export class HostHistoryImporter {
     }
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
-  async syncSession(sessionId: string, root: string, options: { running?: boolean; messages?: unknown[] } | boolean = {}): Promise<HostHistoryDiagnostics> {
+  async syncSession(sessionId: string, root: string, options: { running?: boolean; taskId?: string; since?: number; messages?: unknown[] } | boolean = {}): Promise<HostHistoryDiagnostics> {
     if (!ID.test(sessionId) || !path.isAbsolute(root)) throw new Error('Invalid history session/root');
     root = path.resolve(root);
     const capture = (value: string) => this.capture(root, value, sessionId);
     const running = typeof options === 'boolean' ? options : options.running === true;
+    const taskId = typeof options !== 'boolean' && typeof options.taskId === 'string' && /^[a-zA-Z0-9-]{1,256}$/.test(options.taskId) ? options.taskId : undefined;
+    const since = typeof options !== 'boolean' && Number.isSafeInteger(options.since) && options.since! > 0 && options.since! <= Date.now() ? options.since : undefined;
     const d: HostHistoryDiagnostics = { imported: 0, unchanged: 0, skipped: 0, events: 0, runIds: [], warnings: [] };
     const warn = (value: string) => { if (d.warnings.length < 100 && !d.warnings.includes(value)) d.warnings.push(value); };
+    // Empty source-owned markers contain no history to lose. Retire them from
+    // authoritative idle/new-task metadata even if the transcript has not flushed.
+    if (!running || taskId) {
+      await this.store.init();
+      await this.store.captureLock(async () => {
+        for (const marker of await this.store.listRuns(false, true)) {
+          if (marker.sessionId !== sessionId || canonical(marker.root) !== canonical(root) || marker.source !== 'host-history' || marker.boundary !== 'user' || marker.state !== 'running' || Object.keys(marker.changes).length || (running && marker.userMessageId === taskId)) continue;
+          marker.state = 'incomplete'; marker.incomplete = true;
+          await this.store.writeRun(marker); // Empty settled turns are removed by storage.
+        }
+      });
+    }
     let source: string;
     try { source = (await this.read(`sessions/${sessionId}.jsonl`, 64 * 1024 * 1024)).toString('utf8'); }
-    catch { if (typeof options === 'boolean' || !options.messages?.length) { warn('Session evidence unavailable or unsafe'); return d; } source = ''; }
+    catch { if ((typeof options === 'boolean' || !options.messages?.length) && !(taskId && since)) { warn('Session evidence unavailable or unsafe'); return d; } source = ''; }
     const messages = new Map<string, Message>();
     let malformed = false, order = 0;
     const liveMessages = typeof options === 'boolean' ? [] : options.messages ?? [];
@@ -114,6 +128,9 @@ export class HostHistoryImporter {
       } catch { malformed = true; }
     }
     if (malformed) { warn('Malformed/truncated session lines; no turn attribution attempted'); return d; }
+    // The renderer's current user metadata may arrive before JSONL. Keep an empty
+    // live marker, not fabricated modification evidence or conversational content.
+    if (taskId && since && !messages.has(taskId)) messages.set(taskId, { id: taskId, role: 'user', blocks: [], meta: {}, createdAt: since, order: order++ });
     const ordered = [...messages.values()].sort((a, b) => a.createdAt - b.createdAt || a.order - b.order);
     ordered.forEach((m, index) => { m.order = index; });
     const owners = new Map<string, string>(), aliases = new Map<string, Message>();
@@ -245,24 +262,26 @@ export class HostHistoryImporter {
       const users = ordered.filter(m => m.role === 'user' && !m.parent && !m.meta.steering);
       for (const user of users) {
         const turnEvents = events.filter(e => owner(e.message) === user.id);
-        if (!turnEvents.length) continue;
+        const live = running && (taskId ? user.id === taskId : user === users.at(-1));
         const id = hostHistoryRunId(sessionId, user.id);
         const duplicate = existing.find(r => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === 'host-history') return false;
-          if (r.userMessageId) return r.userMessageId === user.id;
-          // Exact tool IDs, never timestamps, can corroborate an older unidentified capture.
+          // Exact tool ownership overrides an obsolete renderer-context binding.
+          // Partial/mixed evidence cannot reassign a capture, especially a child task.
           const refs = Object.values(r.changes).flatMap(c => c.evidence ?? []);
-          return refs.length > 0 && Object.values(r.changes).every(c => !!c.evidence?.length) && refs.every(ref => {
+          const linkedOwners = refs.map(ref => {
             const callId = ref.slice(ref.indexOf(':') + 1), message = aliases.get(callId);
-            return !!message && message.blocks.some(b => b.type === 'tool_call' && b.callId === callId) && owner(message) === user.id;
+            return message?.blocks.some(b => b.type === 'tool_call' && b.callId === callId) ? owner(message) : undefined;
           });
+          const verifiedOwner = linkedOwners[0] && Object.values(r.changes).every(c => !!c.evidence?.length) && linkedOwners.every(id => id === linkedOwners[0]) ? linkedOwners[0] : undefined;
+          return verifiedOwner ? verifiedOwner === user.id : r.userMessageId === user.id;
         });
         // Merge only by a stable user identity, directly recorded or corroborated by exact tool IDs.
         const previous = await this.store.getRun(id) as HostHistoryRun | null;
         if (previous && (previous.source !== 'host-history' || canonical(previous.root) !== canonical(root))) { d.skipped++; warn('Existing run identity/root conflict'); continue; }
+        if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const members = ordered.filter(m => owner(m) === user.id && !m.parent);
         const last = members.filter(m => m.role === 'assistant' || m.role === 'tool').at(-1);
-        const live = running && user === users.at(-1);
         const reply = !live && last?.role === 'assistant' && last.meta.status === 'complete' && last.blocks.some(b => b.type === 'text') ? last : undefined;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every(m => m.createdAt <= saved.endedAt!) ? saved.replyMessageId : undefined;
@@ -281,12 +300,13 @@ export class HostHistoryImporter {
         if (previous) for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes[value]) changes[value] = change;
         if (Object.keys(changes).length > 256) { warn('Turn exceeds 256 files; import skipped'); d.skipped++; continue; }
         const incomplete = Object.values(changes).some(c => c.before.kind === 'unavailable' || c.after.kind === 'unavailable') || (!replyId && !live);
-        const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live ? undefined : retainedReply ? saved!.endedAt : last?.createdAt ?? turnEvents.at(-1)!.message.createdAt, state: live ? 'running' : replyId ? 'completed' : 'incomplete', fileCount: Object.keys(changes).length, incomplete, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
+        const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live ? undefined : retainedReply ? saved!.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, state: live ? 'running' : replyId ? 'completed' : 'incomplete', fileCount: Object.keys(changes).length, incomplete, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
         if (duplicate) {
           const liveRun = (await this.store.getRun(duplicate.id))!;
           const recoveredFiles = { ...liveRun.hostRecovery?.files };
           let changed = false;
           if (liveRun.userMessageId !== user.id || liveRun.boundary !== 'user') { liveRun.userMessageId = user.id; liveRun.boundary = 'user'; changed = true; }
+          if (live && (liveRun.replyMessageId || liveRun.finalReply || Object.keys(liveRun.bindings).length)) { delete liveRun.replyMessageId; delete liveRun.finalReply; liveRun.bindings = {}; changed = true; }
           if (replyId && liveRun.replyMessageId !== replyId) { liveRun.replyMessageId = replyId; changed = true; }
           for (const [value, change] of Object.entries(changes)) {
             const old = liveRun.changes[value];

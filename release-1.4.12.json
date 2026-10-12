@@ -1,0 +1,31 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.12",
+  "package": "plugin/dist/local.diff-view-1.4.12.piplug",
+  "packageBytes": 2560400,
+  "packageFiles": 80,
+  "sha256": "a5303789854e358ac43eab4dc0be87296ab3316d3776d12b55bdc89e1c32deed",
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed",
+    "unitIntegration": { "filesPassed": 38, "testsPassed": 329, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 125, "testsFailed": 0, "browser": "local Chrome", "host": "production components and bundle with controlled host bridges; card layout regressions reproduce the native @scope CSS boundary, not native client acceptance" },
+    "targetedBrowser": { "testsPassed": 5, "oldImplementationReproduction": "Both scoped host-fold regressions failed before the repair" },
+    "visualChecks": ["docs/screenshots/card-1.4.12-expanded-light.png", "docs/screenshots/card-1.4.12-expanded-narrow.png"],
+    "pluginCheck": "passed",
+    "pluginPack": "passed",
+    "gitDiffCheck": "passed",
+    "versionConsistency": "package, lock root, manifest and runtime are 1.4.12"
+  },
+  "changes": [
+    "Keep the sticky card header entirely inside the native plugin CSS scope",
+    "Adapt only the owning entryExtra viewport: bounded scrolling when collapsed, natural full-content height when expanded",
+    "Retain automatic bounded file-list pagination and the host's single expand/collapse control",
+    "Preserve scroll position during unrelated style updates and follow host limit rewrites",
+    "Restore the latest host inline styles on unmount without altering unrelated plugin viewports",
+    "Preserve pre-existing 1.4.11 current-turn fixes and all unrelated workspace changes"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostFilesModified": false, "gitStageCommitPushPerformed": false },
+  "report": "docs/verification-1.4.12.md"
+}

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReviewFile, RunSummary, TurnSummary, UiTransport } from '../core/contracts';
 import FilePath from '../view/FilePath';
+import { adaptEntryExtraViewport } from './entry-extra-layout';
 export interface TurnChangeSummaryProps { run: RunSummary; transport: UiTransport; locale: string; base: 'light' | 'dark'; initialSummary?: TurnSummary; onOpen(file?: ReviewFile): Promise<void>; }
 export default function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpen }: TurnChangeSummaryProps) {
   const zh = locale.startsWith('zh');
@@ -10,13 +11,8 @@ export default function TurnChangeSummary({ run, transport, locale, base, initia
   const cardRef = useRef<HTMLElement>(null);
   const [hostExpanded, setHostExpanded] = useState(false);
   useLayoutEffect(() => {
-    const viewport = cardRef.current?.closest<HTMLElement>('.pi-entry-extra-viewport');
-    if (!viewport) return;
-    const sync = () => { viewport.scrollTop = 0; setHostExpanded(viewport.dataset.expanded === 'true'); };
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(viewport, { attributes: true, attributeFilter: ['data-expanded'] });
-    return () => observer.disconnect();
+    const card = cardRef.current;
+    if (card) return adaptEntryExtraViewport(card, setHostExpanded);
   }, [run.id, summary?.fileCount === 0]);
   useEffect(() => {
     let active = true; live.current = true; setError('');
@@ -47,8 +43,9 @@ export default function TurnChangeSummary({ run, transport, locale, base, initia
   if (summary?.fileCount === 0 && !error) return null;
   // The host reply owns the only expand/collapse control; this card only pages metadata.
   const files = summary?.files ?? [];
-  return <section ref={cardRef} className="dv-turn-card dv-reply" data-base={base} aria-label={zh ? '本次任务文件变更' : 'Files changed in this task'}>
+  return <div className="dv-turn-layout"><section ref={cardRef} className="dv-turn-card dv-reply" data-base={base} aria-label={zh ? '本次任务文件变更' : 'Files changed in this task'}>
     <header className="dv-turn-head"><span className="dv-turn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="16" height="18" rx="4" /><path d="M9 9h6M12 6v6M9 16h6" /></svg></span><div className="dv-turn-label"><strong>{summary ? zh ? `已编辑 ${summary.fileCount} 个文件` : `${summary.fileCount} files changed` : zh ? '正在读取本次变更…' : 'Loading task changes…'}</strong>{summary && <span className="dv-turn-counts">{(summary.unknownFileCount ?? 0) < summary.fileCount && <><span className="dv-turn-add">+{summary.additions}</span><span className="dv-turn-del">−{summary.deletions}</span></>}{!!summary.unknownFileCount && <span>{zh ? summary.unknownFileCount >= summary.fileCount ? '行数未知' : '部分统计' : 'Partial / unknown totals'}</span>}</span>}</div><button className="dv-turn-open" disabled={busy || !summary} onClick={() => void open()}>{busy ? zh ? '打开中…' : 'Opening…' : zh ? '查看变更' : 'View changes'}</button></header>
+    <div className="dv-turn-directory" role="region" aria-label={zh ? '文件目录' : 'File directory'} tabIndex={0}>
     {!!files.length && <div className="dv-turn-files">{files.map(file => {
       const known = file.kind === 'text' && file.statsKnown !== false;
       const label = file.kind === 'binary' ? zh ? '二进制文件' : 'Binary file' : file.kind === 'large' ? zh ? '文件过大' : 'Large file' : zh ? '快照不完整' : 'Incomplete snapshot';
@@ -57,5 +54,6 @@ export default function TurnChangeSummary({ run, transport, locale, base, initia
     {(summary?.unknownFileCount || summary?.files.some(file => file.statsKnown === false || file.kind !== 'text')) ? <details className="dv-turn-stats-note"><summary>{zh ? '统计说明' : 'About these totals'}</summary><p>{zh ? '仅统计有完整快照的文本文件；缺失历史内容的文件不计入行数。' : 'Totals include text files with complete snapshots; missing historical content is excluded.'}</p></details> : null}
     {summary?.nextOffset != null && <footer className="dv-turn-foot"><button disabled={busy} onClick={() => void loadMore()}>{busy ? zh ? '加载中…' : 'Loading…' : zh ? '加载更多文件' : 'Load more files'}</button></footer>}
     {error && <p className="dv-turn-error" role="alert">{error}</p>}
-  </section>;
+    </div>
+  </section><div className="dv-turn-overflow" aria-hidden="true" /></div>;
 }

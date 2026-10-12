@@ -1,3 +1,4 @@
+import type { CaptureContext } from './capture-context';
 import { isImagePath } from './review-file-policy';
 import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
@@ -56,7 +57,7 @@ export class ReviewService {
       catch { repositories.push({ root, name: path.basename(root), git: false }); }
     }
     this.mutableRoots = new Set(this.allowed);
-    const runs = await this.store.listRuns(false);
+    const runs = (await this.store.listRuns(false, true)).filter(r => Object.keys(r.changes).length > 0 || (r.version === 2 && r.boundary === 'user' && r.state === 'running'));
     const filtered = sessionId ? runs.filter(r => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string })), settings = await this.host.settings();
@@ -152,17 +153,26 @@ export class ReviewService {
     if (!summary.files.length && offset < cached.files.length) fail('SUMMARY_LIMIT', 'File metadata exceeds summary bridge budget');
     return summary;
   }
-  async review(request: ReviewRequest, inboxImported = false): Promise<ReviewSummary> {
+  async review(request: ReviewRequest, inboxImported = false, activity?: CaptureContext): Promise<ReviewSummary> {
     if (!request || !['unstaged', 'staged', 'commit', 'branch', 'lastTurn', 'turn'].includes(request.scope)) fail('INVALID_SCOPE', 'Unknown review scope');
     // Exact recorded-task opens do not enumerate unrelated history or run Git discovery.
     let root = request.root, files: InternalFile[] = [], git: GitReview | undefined, run: CaptureRun | undefined, notice: string | undefined;
     if (request.scope === 'lastTurn' || request.scope === 'turn') {
       this.validateTurn(request, request.scope === 'turn');
       if (!inboxImported) await this.store.importInbox(this.generation);
-      run = request.scope === 'turn' ? await this.store.getRun(request.runId!, false, false) ?? undefined : (await this.store.listRuns(false)).find(r => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
+      if (request.scope === 'turn') run = await this.store.getRun(request.runId!, false, false) ?? undefined;
+      else {
+        const runs = (await this.store.listRuns(false, true)).filter(r => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
+        if (activity?.running && activity.sessionId === request.sessionId) {
+          // The active task wins even with zero files. Missing current evidence is
+          // an empty current turn, never permission to substitute previous changes.
+          const matches = runs.filter(r => r.version === 2 && r.boundary === 'user' && r.state === 'running' && (activity.taskId ? r.userMessageId === activity.taskId : !!activity.since && r.startedAt >= activity.since));
+          if (matches.length === 1) run = matches[0];
+        } else run = (!activity ? runs.find(r => r.version === 2 && r.boundary === 'user' && r.state === 'running') : undefined) ?? runs.find(r => Object.keys(r.changes).length > 0);
+      }
       if (run?.sessionId !== request.sessionId || (root && run && canonical(run.root) !== canonical(root))) run = undefined;
       await this.authorize(request.sessionId, run);
-      if (!run) { root = root ?? ''; notice = 'No recorded turn. History before installation is not reconstructed.'; }
+      if (!run) { root = root ?? ''; notice = request.scope === 'lastTurn' && activity?.running ? '当前轮次正在运行，尚无可验证的修改记录；不会显示上一轮的修改。' : 'No recorded turn. History before installation is not reconstructed.'; }
       else {
         root = run.root;
         if (!this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');

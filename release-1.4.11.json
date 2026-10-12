@@ -1,0 +1,29 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.11",
+  "package": "plugin/dist/local.diff-view-1.4.11.piplug",
+  "packageBytes": 2404299,
+  "packageFiles": 77,
+  "sha256": "0a4bb9110332a9a0fb7b6e55713254abe6b20dbd6f370bd9d2e85941d11a2cf9",
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed",
+    "unitIntegration": { "filesPassed": 38, "testsPassed": 329, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 124, "testsFailed": 0, "browser": "local Chrome", "host": "production components and bundle with a controlled host bridge, not native client acceptance" },
+    "pluginCheck": "passed",
+    "pluginPack": "passed",
+    "gitDiffCheck": "passed",
+    "versionConsistency": "package, lock root, manifest and runtime are 1.4.11"
+  },
+  "changes": [
+    "Select the active user-task identity for latest-turn review, including an empty live marker",
+    "Never substitute previous modifications when current-task evidence is missing",
+    "Pass current task identity and start metadata through host-history synchronization",
+    "Settle shell-only main captures from exact user/reply evidence and retire empty source-owned markers on idle",
+    "Repair stale user bindings only with complete exact tool ownership and deduplicate native/agent records",
+    "Refresh sidebar history once per task/state transition and display current/latest-turn labels"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostFilesModified": false, "gitStageCommitPushPerformed": false },
+  "report": "docs/verification-1.4.11.md"
+}

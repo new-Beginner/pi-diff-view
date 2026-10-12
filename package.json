@@ -1,5 +1,5 @@
 {
-  "name": "pi-diff-view", "version": "1.4.10", "private": true, "type": "module",
+  "name": "pi-diff-view", "version": "1.4.13", "private": true, "type": "module",
   "description": "Session-isolated change history and independent local Git management for PI-Desktop",
   "scripts": {"build": "node scripts/build.mjs", "typecheck": "tsc --noEmit", "test": "vitest run", "test:e2e": "playwright test", "check": "npm run typecheck && npm test && npm run build"},
   "dependencies": {"diff": "8.0.2", "highlight.js": "11.11.1", "react": "18.3.1", "react-dom": "18.3.1"},
