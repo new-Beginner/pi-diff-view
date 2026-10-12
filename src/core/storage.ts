@@ -4,9 +4,14 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { assertPublicPath, canonical, digest, fail, inside, sameSnapshot } from './path-policy';
 import { stats } from './diff';
-import type { CaptureRun, FileSnapshot, ReviewComment } from './contracts';
+import type { CaptureRun, CapturedChange, FileSnapshot, ReviewComment } from './contracts';
 export const MAX_RUNS = 200;
 export const MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+/** Compare capture provenance, not derived stats or stripped blob text. */
+export function captureCheckpoint(change?: CapturedChange): string {
+  const snapshot = (value: FileSnapshot) => [value.exists, value.kind, value.hash, value.size, value.mode];
+  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after)] : null));
+}
 export async function atomicJson(file: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -46,6 +51,9 @@ function validRun(run: CaptureRun, id: string): boolean {
   } catch { return false; }
 }
 export class SnapshotStore {
+  private pendingRecovery = new Set<string>();
+  needsRecovery(sessionId: string): boolean { return this.pendingRecovery.has(sessionId); }
+  acknowledgeRecovery(sessionId: string): void { this.pendingRecovery.delete(sessionId); }
   constructor(readonly directory: string) {}
   async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'backups', 'evidence']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
   async captureLock<T>(work: () => Promise<T>): Promise<T> {
@@ -153,11 +161,26 @@ export class SnapshotStore {
         // A stale inbox must not undo hash-verified native recovery or host settlement.
         // A genuinely newer capture version is still imported normally.
         if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
+        // Newer whole-run captures also contain unchanged, pre-recovery entries.
+        // Carry forward only exact checkpoints; changed evidence must import normally.
+        if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
+          const files: Record<string, string> = Object.create(null);
+          for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
+            if (captureCheckpoint(run.changes[value]) !== checkpoint || !current.changes[value]) continue;
+            run.changes[value] = current.changes[value]; files[value] = checkpoint;
+          }
+          if (Object.keys(files).length) {
+            run.hostRecovery = { captureVersion: run.contentVersion ?? 0, files };
+            const order = [...Object.keys(current.changes).filter(value => run.changes[value]), ...Object.keys(run.changes).filter(value => !current.changes[value])];
+            run.changes = Object.fromEntries(order.map(value => [value, run.changes[value]]));
+          }
+        }
         // Main owns bindings, but a steering continuation invalidates the previous final reply.
         const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
         run.bindings = sameReply ? current?.bindings ?? {} : {};
         if (run.generation !== generation && run.state === 'running') { run.state = 'incomplete'; run.incomplete = true; }
         await this.writeRun(run);
+        if (!current || current.contentVersion !== run.contentVersion || current.state !== run.state || JSON.stringify(current.changes) !== JSON.stringify(run.changes)) this.pendingRecovery.add(run.sessionId);
         // Open runs remain an inbox source; settled ones have no late writer once retired.
         if (run.state !== 'running') await fs.rm(path.join(this.directory, 'inbox', entry), { force: true });
       } catch { /* A corrupt capture is isolated, never imported as trusted history. */ }
@@ -208,6 +231,7 @@ export class SnapshotStore {
         for (const file of await fs.readdir(dir)) { const target = path.join(dir, file); const s = await fs.lstat(target); if (s.isFile() && !s.isSymbolicLink()) await fs.unlink(target); }
       }
       await this.saveComments([]); await fs.rm(path.join(this.directory, 'restores.json'), { force: true });
+      this.pendingRecovery.clear();
     });
   }
 }

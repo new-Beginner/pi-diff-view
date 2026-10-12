@@ -5,7 +5,7 @@ import { MAX_TEXT_BYTES, type CaptureRun, type CapturedChange, type CaptureIdent
 import { absentSnapshot, assertPublicPath, canonical, digest, inside, snapshotFromBytes } from './path-policy';
 import { isImagePath } from './review-file-policy';
 import { replayRecordedEdit } from './edit-replay';
-import type { SnapshotStore } from './storage';
+import { captureCheckpoint, type SnapshotStore } from './storage';
 
 type RecordValue = Record<string, any>;
 type HistoryChange = CapturedChange & { note?: string; oldPath?: string };
@@ -264,13 +264,13 @@ export class HostHistoryImporter {
         const last = members.filter(m => m.role === 'assistant' || m.role === 'tool').at(-1);
         const live = running && user === users.at(-1);
         const reply = !live && last?.role === 'assistant' && last.meta.status === 'complete' && last.blocks.some(b => b.type === 'text') ? last : undefined;
-        const saved = previous ?? duplicate;
+        const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every(m => m.createdAt <= saved.endedAt!) ? saved.replyMessageId : undefined;
         const replyId = reply?.id ?? retainedReply;
         const changes: Record<string, HistoryChange> = Object.create(null);
         for (const e of turnEvents) {
           const c = capture(e.meta.path), old = changes[c.path];
-          const recorded = previous?.changes[c.path];
+          const recorded = saved?.changes[c.path];
           // Cleanup must not discard already verified bytes for this exact final tool/file.
           if (e.toolOnly && recorded?.capture?.identity === c.identity && [`native:${e.block?.callId}`, `native:${e.message.id}`].includes(recorded.evidence?.at(-1) ?? '')) {
             for (const side of ['before', 'after'] as const) if (e[side]!.kind === 'unavailable' && !HASH.test(e[side]!.hash)) e[side] = recorded[side];
@@ -284,6 +284,7 @@ export class HostHistoryImporter {
         const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live ? undefined : retainedReply ? saved!.endedAt : last?.createdAt ?? turnEvents.at(-1)!.message.createdAt, state: live ? 'running' : replyId ? 'completed' : 'incomplete', fileCount: Object.keys(changes).length, incomplete, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
         if (duplicate) {
           const liveRun = (await this.store.getRun(duplicate.id))!;
+          const recoveredFiles = { ...liveRun.hostRecovery?.files };
           let changed = false;
           if (liveRun.userMessageId !== user.id || liveRun.boundary !== 'user') { liveRun.userMessageId = user.id; liveRun.boundary = 'user'; changed = true; }
           if (replyId && liveRun.replyMessageId !== replyId) { liveRun.replyMessageId = replyId; changed = true; }
@@ -292,7 +293,10 @@ export class HostHistoryImporter {
             const complete = change.before.kind === 'text' && change.after.kind === 'text';
             if (!old || (complete && (old.ambiguous || old.before.kind === 'unavailable' || old.after.kind === 'unavailable')) || old.evidence?.some(e => e.startsWith('native:'))) {
               const signature = (c: HistoryChange | undefined) => c && JSON.stringify({ ...c, diffStats: undefined });
-              if (signature(old) !== signature(change)) { liveRun.changes[value] = change; changed = true; }
+              if (signature(old) !== signature(change)) {
+                recoveredFiles[value] ??= captureCheckpoint(old);
+                liveRun.changes[value] = change; changed = true;
+              }
             }
           }
           if (liveRun.state !== run.state || liveRun.endedAt !== run.endedAt) { liveRun.state = run.state; liveRun.endedAt = run.endedAt; changed = true; }
@@ -301,7 +305,9 @@ export class HostHistoryImporter {
           // Do not acknowledge an inbox version that has not actually been imported.
           // A writer may have produced complete snapshots while native recovery was scanning.
           const captureVersion = liveRun.hostRecovery?.captureVersion ?? liveRun.contentVersion ?? 0;
-          if (liveRun.hostRecovery?.captureVersion !== captureVersion) { liveRun.hostRecovery = { captureVersion }; changed = true; }
+          if (liveRun.hostRecovery?.captureVersion !== captureVersion || JSON.stringify(liveRun.hostRecovery?.files ?? {}) !== JSON.stringify(recoveredFiles)) {
+            liveRun.hostRecovery = { captureVersion, files: recoveredFiles }; changed = true;
+          }
           d.runIds.push(liveRun.id);
           if (changed) { liveRun.contentVersion = (liveRun.contentVersion ?? 0) + 1; await this.store.writeRun(liveRun); d.imported++; }
           else d.unchanged++;

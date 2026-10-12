@@ -1,0 +1,33 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.8",
+  "package": "plugin/dist/local.diff-view-1.4.8.piplug",
+  "packageBytes": 2114117,
+  "packageFiles": 70,
+  "sha256": "e063dadb93da5a621b2be17f30649db3506dbea4f94281cef5f406d489b053b4",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 37, "testsPassed": 322, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 114, "testsFailed": 0, "browser": "local Chrome", "host": "production bundle and source UI with mock host bridge" },
+    "boundedCodeReview": "One read-only code review; no concrete defects reported; reviewer did not inspect regression test cases",
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "gitDiffCheck": "passed",
+    "projectIndexContent": "git diff --cached --exit-code passed"
+  },
+  "changes": [
+    "Preserve recovered historical content and native-only files using exact per-file capture checkpoints across newer whole-run snapshots",
+    "Import and recover pending session captures before publishing sidebar review data, without a second post-recovery import",
+    "Reuse verified duplicate-capture historical bytes after native evidence cleanup",
+    "Keep chronological file order and revalidate genuinely changed evidence"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false, "projectStageResetCommitPerformed": false },
+  "limitations": [
+    "Manual reload or package installation is required",
+    "True missing historical content remains unavailable; current workspace and Git content are not used to fabricate history",
+    "Native intermittent UI behavior still needs observation after updating; browser checks use a mock host bridge"
+  ],
+  "report": "docs/verification-1.4.8.md"
+}

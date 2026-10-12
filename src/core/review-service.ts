@@ -152,13 +152,13 @@ export class ReviewService {
     if (!summary.files.length && offset < cached.files.length) fail('SUMMARY_LIMIT', 'File metadata exceeds summary bridge budget');
     return summary;
   }
-  async review(request: ReviewRequest): Promise<ReviewSummary> {
+  async review(request: ReviewRequest, inboxImported = false): Promise<ReviewSummary> {
     if (!request || !['unstaged', 'staged', 'commit', 'branch', 'lastTurn', 'turn'].includes(request.scope)) fail('INVALID_SCOPE', 'Unknown review scope');
     // Exact recorded-task opens do not enumerate unrelated history or run Git discovery.
     let root = request.root, files: InternalFile[] = [], git: GitReview | undefined, run: CaptureRun | undefined, notice: string | undefined;
     if (request.scope === 'lastTurn' || request.scope === 'turn') {
       this.validateTurn(request, request.scope === 'turn');
-      await this.store.importInbox(this.generation);
+      if (!inboxImported) await this.store.importInbox(this.generation);
       run = request.scope === 'turn' ? await this.store.getRun(request.runId!, false, false) ?? undefined : (await this.store.listRuns(false)).find(r => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
       if (run?.sessionId !== request.sessionId || (root && run && canonical(run.root) !== canonical(root))) run = undefined;
       await this.authorize(request.sessionId, run);

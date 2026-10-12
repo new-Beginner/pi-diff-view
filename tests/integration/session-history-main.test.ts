@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { digest } from '../../src/core/path-policy';
 import { transcriptEvidence, evidenceChunks, evidenceRevision } from '../../src/core/host-transcript';
+import { SnapshotStore } from '../../src/core/storage';
 it('main imports authorized session evidence, isolates shared roots and resolves live user identity', async () => {
   const temp = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'history-main-'));
   const root = path.join(temp, 'project'), host = path.join(temp, 'host'), data = path.join(host, 'plugins', 'data', 'local.diff-view'), entry = path.join(temp, 'main.cjs');
@@ -45,6 +46,16 @@ it('main imports authorized session evidence, isolates shared roots and resolves
     await plugin.onRendererCall('sessionContext', { sessionId: 's1', root, running: false });
     expect((await plugin.onRendererCall('replyCards', { sessionId: 's1' })).cards.map((c: any) => c.messageId)).toEqual(['reply-s1']);
     expect((await plugin.onRendererCall('replyCards', { sessionId: 's2' })).cards.map((c: any) => c.messageId)).toEqual(['reply-s2']);
+    // A newly imported capture must recover before publishing, even inside the 2s throttle.
+    const snapshots = new SnapshotStore(data), native = (await snapshots.getRun(running.runId))!;
+    const original = native.changes['s1.txt'];
+    const damaged = { ...native, id: 'new-agent-capture', source: undefined, generation: 'agent', contentVersion: 4, hostRecovery: undefined, changes: { 's1.txt': { ...original, evidence: ['edit:call-s1'], ambiguous: true, before: { ...original.before, kind: 'unavailable' as const, text: null }, after: { ...original.after, kind: 'unavailable' as const, text: null } } } };
+    await snapshots.writeRun(damaged, true);
+    await fs.rm(path.join(data, 'runs', `${native.id}.json`));
+    const immediate = await plugin.onRendererCall('review', { scope: 'lastTurn', sessionId: 's1', root });
+    expect(immediate.runId).toBe(damaged.id);
+    expect(immediate.files[0]).toMatchObject({ kind: 'text', statsKnown: true, additions: 1, deletions: 1 });
+    expect((await plugin.onRendererCall('file', { reviewId: immediate.id, fileId: immediate.files[0].id })).hunks.length).toBeGreaterThan(0);
     await fs.appendFile(path.join(host, 'sessions', 's1.jsonl'), '\n' + JSON.stringify({ type: 'message', id: 'new-user-s1', role: 'user', blocks: [], createdAt: new Date().toISOString(), meta: { status: 'complete' } }));
     await plugin.onRendererCall('sessionContext', { sessionId: 's1', root, running: true });
     expect(await plugin.onRendererCall('runningChanges', { sessionId: 's1', since: 0, taskId: 'new-user-s1' })).toBeNull();

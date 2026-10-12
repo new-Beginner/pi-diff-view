@@ -161,11 +161,14 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' ')); return result;
   }
   const context = typeof args?.sessionId === 'string' ? contexts.get(args.sessionId) : undefined;
-  if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && Date.now() - context.syncedAt > 2000) {
-    context.syncedAt = Date.now();
+  const preparedReview = method === 'review' && history && context && (args.scope === 'turn' || args.scope === 'lastTurn');
+  if (preparedReview) await store!.importInbox(generation);
+  if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) {
     const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    context.syncedAt = Date.now(); store!.acknowledgeRecovery(args.sessionId);
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
   }
+  if (preparedReview) return s.review(args, true);
   if (method === 'runningChanges') {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
       context.updatedAt = Date.now(); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);

@@ -583,6 +583,10 @@ function stats(before, after) {
 // src/core/storage.ts
 var MAX_RUNS = 200;
 var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+function captureCheckpoint(change) {
+  const snapshot = (value) => [value.exists, value.kind, value.hash, value.size, value.mode];
+  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after)] : null));
+}
 async function atomicJson(file, value) {
   await fs2.mkdir(path2.dirname(file), { recursive: true, mode: 448 });
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -641,6 +645,13 @@ function validRun(run, id2) {
 var SnapshotStore = class {
   constructor(directory) {
     this.directory = directory;
+  }
+  pendingRecovery = /* @__PURE__ */ new Set();
+  needsRecovery(sessionId) {
+    return this.pendingRecovery.has(sessionId);
+  }
+  acknowledgeRecovery(sessionId) {
+    this.pendingRecovery.delete(sessionId);
   }
   async init() {
     for (const sub of ["blobs", "inbox", "runs", "backups", "evidence"]) await fs2.mkdir(path2.join(this.directory, sub), { recursive: true, mode: 448 });
@@ -783,6 +794,19 @@ var SnapshotStore = class {
           if (!run) continue;
           const current = await this.getRun(id2, false, false);
           if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
+          if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
+            const files = /* @__PURE__ */ Object.create(null);
+            for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
+              if (captureCheckpoint(run.changes[value]) !== checkpoint || !current.changes[value]) continue;
+              run.changes[value] = current.changes[value];
+              files[value] = checkpoint;
+            }
+            if (Object.keys(files).length) {
+              run.hostRecovery = { captureVersion: run.contentVersion ?? 0, files };
+              const order = [...Object.keys(current.changes).filter((value) => run.changes[value]), ...Object.keys(run.changes).filter((value) => !current.changes[value])];
+              run.changes = Object.fromEntries(order.map((value) => [value, run.changes[value]]));
+            }
+          }
           const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
           run.bindings = sameReply ? current?.bindings ?? {} : {};
           if (run.generation !== generation && run.state === "running") {
@@ -790,6 +814,7 @@ var SnapshotStore = class {
             run.incomplete = true;
           }
           await this.writeRun(run);
+          if (!current || current.contentVersion !== run.contentVersion || current.state !== run.state || JSON.stringify(current.changes) !== JSON.stringify(run.changes)) this.pendingRecovery.add(run.sessionId);
           if (run.state !== "running") await fs2.rm(path2.join(this.directory, "inbox", entry), { force: true });
         } catch {
         }
@@ -859,6 +884,7 @@ var SnapshotStore = class {
       }
       await this.saveComments([]);
       await fs2.rm(path2.join(this.directory, "restores.json"), { force: true });
+      this.pendingRecovery.clear();
     });
   }
 };

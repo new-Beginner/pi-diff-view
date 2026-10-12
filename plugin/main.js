@@ -677,6 +677,10 @@ function selectHunkText(before, after, hunkId) {
 // src/core/storage.ts
 var MAX_RUNS = 200;
 var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+function captureCheckpoint(change) {
+  const snapshot = (value) => [value.exists, value.kind, value.hash, value.size, value.mode];
+  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after)] : null));
+}
 async function atomicJson(file, value) {
   await import_promises2.default.mkdir(import_node_path2.default.dirname(file), { recursive: true, mode: 448 });
   const temp = `${file}.${(0, import_node_crypto2.randomUUID)()}.tmp`;
@@ -727,6 +731,13 @@ function validRun(run2, id) {
 var SnapshotStore = class {
   constructor(directory) {
     this.directory = directory;
+  }
+  pendingRecovery = /* @__PURE__ */ new Set();
+  needsRecovery(sessionId) {
+    return this.pendingRecovery.has(sessionId);
+  }
+  acknowledgeRecovery(sessionId) {
+    this.pendingRecovery.delete(sessionId);
   }
   async init() {
     for (const sub of ["blobs", "inbox", "runs", "backups", "evidence"]) await import_promises2.default.mkdir(import_node_path2.default.join(this.directory, sub), { recursive: true, mode: 448 });
@@ -869,6 +880,19 @@ var SnapshotStore = class {
           if (!run2) continue;
           const current = await this.getRun(id, false, false);
           if (current?.hostRecovery && (run2.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
+          if (current?.hostRecovery?.files && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root) && (!run2.userMessageId || run2.userMessageId === current.userMessageId)) {
+            const files = /* @__PURE__ */ Object.create(null);
+            for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
+              if (captureCheckpoint(run2.changes[value]) !== checkpoint || !current.changes[value]) continue;
+              run2.changes[value] = current.changes[value];
+              files[value] = checkpoint;
+            }
+            if (Object.keys(files).length) {
+              run2.hostRecovery = { captureVersion: run2.contentVersion ?? 0, files };
+              const order = [...Object.keys(current.changes).filter((value) => run2.changes[value]), ...Object.keys(run2.changes).filter((value) => !current.changes[value])];
+              run2.changes = Object.fromEntries(order.map((value) => [value, run2.changes[value]]));
+            }
+          }
           const sameReply = run2.finalReply?.hash === current?.finalReply?.hash && run2.finalReply?.timestamp === current?.finalReply?.timestamp;
           run2.bindings = sameReply ? current?.bindings ?? {} : {};
           if (run2.generation !== generation2 && run2.state === "running") {
@@ -876,6 +900,7 @@ var SnapshotStore = class {
             run2.incomplete = true;
           }
           await this.writeRun(run2);
+          if (!current || current.contentVersion !== run2.contentVersion || current.state !== run2.state || JSON.stringify(current.changes) !== JSON.stringify(run2.changes)) this.pendingRecovery.add(run2.sessionId);
           if (run2.state !== "running") await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
         } catch {
         }
@@ -945,6 +970,7 @@ var SnapshotStore = class {
       }
       await this.saveComments([]);
       await import_promises2.default.rm(import_node_path2.default.join(this.directory, "restores.json"), { force: true });
+      this.pendingRecovery.clear();
     });
   }
 };
@@ -1948,12 +1974,12 @@ var ReviewService = class {
     if (!summary.files.length && offset < cached.files.length) fail("SUMMARY_LIMIT", "File metadata exceeds summary bridge budget");
     return summary;
   }
-  async review(request) {
+  async review(request, inboxImported = false) {
     if (!request || !["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(request.scope)) fail("INVALID_SCOPE", "Unknown review scope");
     let root = request.root, files = [], git2, run2, notice;
     if (request.scope === "lastTurn" || request.scope === "turn") {
       this.validateTurn(request, request.scope === "turn");
-      await this.store.importInbox(this.generation);
+      if (!inboxImported) await this.store.importInbox(this.generation);
       run2 = request.scope === "turn" ? await this.store.getRun(request.runId, false, false) ?? void 0 : (await this.store.listRuns(false)).find((r) => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
       if (run2?.sessionId !== request.sessionId || root && run2 && canonical(run2.root) !== canonical(root)) run2 = void 0;
       await this.authorize(request.sessionId, run2);
@@ -2875,13 +2901,13 @@ var HostHistoryImporter = class {
         const last = members.filter((m) => m.role === "assistant" || m.role === "tool").at(-1);
         const live = running && user === users.at(-1);
         const reply = !live && last?.role === "assistant" && last.meta.status === "complete" && last.blocks.some((b) => b.type === "text") ? last : void 0;
-        const saved = previous ?? duplicate;
+        const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every((m) => m.createdAt <= saved.endedAt) ? saved.replyMessageId : void 0;
         const replyId = reply?.id ?? retainedReply;
         const changes2 = /* @__PURE__ */ Object.create(null);
         for (const e of turnEvents) {
           const c = capture(e.meta.path), old = changes2[c.path];
-          const recorded = previous?.changes[c.path];
+          const recorded = saved?.changes[c.path];
           if (e.toolOnly && recorded?.capture?.identity === c.identity && [`native:${e.block?.callId}`, `native:${e.message.id}`].includes(recorded.evidence?.at(-1) ?? "")) {
             for (const side of ["before", "after"]) if (e[side].kind === "unavailable" && !HASH.test(e[side].hash)) e[side] = recorded[side];
           }
@@ -2900,6 +2926,7 @@ var HostHistoryImporter = class {
         const run2 = { version: 2, id, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live ? void 0 : retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1).message.createdAt, state: live ? "running" : replyId ? "completed" : "incomplete", fileCount: Object.keys(changes2).length, incomplete, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
         if (duplicate) {
           const liveRun = await this.store.getRun(duplicate.id);
+          const recoveredFiles = { ...liveRun.hostRecovery?.files };
           let changed = false;
           if (liveRun.userMessageId !== user.id || liveRun.boundary !== "user") {
             liveRun.userMessageId = user.id;
@@ -2916,6 +2943,7 @@ var HostHistoryImporter = class {
             if (!old || complete && (old.ambiguous || old.before.kind === "unavailable" || old.after.kind === "unavailable") || old.evidence?.some((e) => e.startsWith("native:"))) {
               const signature2 = (c) => c && JSON.stringify({ ...c, diffStats: void 0 });
               if (signature2(old) !== signature2(change)) {
+                recoveredFiles[value] ??= captureCheckpoint(old);
                 liveRun.changes[value] = change;
                 changed = true;
               }
@@ -2932,8 +2960,8 @@ var HostHistoryImporter = class {
             changed = true;
           }
           const captureVersion = liveRun.hostRecovery?.captureVersion ?? liveRun.contentVersion ?? 0;
-          if (liveRun.hostRecovery?.captureVersion !== captureVersion) {
-            liveRun.hostRecovery = { captureVersion };
+          if (liveRun.hostRecovery?.captureVersion !== captureVersion || JSON.stringify(liveRun.hostRecovery?.files ?? {}) !== JSON.stringify(recoveredFiles)) {
+            liveRun.hostRecovery = { captureVersion, files: recoveredFiles };
             changed = true;
           }
           d.runIds.push(liveRun.id);
@@ -3919,11 +3947,15 @@ async function execute(s, method, args) {
     return result;
   }
   const context = typeof args?.sessionId === "string" ? contexts.get(args.sessionId) : void 0;
-  if (history && context && ["runningChanges", "replyCards", "bootstrap", "review", "turnSummary"].includes(method) && Date.now() - context.syncedAt > 2e3) {
-    context.syncedAt = Date.now();
+  const preparedReview = method === "review" && history && context && (args.scope === "turn" || args.scope === "lastTurn");
+  if (preparedReview) await store.importInbox(generation);
+  if (history && context && ["runningChanges", "replyCards", "bootstrap", "review", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
     const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    context.syncedAt = Date.now();
+    store.acknowledgeRecovery(args.sessionId);
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
   }
+  if (preparedReview) return s.review(args, true);
   if (method === "runningChanges") {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
       context.updatedAt = Date.now();

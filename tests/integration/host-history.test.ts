@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HostHistoryImporter, hostHistoryRunId, type HostHistoryRun } from '../../src/core/host-history';
 import { hostEvidenceMessages } from '../../src/core/host-transcript';
 import { SnapshotStore } from '../../src/core/storage';
-import { digest, snapshotOfText } from '../../src/core/path-policy';
+import { canonical, digest, snapshotOfText } from '../../src/core/path-policy';
 
 let temp: string, host: string, root: string, store: SnapshotStore;
 const sid = 'session-one';
@@ -279,4 +279,49 @@ it.each(['hash', 'path', 'failed'])('refuses Edit replay with invalid %s evidenc
   await evidence('bad-edit', { beforeExists: true, beforeHash: digest('old\n'), afterHash: digest(invalid === 'hash' ? 'not-new\n' : 'new\n') }, 'old\n');
   await importer().syncSession(sid, root);
   expect((await get())!.changes['a.txt'].after.kind).toBe('unavailable');
+});
+
+it('keeps recovered TS files and native-only paths across newer unchanged whole-run captures', async () => {
+  await session([user(), tool('edit-ts', 'Edit', { path: 'src/example.ts', ops: 'PUT 1.=1:\n+new' }), reply()]);
+  await evidence('edit-ts', { path: 'src/example.ts', operation: 'edit', beforeExists: true, beforeHash: digest('old\n') }, 'old\n', 'new\n');
+  await importer().syncSession(sid, root, { running: true });
+  const native = (await get())!;
+  const original = native.changes['src/example.ts'];
+  const damaged = { ...native, id: 'live-ts-capture', source: undefined, generation: 'agent', contentVersion: 1, changes: { 'src/example.ts': { ...original, evidence: ['edit:edit-ts'], ambiguous: true, before: { ...original.before, kind: 'unavailable' as const, text: null }, after: { ...original.after, kind: 'unavailable' as const, text: null } } } };
+  await store.writeRun(damaged); await fs.rm(path.join(store.directory, 'runs', `${native.id}.json`));
+  await importer().syncSession(sid, root, { running: true });
+  expect((await store.getRun(damaged.id))!.hostRecovery?.files?.['src/example.ts']).toBeDefined();
+  // A later native-only file is also absent from the agent's bounded snapshots.
+  await session([user(), tool('edit-ts', 'Edit', { path: 'src/example.ts' }), tool('native-only', 'Write', { path: 'native.ts', content: 'native\n' })]);
+  await evidence('native-only', { path: 'native.ts', afterHash: digest('native\n') }, undefined, 'native\n');
+  await importer().syncSession(sid, root, { running: true });
+  for (const version of [2, 3]) {
+    const latestPath = path.join(root, 'latest.ts');
+    await store.writeRun({ ...damaged, contentVersion: version, changes: { ...damaged.changes, 'latest.ts': { capture: { ...original.capture!, path: 'latest.ts', absolutePath: latestPath, identity: canonical(latestPath), id: digest(canonical(latestPath)).slice(0, 24) }, before: snapshotOfText('a\n'), after: snapshotOfText(`new-${version}\n`), evidence: [`write:latest-${version}`] } } }, true);
+    await store.importInbox('agent');
+    const run = (await store.getRun(damaged.id))!;
+    expect(run.changes['src/example.ts']).toMatchObject({ before: { kind: 'text', text: 'old\n' }, after: { kind: 'text', text: 'new\n' } });
+    expect(run.changes['src/example.ts'].ambiguous).toBeUndefined();
+    expect(run.changes['native.ts'].after.text).toBe('native\n');
+    expect(run.changes['latest.ts'].after.text).toBe(`new-${version}\n`);
+    expect(Object.keys(run.changes)).toEqual(['src/example.ts', 'native.ts', 'latest.ts']);
+  }
+  // New evidence for this same file must not be masked by the checkpoint.
+  await store.writeRun({ ...damaged, contentVersion: 4, changes: { 'src/example.ts': { ...damaged.changes['src/example.ts'], evidence: ['edit:edit-ts', 'edit:changed-ts'] } } }, true);
+  await store.importInbox('agent');
+  expect((await store.getRun(damaged.id))!.changes['src/example.ts'].ambiguous).toBe(true);
+});
+
+it('retains recovered duplicate-capture bytes when native folders disappear and only successful tool calls remain', async () => {
+  const call = tool('cleanup-ts', 'Write', { path: path.join(root, 'example.ts'), content: 'new\n' });
+  await session([user(), call, reply()]);
+  await evidence('cleanup-ts', { path: 'example.ts', beforeExists: true, beforeHash: digest('old\n') }, 'old\n', 'new\n');
+  await importer().syncSession(sid, root);
+  const native = (await get())!;
+  await store.writeRun({ ...native, id: 'duplicate-cleanup', source: undefined, generation: 'agent', contentVersion: 1 });
+  await fs.rm(path.join(store.directory, 'runs', `${native.id}.json`));
+  await importer().syncSession(sid, root);
+  await fs.rm(path.join(host, 'review-changes'), { recursive: true });
+  await importer().syncSession(sid, root);
+  expect((await store.getRun('duplicate-cleanup'))!.changes['example.ts']).toMatchObject({ before: { kind: 'text', text: 'old\n' }, after: { kind: 'text', text: 'new\n' } });
 });
