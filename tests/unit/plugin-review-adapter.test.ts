@@ -113,3 +113,21 @@ it('never falls back to expanding a diff when File Manager is missing or the ses
   await expect(adapter.openFile('s', 'D:/a.ts')).rejects.toMatchObject({ code: 'SIDEBAR_SESSION' });
   expect(f.calls).toEqual([]); adapter.close();
 });
+it('reuses a warm File Manager tab and skips opening an already active identical file', async () => {
+  const f = fixture(); f.state.pluginViews.push({ pluginId: 'pi.file-manager', viewId: 'manager' });
+  const tab = { ...f.modules.tab('pi.file-manager', 'manager'), location: 'D:/project/a.ts', label: 'Files' };
+  Object.assign(f.state, { workPanelTabs: [tab], workPanelOpen: true, activeWorkPanelTabId: tab.id });
+  const adapter = createPluginReviewAdapter({ load: async () => f.modules });
+  await adapter.openFile('s', tab.location); expect(f.calls).toEqual([]);
+  await adapter.openFile('s', 'D:/project/b.ts');
+  expect(f.calls).toEqual([{ sessionId: 's', tab: { ...tab, location: 'D:/project/b.ts' } }]);
+  adapter.close();
+});
+it('rejects a stale file navigation generation after an asynchronous host load', async () => {
+  const f = fixture(); f.state.pluginViews.push({ pluginId: 'pi.file-manager', viewId: 'manager' });
+  let release!: () => void, current = true;
+  const adapter = createPluginReviewAdapter({ load: async () => { await new Promise<void>(resolve => { release = resolve; }); return f.modules; } });
+  const pending = adapter.openFile('s', 'D:/project/a.ts', () => { if (!current) throw new Error('Stale navigation generation'); });
+  current = false; release();
+  await expect(pending).rejects.toThrow('Stale navigation generation'); expect(f.calls).toEqual([]); adapter.close();
+});

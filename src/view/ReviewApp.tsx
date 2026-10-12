@@ -274,11 +274,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       const { requestId } = await transport.invoke<{ requestId: string }>('openFile', { reviewId: matchingReview.id, fileId: file.id, sessionId: matchingReview.sessionId });
       const deadline = Date.now() + 12000;
       while (live.current && scopeRef.current === scope) {
-        const result = await transport.invoke<{ state: 'pending' | 'done' | 'error'; error?: string }>('openFile', { requestId });
+        const result = await transport.invoke<{ state: 'pending' | 'done' | 'error'; error?: string }>('openFile', { requestId, wait: true });
         if (result.state === 'done') return;
         if (result.state === 'error') throw new Error(result.error || t.error);
         if (Date.now() > deadline) throw new Error(locale.startsWith('zh') ? '文件管理器没有响应，请重试。' : 'File Manager did not respond. Please retry.');
-        await new Promise(resolve => setTimeout(resolve, 300));
       }
     } catch (err) { if (live.current && scopeRef.current === scope) setError(errorText(err)); }
     finally { fileOpenPending.current = false; if (live.current) setOpeningFile(false); }

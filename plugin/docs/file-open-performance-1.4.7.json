@@ -1,0 +1,14 @@
+{
+  "version": "1.4.7",
+  "sampleCount": 10,
+  "navigationMs": [2.71, 1.60, 1.44, 2.43, 1.88, 1.37, 1.33, 1.51, 1.63, 3.55],
+  "acknowledgementMs": [2.82, 1.67, 1.49, 2.51, 1.93, 1.41, 1.38, 1.55, 1.67, 3.58],
+  "firstOpenMs": 2.71,
+  "warmMedianMs": 1.60,
+  "warmP95Ms": 3.55,
+  "historyBlockedThroughout": true,
+  "sampleIntervalMs": 600,
+  "measurement": "Real built main, filesystem path validation, bounded transport, renderer navigation channel and tab adapter; mock native tab store",
+  "nativeColdStartMeasured": false,
+  "notes": "Measures plugin navigation delivery, not native File Manager content rendering, Electron IPC, directory scanning or first WebContents startup. No absolute native opening-time promise is made."
+}

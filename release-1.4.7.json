@@ -1,0 +1,44 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.7",
+  "package": "plugin/dist/local.diff-view-1.4.7.piplug",
+  "packageBytes": 2107150,
+  "packageFiles": 69,
+  "sha256": "ab34a302101d5ded34e337be80d7777cc12300f19600de265d2245ca00402819",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 37, "testsPassed": 320, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 114, "testsFailed": 0, "browser": "local Chrome", "host": "production bundle and source UI with mock host bridge" },
+    "concurrencyReview": "One read-only review completed; no concrete defects reported",
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "gitDiffCheck": "passed",
+    "projectIndexContent": "No staged changes; git diff --cached --exit-code passed"
+  },
+  "performance": {
+    "sampleCount": 10,
+    "firstOpenMs": 2.71,
+    "warmMedianMs": 1.60,
+    "warmP95Ms": 3.55,
+    "historyBlockedThroughout": true,
+    "measurement": "Real built main, path validation, bounded transport and navigation channel with mock native tab store",
+    "nativeColdStartMeasured": false,
+    "record": "docs/file-open-performance-1.4.7.json"
+  },
+  "changes": [
+    "Replace two-second history-feed delivery with an independent, bounded listener that wakes immediately on a file-open request",
+    "Wake acknowledgement waiters immediately instead of waiting a fixed 300 ms polling interval",
+    "Keep file navigation admission independent of slow ordinary responses while preserving the shared rolling six-request cap",
+    "Reuse existing File Manager tabs and skip redundant opens of an already active identical file",
+    "Cancel old listeners and recheck navigation generation after asynchronous host module loading"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false, "projectStageResetCommitPerformed": false },
+  "limitations": [
+    "Manual reload or package installation is required",
+    "Measured values describe the plugin navigation channel, not Electron IPC or native File Manager rendering/cold startup",
+    "The File Manager view and renderer extension must be enabled; existing path and session protections remain"
+  ],
+  "report": "docs/verification-1.4.7.md"
+}

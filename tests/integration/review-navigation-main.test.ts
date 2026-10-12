@@ -36,13 +36,22 @@ it('built main validates session-scoped navigation and restores selection after 
     const detail = await plugin.onPanelInvoke('diff.file', { reviewId: review.id, fileId }); expect(detail.file.path).toBe('file-120.txt');
     expect(detail.hunks[0].lines.some((line: any) => line.text === 'new')).toBe(true);
     await fs.writeFile(path.join(root, 'file-120.txt'), 'current\n');
-    const open = await plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 's' });
-    expect((await plugin.onRendererCall('replyCards', { sessionId: 'other' })).fileOpens).toEqual([]);
-    const feed = await plugin.onRendererCall('replyCards', { sessionId: 's' });
-    expect(feed.fileOpens).toEqual([{ ...open, sessionId: 's', path: path.join(root, 'file-120.txt') }]);
-    expect((await plugin.onRendererCall('replyCards', { sessionId: 's', revision: feed.revision })).fileOpens).toEqual([]);
-    await plugin.onRendererCall('openFile', { ...open, sessionId: 's', complete: true });
-    expect((await plugin.onPanelInvoke('diff.openFile', open)).state).toBe('done');
+    const listener = plugin.onRendererCall('openFile', { listen: true, sessionId: 's', listenerId: 'navigation-listener' });
+    const originalWorkspace = (globalThis as any).pi.workspace.get;
+    let releaseHistory!: () => void;
+    (globalThis as any).pi.workspace.get = () => new Promise(resolve => { releaseHistory = () => resolve({ path: root }); });
+    const blockedHistory = plugin.onPanelInvoke('diff.bootstrap', {});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    try {
+      const clickedAt = performance.now();
+      const open = await plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 's' });
+      expect(await listener).toEqual([{ ...open, sessionId: 's', path: path.join(root, 'file-120.txt') }]);
+      const acknowledgement = plugin.onPanelInvoke('diff.openFile', { ...open, wait: true });
+      await plugin.onRendererCall('openFile', { ...open, sessionId: 's', complete: true });
+      expect((await acknowledgement).state).toBe('done');
+      expect(performance.now() - clickedAt).toBeLessThan(1000);
+    } finally { (globalThis as any).pi.workspace.get = originalWorkspace; releaseHistory(); await blockedHistory; }
+    expect((await plugin.onRendererCall('replyCards', { sessionId: 's' })).fileOpens).toBeUndefined();
     await expect(plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 'other' })).rejects.toThrow();
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 's', runId: run.id, fileId: 'missing' })).rejects.toThrow('no longer');
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 'other', runId: run.id })).rejects.toThrow('not found');

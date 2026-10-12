@@ -29,3 +29,28 @@ it('deduplicates pending prefetches and isolates cache by transport', async () =
   resolve(detail); await new Promise(done => setTimeout(done, 0));
   prefetchDiffDetail(first, 'r', 'f'); expect(first.invoke).toHaveBeenCalledTimes(1);
 });
+it('navigation bypasses an in-flight slow response without blocking ordinary calls', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(10000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; queue.navigationTail = Promise.resolve(); await queue.tail;
+  let finishSlow!: (value: unknown) => void, finishListener!: (value: unknown) => void;
+  const invoke = vi.fn((method: string, args: any) => method === 'file' ? new Promise(resolve => { finishSlow = resolve; }) : args?.listen ? new Promise(resolve => { finishListener = resolve; }) : Promise.resolve({ ok: true }));
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const slow = transport.invoke('file'); await vi.advanceTimersByTimeAsync(0);
+  const opened = transport.invoke('openFile', { requestId: 'r' }); await vi.advanceTimersByTimeAsync(0);
+  await expect(opened).resolves.toEqual({ ok: true });
+  finishSlow({ ok: true }); await slow;
+  const listener = transport.invoke('openFile', { listen: true }); await vi.advanceTimersByTimeAsync(0);
+  const copied = transport.invoke('copyPath'); await vi.advanceTimersByTimeAsync(0);
+  await expect(copied).resolves.toEqual({ ok: true });
+  finishListener([]); await listener;
+});
+it('concurrent navigation and ordinary admissions still obey the rolling burst cap', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(10000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; queue.navigationTail = Promise.resolve(); await queue.tail;
+  const starts: number[] = [], invoke = vi.fn(async () => { starts.push(Date.now()); return { ok: true }; });
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const requests = Array.from({ length: 12 }, (_, i) => transport.invoke(i % 2 ? 'openFile' : 'copyPath'));
+  await vi.advanceTimersByTimeAsync(2100); await Promise.all(requests);
+  expect(starts).toHaveLength(12);
+  for (const at of starts) expect(starts.filter(time => time >= at && time < at + 1000).length).toBeLessThanOrEqual(6);
+});

@@ -139,11 +139,19 @@ function boundedTransport(invoke) {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error("Request exceeds the bridge payload limit (48 KiB)."));
     if (method === "saveComment" && bytes > 24e3) return Promise.reject(new Error("Comment payload too large; shorten the comment or excerpt."));
-    const request = queue.tail.catch(() => void 0).then(async () => {
-      queue.starts = queue.starts.filter((at) => Date.now() - at < 1e3);
-      if (queue.starts.length >= 6) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 1001 - (Date.now() - queue.starts[0]))));
-      queue.starts = queue.starts.filter((at) => Date.now() - at < 1e3);
-      queue.starts.push(Date.now());
+    const navigation = method === "openFile";
+    const admission = (navigation ? queue.navigationTail ?? Promise.resolve() : queue.tail).catch(() => void 0).then(async () => {
+      for (; ; ) {
+        queue.starts = queue.starts.filter((at) => Date.now() - at < 1e3);
+        if (queue.starts.length < 6) {
+          queue.starts.push(Date.now());
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, 1001 - (Date.now() - queue.starts[0]))));
+      }
+    });
+    if (navigation) queue.navigationTail = admission;
+    const request = admission.then(async () => {
       let timer;
       try {
         const response = await Promise.race([
@@ -158,7 +166,7 @@ function boundedTransport(invoke) {
         if (timer) clearTimeout(timer);
       }
     });
-    queue.tail = request;
+    if (!navigation) queue.tail = request;
     return request;
   };
   return { async invoke(method, args) {
@@ -474,15 +482,18 @@ function createPluginReviewAdapter(options = {}) {
       const opened = modules.store.getState();
       if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== REVIEW_TAB_ID) denied("SIDEBAR_OPEN", "\u4FA7\u680F\u672A\u6253\u5F00 / Sidebar did not open");
     },
-    async openFile(sessionId, path) {
+    async openFile(sessionId, path, guard) {
       if (typeof path !== "string" || !path || /[\0\r\n]/.test(path)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u6587\u4EF6\u8DEF\u5F84 / Invalid file path");
       const modules = await inspect();
       alive();
+      guard?.();
       const state = modules.store.getState();
       if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u70B9\u51FB / Session changed");
       if (!Array.isArray(state.pluginViews) || !state.pluginViews.some((view) => view.pluginId === "pi.file-manager" && view.viewId === "manager")) denied("SIDEBAR_VIEW", "PI-Desktop \u6587\u4EF6\u7BA1\u7406\u5668\u4E0D\u53EF\u7528\uFF0C\u8BF7\u542F\u7528\u5185\u7F6E\u6587\u4EF6\u7BA1\u7406\u5668 / File Manager unavailable");
       if (typeof state.openWorkPanelTabForSession !== "function") denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u4E0D\u652F\u6301\u6253\u5F00\u6587\u4EF6\u7BA1\u7406\u5668 / File Manager tab opener unavailable");
-      const tab = { ...modules.tab("pi.file-manager", "manager"), location: path };
+      const existing = state.workPanelTabs?.find((tab2) => tab2.id === "plugin:pi.file-manager/manager" && tab2.kind === "plugin" && tab2.resource === "pi.file-manager/manager");
+      if (existing?.location === path && state.workPanelOpen && state.activeWorkPanelTabId === existing.id) return;
+      const tab = { ...existing ?? modules.tab("pi.file-manager", "manager"), location: path };
       state.openWorkPanelTabForSession(sessionId, tab);
       const opened = modules.store.getState();
       if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== tab.id) denied("SIDEBAR_OPEN", "\u6587\u4EF6\u7BA1\u7406\u5668\u672A\u6253\u5F00 / File Manager did not open");
@@ -669,6 +680,50 @@ var runningPillStyle = `
 @media(max-width:420px){.dv-running-pill{font-size:13px;padding:7px 10px}}
 `;
 
+// src/renderer/file-open-channel.ts
+function startFileOpenChannel(transport, sessionId, open, isCurrent) {
+  const listenerId = crypto.randomUUID();
+  let stopped = false, retryTimer;
+  const alive = () => !stopped && isCurrent();
+  const receive = async () => {
+    while (alive()) {
+      try {
+        const requests = await transport.invoke("openFile", { listen: true, sessionId, listenerId });
+        if (!alive()) return;
+        if (!Array.isArray(requests)) throw new Error("Invalid file navigation response");
+        for (const request of requests) {
+          if (!alive()) return;
+          let error;
+          try {
+            if (request.sessionId !== sessionId) throw new Error("File navigation session changed");
+            await open(sessionId, request.path, () => {
+              if (!alive()) throw new Error("File navigation session changed");
+            });
+          } catch (reason) {
+            error = String(reason?.message ?? reason);
+          }
+          if (!alive()) return;
+          await transport.invoke("openFile", { requestId: request.requestId, sessionId, complete: true, error });
+        }
+      } catch {
+        if (alive()) retryTimer = setTimeout(() => {
+          retryTimer = void 0;
+          void receive();
+        }, 1e3);
+        return;
+      }
+    }
+  };
+  void receive();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    void transport.invoke("openFile", { cancelListen: listenerId, sessionId }).catch(() => {
+    });
+  };
+}
+
 // src/renderer/index.tsx
 var hub = null;
 var realm2 = globalThis;
@@ -719,8 +774,11 @@ function trackSession(current) {
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
     if (current.activeSession !== sessionId) {
+      current.stopFileOpen?.();
       current.activeSession = sessionId;
       current.sessionVersion++;
+      const version = current.sessionVersion;
+      current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id, path, guard) => current.adapter.openFile(id, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : void 0;
       wake(current);
     }
     if (context) {
@@ -766,17 +824,6 @@ async function restoreFeed(current, sessionId) {
   current.feeds.set(sessionId, feed);
   const first = await current.transport.invoke("replyCards", { sessionId, revision: feed.revision });
   if (!same(current)) return feed;
-  for (const request of first.fileOpens ?? []) {
-    let error;
-    try {
-      await current.adapter.openFile(request.sessionId, request.path);
-    } catch (reason) {
-      error = String(reason?.message ?? reason);
-    }
-    if (!same(current)) return feed;
-    await current.transport.invoke("openFile", { requestId: request.requestId, sessionId: request.sessionId, complete: true, error }).catch(() => {
-    });
-  }
   report(current, "bootstrap-ok");
   if (current.appearance.locale !== first.locale || current.appearance.base !== first.base) {
     current.appearance = { locale: first.locale, base: first.base };
@@ -941,6 +988,7 @@ function onLoad(pi, options = {}) {
 function onUnload() {
   const current = hub;
   if (current) {
+    current.stopFileOpen?.();
     current.disposed = true;
     if (current.timer) clearTimeout(current.timer);
     if (current.sessionRetry) clearTimeout(current.sessionRetry);

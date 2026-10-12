@@ -2,8 +2,8 @@ import type { UiTransport } from '../core/contracts';
 
 // A bounded burst avoids imposing 160ms on every step of a cold open.
 // Never exceed six short requests in a rolling second (including polls/diagnostics).
-const realm = globalThis as typeof globalThis & { __piDiffBurstQueue?: { tail: Promise<unknown>; starts: number[] } };
-const queue = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
+const realm = globalThis as typeof globalThis & { __piDiffBurstQueue?: { tail: Promise<unknown>; navigationTail?: Promise<unknown>; starts: number[] } };
+const queue: NonNullable<typeof realm.__piDiffBurstQueue> = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
 const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'card', 'replyCards']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
@@ -11,11 +11,18 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error('Request exceeds the bridge payload limit (48 KiB).'));
     if (method === 'saveComment' && bytes > 24000) return Promise.reject(new Error('Comment payload too large; shorten the comment or excerpt.'));
-    const request = queue.tail.catch(() => undefined).then(async () => {
-      queue.starts = queue.starts.filter(at => Date.now() - at < 1000);
-      if (queue.starts.length >= 6) await new Promise(resolve => setTimeout(resolve, Math.max(0, 1001 - (Date.now() - queue.starts[0]))));
-      queue.starts = queue.starts.filter(at => Date.now() - at < 1000);
-      queue.starts.push(Date.now());
+    const navigation = method === 'openFile';
+    const admission = (navigation ? queue.navigationTail ?? Promise.resolve() : queue.tail).catch(() => undefined).then(async () => {
+      // Admission is serialized, not the long-poll response. Recheck after every wait
+      // so concurrent navigation and ordinary traffic still share the six-request cap.
+      for (;;) {
+        queue.starts = queue.starts.filter(at => Date.now() - at < 1000);
+        if (queue.starts.length < 6) { queue.starts.push(Date.now()); break; }
+        await new Promise(resolve => setTimeout(resolve, Math.max(0, 1001 - (Date.now() - queue.starts[0]))));
+      }
+    });
+    if (navigation) queue.navigationTail = admission;
+    const request = admission.then(async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const response = await Promise.race([
@@ -26,7 +33,7 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
         return response;
       } finally { if (timer) clearTimeout(timer); }
     });
-    queue.tail = request;
+    if (!navigation) queue.tail = request;
     return request;
   };
   return { async invoke<T>(method: string, args?: unknown): Promise<T> {

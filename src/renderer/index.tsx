@@ -8,7 +8,7 @@ import TurnChangeSummary from './TurnChangeSummary';
 import summaryStyle from './summary-style';
 import { createPluginReviewAdapter, type PluginReviewAdapter } from './plugin-review-adapter';
 import RunningChangePill, { runningPillStyle } from './RunningChangePill';
-import type { FileOpenRequest } from '../core/file-open';
+import { startFileOpenChannel } from './file-open-channel';
 type Disposer = () => void;
 interface DraftSnapshot { text: string; marks: unknown[]; generation: number }
 export interface RendererHost {
@@ -25,6 +25,7 @@ interface Hub {
   appearance: { locale: string; base: 'light' | 'dark' }; listeners: Set<() => void>;
   cards: Map<string, CardItem>; cache: Map<string, ReplyCard>; feeds: Map<string, Feed>;
   activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; sessionRetry?: ReturnType<typeof setTimeout>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
+  stopFileOpen?: Disposer;
   reported: Set<string>;
 }
 let hub: Hub | null = null;
@@ -66,7 +67,12 @@ function trackSession(current: Hub): Promise<void> {
   };
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
-    if (current.activeSession !== sessionId) { current.activeSession = sessionId; current.sessionVersion++; wake(current); }
+    if (current.activeSession !== sessionId) {
+      current.stopFileOpen?.(); current.activeSession = sessionId; current.sessionVersion++;
+      const version = current.sessionVersion;
+      current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id, path, guard) => current.adapter.openFile(id, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : undefined;
+      wake(current);
+    }
     if (context) { queued = context; void publish(); }
     void current.transport.invoke('activeReviewSession', { sessionId }).catch(() => {});
   }).then(dispose => {
@@ -91,15 +97,8 @@ function remember(current: Hub, card: ReplyCard): void {
 }
 async function restoreFeed(current: Hub, sessionId: string): Promise<Feed> {
   const feed = current.feeds.get(sessionId) ?? { pending: [] }; current.feeds.set(sessionId, feed);
-  const first = await current.transport.invoke<ReplyCardsPage & { fileOpens?: FileOpenRequest[] }>('replyCards', { sessionId, revision: feed.revision });
+  const first = await current.transport.invoke<ReplyCardsPage>('replyCards', { sessionId, revision: feed.revision });
   if (!same(current)) return feed;
-  for (const request of first.fileOpens ?? []) {
-    let error: string | undefined;
-    try { await current.adapter.openFile(request.sessionId, request.path); }
-    catch (reason) { error = String((reason as Error)?.message ?? reason); }
-    if (!same(current)) return feed;
-    await current.transport.invoke('openFile', { requestId: request.requestId, sessionId: request.sessionId, complete: true, error }).catch(() => {});
-  }
   report(current, 'bootstrap-ok');
   if (current.appearance.locale !== first.locale || current.appearance.base !== first.base) {
     current.appearance = { locale: first.locale, base: first.base }; current.listeners.forEach(listener => listener());
@@ -217,7 +216,7 @@ export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapte
 }
 export function onUnload() {
   const current = hub;
-  if (current) { current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
+  if (current) { current.stopFileOpen?.(); current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
   for (const dispose of disposers.splice(0).reverse()) dispose();
   if (realm.__piDiffRenderer?.hub === current) delete realm.__piDiffRenderer;
   hub = null;

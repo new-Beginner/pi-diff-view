@@ -122,11 +122,15 @@ async function sessionRoot(args: any): Promise<string | undefined> {
 }
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
   if (method === 'openFile') {
+    if (args.listen === true) return fileOpens.listen(args.sessionId, args.listenerId);
+    if (typeof args.cancelListen === 'string') return fileOpens.cancelListen(args.sessionId, args.cancelListen);
     if (typeof args.requestId === 'string') {
       if (args.complete === true) return fileOpens.complete(args.requestId, args.sessionId, typeof args.error === 'string' ? args.error : undefined);
-      return fileOpens.status(args.requestId);
+      return args.wait === true ? fileOpens.waitStatus(args.requestId) : fileOpens.status(args.requestId);
     }
-    return fileOpens.add(await s.fileOpenTarget(args));
+    const target = await s.fileOpenTarget(args);
+    if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded');
+    return fileOpens.add(target);
   }
   if (method === 'sessionEvidence') {
     const root = await sessionRoot(args);
@@ -161,10 +165,6 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     context.syncedAt = Date.now();
     const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
-  }
-  if (method === 'replyCards') {
-    const page = await s.replyCards(args);
-    return { ...page, fileOpens: fileOpens.take(args.sessionId) };
   }
   if (method === 'runningChanges') {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {

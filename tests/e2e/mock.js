@@ -87,6 +87,8 @@
       if (method === 'diff.copyPatch') return { ok: true };
       if (method === 'diff.copyPath') return { ok: true };
       if (method === 'diff.openFile') {
+        if (args.listen) return new Promise(resolve => setTimeout(() => resolve([]), 1500));
+        if (args.cancelListen || args.complete) return { ok: true };
         if (args.requestId) return state.fileOpenError ? { state: 'error', error: state.fileOpenError } : { state: 'done' };
         state.openedFile = state.review.files.find(file => file.id === args.fileId)?.path;
         return { requestId: 'demo-open-file' };

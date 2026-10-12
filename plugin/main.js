@@ -3638,39 +3638,80 @@ var FileOpenRequests = class {
     this.now = now;
   }
   requests = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Map();
+  acknowledgements = /* @__PURE__ */ new Map();
   add(target) {
     for (const [id, request] of this.requests) if (this.now() - request.at > 15e3) this.requests.delete(id);
     if (this.requests.size >= 16) fail("FILE_OPEN_BUSY", "\u6253\u5F00\u8BF7\u6C42\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
     const requestId = (0, import_node_crypto9.randomUUID)();
-    this.requests.set(requestId, { target: { ...target, requestId }, at: this.now(), delivered: false, state: "pending" });
+    this.requests.set(requestId, { target: { ...target, requestId }, at: this.now(), delivered: false, status: { state: "pending" } });
+    this.listeners.get(target.sessionId)?.finish(this.take(target.sessionId));
     return { requestId };
   }
   take(sessionId) {
     const targets = [];
     for (const request of this.requests.values()) {
-      if (request.target.sessionId !== sessionId || request.delivered || request.state !== "pending" || this.now() - request.at > 1e4) continue;
+      if (request.target.sessionId !== sessionId || request.delivered || request.status.state !== "pending" || this.now() - request.at > 1e4) continue;
       request.delivered = true;
       targets.push(request.target);
     }
     return targets;
   }
+  listen(sessionId, listenerId) {
+    if (typeof sessionId !== "string" || !sessionId || sessionId.length > 256 || /[\0\r\n]/.test(sessionId) || typeof listenerId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(listenerId)) fail("FILE_OPEN_INVALID", "Invalid file navigation listener");
+    this.listeners.get(sessionId)?.finish([]);
+    if (this.listeners.size >= 16) fail("FILE_OPEN_BUSY", "Too many file navigation listeners");
+    const targets = this.take(sessionId);
+    if (targets.length) return Promise.resolve(targets);
+    return new Promise((resolve) => {
+      const listener = { id: listenerId, finish: (targets2) => {
+        clearTimeout(timer2);
+        if (this.listeners.get(sessionId) === listener) this.listeners.delete(sessionId);
+        resolve(targets2);
+      } };
+      const timer2 = setTimeout(() => listener.finish([]), 1500);
+      this.listeners.set(sessionId, listener);
+    });
+  }
+  cancelListen(sessionId, listenerId) {
+    const listener = this.listeners.get(sessionId);
+    if (listener?.id === listenerId) listener.finish([]);
+    return { ok: true };
+  }
   status(requestId) {
     const request = this.requests.get(requestId);
     if (!request) fail("FILE_OPEN_MISSING", "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u8BD5\u3002");
-    if (request.state === "pending" && this.now() - request.at > 1e4) {
-      request.state = "error";
-      request.error = "\u6587\u4EF6\u7BA1\u7406\u5668\u6CA1\u6709\u54CD\u5E94\uFF0C\u8BF7\u786E\u8BA4 renderer \u6269\u5C55\u5DF2\u542F\u7528\u540E\u91CD\u8BD5\u3002";
-    }
-    return { state: request.state, error: request.error };
+    if (request.status.state === "pending" && this.now() - request.at > 1e4) request.status = { state: "error", error: "\u6587\u4EF6\u7BA1\u7406\u5668\u6CA1\u6709\u54CD\u5E94\uFF0C\u8BF7\u786E\u8BA4 renderer \u6269\u5C55\u5DF2\u542F\u7528\u540E\u91CD\u8BD5\u3002" };
+    return request.status;
+  }
+  async waitStatus(requestId) {
+    const status2 = this.status(requestId);
+    if (status2.state !== "pending") return status2;
+    await new Promise((resolve) => {
+      const waiters = this.acknowledgements.get(requestId) ?? /* @__PURE__ */ new Set();
+      const finish = () => {
+        clearTimeout(timer2);
+        waiters.delete(finish);
+        if (!waiters.size) this.acknowledgements.delete(requestId);
+        resolve();
+      };
+      const timer2 = setTimeout(finish, 1500);
+      waiters.add(finish);
+      this.acknowledgements.set(requestId, waiters);
+    });
+    return this.status(requestId);
   }
   complete(requestId, sessionId, error) {
     const request = this.requests.get(requestId);
     if (!request || request.target.sessionId !== sessionId || !request.delivered || this.status(requestId).state !== "pending") fail("FILE_OPEN_MISSING", "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u5931\u6548\u3002");
-    request.state = error ? "error" : "done";
-    request.error = error?.slice(0, 500);
+    request.status = error ? { state: "error", error: error.slice(0, 500) } : { state: "done" };
+    for (const finish of this.acknowledgements.get(requestId) ?? []) finish();
     return { ok: true };
   }
   clear() {
+    for (const listener of this.listeners.values()) listener.finish([]);
+    for (const request of this.requests.values()) request.status = { state: "error", error: "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u53D6\u6D88\u3002" };
+    for (const waiters of this.acknowledgements.values()) for (const finish of waiters) finish();
     this.requests.clear();
   }
 };
@@ -3828,11 +3869,15 @@ async function sessionRoot(args) {
 }
 async function execute(s, method, args) {
   if (method === "openFile") {
+    if (args.listen === true) return fileOpens.listen(args.sessionId, args.listenerId);
+    if (typeof args.cancelListen === "string") return fileOpens.cancelListen(args.sessionId, args.cancelListen);
     if (typeof args.requestId === "string") {
       if (args.complete === true) return fileOpens.complete(args.requestId, args.sessionId, typeof args.error === "string" ? args.error : void 0);
-      return fileOpens.status(args.requestId);
+      return args.wait === true ? fileOpens.waitStatus(args.requestId) : fileOpens.status(args.requestId);
     }
-    return fileOpens.add(await s.fileOpenTarget(args));
+    const target = await s.fileOpenTarget(args);
+    if (disposed || service !== s) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+    return fileOpens.add(target);
   }
   if (method === "sessionEvidence") {
     const root = await sessionRoot(args);
@@ -3878,10 +3923,6 @@ async function execute(s, method, args) {
     context.syncedAt = Date.now();
     const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
-  }
-  if (method === "replyCards") {
-    const page = await s.replyCards(args);
-    return { ...page, fileOpens: fileOpens.take(args.sessionId) };
   }
   if (method === "runningChanges") {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
