@@ -8,6 +8,7 @@ import TurnChangeSummary from './TurnChangeSummary';
 import summaryStyle from './summary-style';
 import { createPluginReviewAdapter, type PluginReviewAdapter } from './plugin-review-adapter';
 import RunningChangePill, { runningPillStyle } from './RunningChangePill';
+import type { FileOpenRequest } from '../core/file-open';
 type Disposer = () => void;
 interface DraftSnapshot { text: string; marks: unknown[]; generation: number }
 export interface RendererHost {
@@ -65,7 +66,7 @@ function trackSession(current: Hub): Promise<void> {
   };
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
-    if (current.activeSession !== sessionId) { current.activeSession = sessionId; current.sessionVersion++; }
+    if (current.activeSession !== sessionId) { current.activeSession = sessionId; current.sessionVersion++; wake(current); }
     if (context) { queued = context; void publish(); }
     void current.transport.invoke('activeReviewSession', { sessionId }).catch(() => {});
   }).then(dispose => {
@@ -90,8 +91,15 @@ function remember(current: Hub, card: ReplyCard): void {
 }
 async function restoreFeed(current: Hub, sessionId: string): Promise<Feed> {
   const feed = current.feeds.get(sessionId) ?? { pending: [] }; current.feeds.set(sessionId, feed);
-  const first = await current.transport.invoke<ReplyCardsPage>('replyCards', { sessionId, revision: feed.revision });
+  const first = await current.transport.invoke<ReplyCardsPage & { fileOpens?: FileOpenRequest[] }>('replyCards', { sessionId, revision: feed.revision });
   if (!same(current)) return feed;
+  for (const request of first.fileOpens ?? []) {
+    let error: string | undefined;
+    try { await current.adapter.openFile(request.sessionId, request.path); }
+    catch (reason) { error = String((reason as Error)?.message ?? reason); }
+    if (!same(current)) return feed;
+    await current.transport.invoke('openFile', { requestId: request.requestId, sessionId: request.sessionId, complete: true, error }).catch(() => {});
+  }
   report(current, 'bootstrap-ok');
   if (current.appearance.locale !== first.locale || current.appearance.base !== first.base) {
     current.appearance = { locale: first.locale, base: first.base }; current.listeners.forEach(listener => listener());
@@ -131,7 +139,7 @@ async function refresh(current: Hub): Promise<void> {
   if (!same(current) || current.pumping) return;
   current.pumping = true; current.wakeAgain = false;
   try {
-    const sessions = [...new Set([...current.cards.values()].map(item => item.props.sessionId))];
+    const sessions = [...new Set([...(current.activeSession ? [current.activeSession] : []), ...[...current.cards.values()].map(item => item.props.sessionId)])];
     for (const sessionId of sessions) {
       const feed = await restoreFeed(current, sessionId);
       if (!same(current)) return;
@@ -152,7 +160,7 @@ async function refresh(current: Hub): Promise<void> {
   finally {
     current.pumping = false;
     // Refresh metadata for newly finished tasks and explicit history clearing; existing cards stay visible.
-    if (same(current) && current.cards.size) wake(current, current.wakeAgain ? 0 : 2000);
+    if (same(current) && (current.activeSession || current.cards.size)) wake(current, current.wakeAgain ? 0 : 2000);
   }
 }
 function EntryExtra(props: ReplyProps) {
@@ -177,7 +185,7 @@ function EntryExtra(props: ReplyProps) {
       item!.listeners.delete(listener);
       if (!item!.listeners.size) current.cards.delete(key);
       // Only unmount the DOM: keep validated cached cards for session switches and transcript windowing.
-      if (!current.cards.size && current.timer) { clearTimeout(current.timer); current.timer = undefined; }
+      if (!current.activeSession && !current.cards.size && current.timer) { clearTimeout(current.timer); current.timer = undefined; }
     };
   }, [current, key, contentKey, props.message?.createdAt]);
   const card = value.key === key ? value.card : current?.cache.get(key);
@@ -205,6 +213,7 @@ export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapte
   disposers.push(pi.slots.register({ slot: 'composerControl', positions: ['left'], component: ComposerControl }));
   void trackSession(current).catch(() => {});
   report(current, 'entry-loaded');
+  wake(current);
 }
 export function onUnload() {
   const current = hub;

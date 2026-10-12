@@ -86,6 +86,11 @@
       if (method === 'diff.batchAction') return { results: args.targets.map((target, i) => ({ path: files.find(file => file.id === target.fileId).path, ok: i !== 1, message: i === 1 ? 'Demo FILE_CONFLICT: changed file' : 'Demo operation completed' })) };
       if (method === 'diff.copyPatch') return { ok: true };
       if (method === 'diff.copyPath') return { ok: true };
+      if (method === 'diff.openFile') {
+        if (args.requestId) return state.fileOpenError ? { state: 'error', error: state.fileOpenError } : { state: 'done' };
+        state.openedFile = state.review.files.find(file => file.id === args.fileId)?.path;
+        return { requestId: 'demo-open-file' };
+      }
       if (method === 'diff.settings') { Object.assign(state.settings, args); return; }
       if (method === 'diff.clearHistory') { if (!args.confirmed) throw new Error('Confirmation required'); state.runs = []; state.comments = []; state.replyBindings.clear(); return; }
       if (method === 'diff.turnSummary') { const offset = args.offset || 0, limit = args.limit || 3; return { runId: run.id, sessionId: run.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(offset, offset + limit), offset, nextOffset: offset + limit < turnFiles.length ? offset + limit : null }; }

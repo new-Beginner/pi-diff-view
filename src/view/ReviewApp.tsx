@@ -58,6 +58,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [openingFile, setOpeningFile] = useState(false);
+  const fileOpenPending = useRef(false);
   const [status, setStatus] = useState('');
   const [batchResults, setBatchResults] = useState<{ path: string; ok: boolean; message: string }[]>([]);
   useEffect(() => { if (!panelActive) setConfirmation(null); }, [panelActive]);
@@ -264,6 +266,23 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     if (live.current) setStatus(locale.startsWith('zh') ? '路径已复制' : 'Path copied');
   });
   const openFile = (file: ReviewFile) => { resetPage(); setSelected(file.id); setFileCollapsed(false); };
+  const openInFileManager = async (file: ReviewFile) => {
+    if (!matchingReview || fileOpenPending.current) return;
+    fileOpenPending.current = true; setOpeningFile(true); setError('');
+    const scope = scopeKey;
+    try {
+      const { requestId } = await transport.invoke<{ requestId: string }>('openFile', { reviewId: matchingReview.id, fileId: file.id, sessionId: matchingReview.sessionId });
+      const deadline = Date.now() + 12000;
+      while (live.current && scopeRef.current === scope) {
+        const result = await transport.invoke<{ state: 'pending' | 'done' | 'error'; error?: string }>('openFile', { requestId });
+        if (result.state === 'done') return;
+        if (result.state === 'error') throw new Error(result.error || t.error);
+        if (Date.now() > deadline) throw new Error(locale.startsWith('zh') ? '文件管理器没有响应，请重试。' : 'File Manager did not respond. Please retry.');
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    } catch (err) { if (live.current && scopeRef.current === scope) setError(errorText(err)); }
+    finally { fileOpenPending.current = false; if (live.current) setOpeningFile(false); }
+  };
   const closeFileMenu = (event: React.MouseEvent<HTMLButtonElement>) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; };
   const placeFileMenu = (menu: HTMLDetailsElement) => {
     if (!menu.open) return;
@@ -281,7 +300,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) setFileCollapsed(value => !value); else openFile(file); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
       <FileIcon path={file.path} /><span className="dv-file-label"><span className="dv-file-name"><FilePath path={file.path} /></span><span className="dv-file-chevron"><ReviewIcon name="chevron" /></span></span>{file.statsKnown === false || file.kind !== 'text' ? <span className="dv-counts dv-muted" aria-label={locale.startsWith('zh') ? '行数未知' : 'Unknown totals'}>{locale.startsWith('zh') ? '行数未知' : 'Unknown'}</span> : <span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">-{file.deletions}</span></span>}
     </button>
-    <button className="dv-icon-button dv-file-open" disabled={busy} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '展开文件' : 'Expand file'} onClick={() => openFile(file)}><ReviewIcon name="open" /></button>
+    <button className="dv-icon-button dv-file-open" disabled={busy || openingFile} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '在 PI-Desktop 文件管理器中打开' : 'Open in PI-Desktop File Manager'} onClick={() => void openInFileManager(file)}><ReviewIcon name="open" /></button>
     <details className="dv-menu dv-file-menu" onToggle={event => placeFileMenu(event.currentTarget)}><summary aria-label={`${t.action} ${file.path}`} title={t.action}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
       <button disabled={busy || !matchingReview} onClick={event => { closeFileMenu(event); void copyPath(file); }}>{locale.startsWith('zh') ? '复制路径' : 'Copy path'}</button>
       <button disabled={busy} onClick={event => { closeFileMenu(event); openFile(file); }}>{locale.startsWith('zh') ? '展开文件' : 'Expand file'}</button>

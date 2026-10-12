@@ -138,6 +138,17 @@ export function createPluginReviewAdapter(options: { info?: () => Promise<Native
       const opened = modules.store.getState();
       if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== REVIEW_TAB_ID) denied('SIDEBAR_OPEN', '侧栏未打开 / Sidebar did not open');
     },
+    async openFile(sessionId: string, path: string): Promise<void> {
+      if (typeof path !== 'string' || !path || /[\0\r\n]/.test(path)) denied('SIDEBAR_TARGET', '无效的文件路径 / Invalid file path');
+      const modules = await inspect(); alive(); const state = modules.store.getState();
+      if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied('SIDEBAR_SESSION', '会话已切换，请在当前会话点击 / Session changed');
+      if (!Array.isArray(state.pluginViews) || !state.pluginViews.some(view => view.pluginId === 'pi.file-manager' && view.viewId === 'manager')) denied('SIDEBAR_VIEW', 'PI-Desktop 文件管理器不可用，请启用内置文件管理器 / File Manager unavailable');
+      if (typeof state.openWorkPanelTabForSession !== 'function') denied('SIDEBAR_CONTRACT', '宿主不支持打开文件管理器 / File Manager tab opener unavailable');
+      const tab = { ...modules.tab('pi.file-manager', 'manager'), location: path };
+      state.openWorkPanelTabForSession(sessionId, tab);
+      const opened = modules.store.getState();
+      if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== tab.id) denied('SIDEBAR_OPEN', '文件管理器未打开 / File Manager did not open');
+    },
     close() { closed = true; for (const dispose of [...subscriptions]) dispose(); }
   };
 }

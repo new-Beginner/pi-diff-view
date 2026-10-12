@@ -3,7 +3,7 @@ import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { MAX_TEXT_BYTES, type Bootstrap, type CapturedChange, type CaptureRun, type DiffHunk, type FileSnapshot, type GitScope, type InternalFile, type LineAnchor, type RepositoryInfo, type ReplyCard, type ReplyCardsPage, type ReviewActionRequest, type ReviewComment, type ReviewDetail, type ReviewFile, type ReviewRequest, type ReviewSummary, type RunningChanges, type RunSummary, type TurnSummary } from './contracts';
-import { assertPublicPath, canonical, digest, fail, sameSnapshot, snapshotFromBytes } from './path-policy';
+import { assertPublicPath, canonical, digest, fail, sameSnapshot, snapshotFromBytes, resolveCapturePath } from './path-policy';
 import { buildHunks, patchText, publicFile, stats } from './diff';
 import { SnapshotStore, atomicJson, readJson } from './storage';
 import { replaceSnapshot } from './rollback';
@@ -225,6 +225,12 @@ export class ReviewService {
     return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
   }
   private get(id: string): CachedReview { const r = this.reviews.get(id); if (!r || Date.now() - r.createdAt > 30 * 60 * 1000) fail('REVIEW_EXPIRED', 'Review expired; refresh'); return r; }
+  async fileOpenTarget(args: { reviewId: string; fileId: string; sessionId: string }) {
+    const review = this.get(args.reviewId), file = review.files.find(file => file.id === args.fileId);
+    if (!file || !args.sessionId || review.summary.sessionId !== args.sessionId) fail('FILE_NOT_FOUND', '没有属于本会话的文件，请刷新后重试。');
+    const capture = await resolveCapturePath(review.summary.root, file.absolutePath ?? file.path, [this.store.directory]);
+    return { sessionId: args.sessionId, path: capture.absolutePath };
+  }
   private async hydrateFile(review: CachedReview, file: InternalFile): Promise<void> {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];

@@ -1,0 +1,34 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.6",
+  "package": "plugin/dist/local.diff-view-1.4.6.piplug",
+  "packageBytes": 2097822,
+  "packageFiles": 67,
+  "sha256": "6507de9e7ca7cfae152c0bd4084833d6a78855fd6f81ed9c122c18cf0b798576",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 36, "testsPassed": 309, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 114, "testsFailed": 0, "browser": "local Chrome", "host": "production bundle and source UI with mock host bridge; existing local Git UI tests use temporary repositories" },
+    "rendererWithoutMountedCards": "passed with mocked host: exact file opened once, acknowledgement and unload cleanup verified",
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "gitDiffCheck": "passed",
+    "projectIndexContent": "No staged changes; git diff --cached --exit-code passed"
+  },
+  "changes": [
+    "File-row open icon opens the current file in PI-Desktop File Manager instead of expanding the diff",
+    "Retain file-name and menu diff expansion, folding, copy actions, history and local Git controls",
+    "Validate existing file paths against cached review identity and session; deliver ephemeral requests once through the existing renderer refresh feed",
+    "Report unavailable File Manager, deleted files and session changes instead of silently expanding a diff"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false, "projectStageResetCommitPerformed": false },
+  "limitations": [
+    "Manual reload or package installation is required; browser tests do not constitute native PI-Desktop window acceptance",
+    "Built-in pi.file-manager/manager view and renderer extension must be enabled",
+    "Navigation uses the existing approximately two-second renderer refresh cycle; zero-delay opening is not guaranteed",
+    "Deleted files cannot be opened; the icon opens current disk content, not a historical snapshot"
+  ],
+  "report": "docs/verification-1.4.6.md"
+}

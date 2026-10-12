@@ -47,3 +47,14 @@ it('rejects missing files and reviews without changing the clipboard', async () 
   await expect(service.invoke('copyPath', { reviewId: 'missing', fileId: review.files[0].id })).rejects.toThrow();
   expect(clipboard).not.toHaveBeenCalled();
 });
+it('resolves an existing review file without reading content, and rejects missing files or another session', async () => {
+  const file = review.files.find(file => file.origin !== 'external')!;
+  await fs.mkdir(path.join(root, 'src')); await fs.writeFile(path.join(root, 'src/example.ts'), 'current\n');
+  const hydrate = vi.spyOn(store, 'hydrate');
+  await expect(service.fileOpenTarget({ reviewId: review.id, fileId: file.id, sessionId: 'session' })).resolves.toEqual({ sessionId: 'session', path: path.join(root, 'src/example.ts') });
+  expect(hydrate).not.toHaveBeenCalled();
+  await expect(service.fileOpenTarget({ reviewId: review.id, fileId: file.id, sessionId: 'other' })).rejects.toThrow();
+  await expect(service.fileOpenTarget({ reviewId: review.id, fileId: 'missing', sessionId: 'session' })).rejects.toThrow();
+  await fs.rm(path.join(root, 'src/example.ts'));
+  await expect(service.fileOpenTarget({ reviewId: review.id, fileId: file.id, sessionId: 'session' })).rejects.toThrow();
+});

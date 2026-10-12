@@ -110,7 +110,7 @@ test('opening different card targets preserves the panel and the same chronologi
 test('paged background snapshots never drop the existing later file or its diff', async ({ page }) => {
   await setup(page, false, true);
   await expect(page.locator('.dv-file')).toHaveCount(2);
-  await page.locator('.dv-file-open').nth(1).click();
+  await page.locator('.dv-file').nth(1).click();
   await expect(page.locator('.dv-review h2')).toHaveText('session-a/src/theme/index.ts');
   await page.evaluate(() => {
     const d = (window as any).__demo, node = document.querySelector('.dv-file[aria-current="true"]')!, hunk = document.querySelector('.dv-hunk')!;

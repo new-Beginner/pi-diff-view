@@ -97,3 +97,19 @@ it('does not reopen an already active panel at the same location, but restores a
   f.state.workPanelOpen = false; await adapter.open('s', location); expect(f.calls).toEqual([{ sessionId: 's', tab: { ...tab, location: `${location}?sessionId=s` } }]);
   f.state.selectingSessionId = 'other'; await expect(adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_SESSION' }); adapter.close();
 });
+it('opens the exact File Manager tab with an unmodified file path', async () => {
+  const f = fixture(); f.state.pluginViews.push({ pluginId: 'pi.file-manager', viewId: 'manager' });
+  const adapter = createPluginReviewAdapter({ load: async () => f.modules });
+  const path = 'D:/中文 project/src/a #?.ts';
+  await adapter.openFile('s', path);
+  expect(f.calls).toEqual([{ sessionId: 's', tab: { id: 'plugin:pi.file-manager/manager', kind: 'plugin', resource: 'pi.file-manager/manager', location: path } }]);
+  adapter.close(); await expect(adapter.openFile('s', path)).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' });
+});
+it('never falls back to expanding a diff when File Manager is missing or the session changes', async () => {
+  const f = fixture(), adapter = createPluginReviewAdapter({ load: async () => f.modules });
+  await expect(adapter.openFile('s', 'D:/a.ts')).rejects.toMatchObject({ code: 'SIDEBAR_VIEW' });
+  f.state.pluginViews.push({ pluginId: 'pi.file-manager', viewId: 'manager' });
+  f.state.selectingSessionId = 'other';
+  await expect(adapter.openFile('s', 'D:/a.ts')).rejects.toMatchObject({ code: 'SIDEBAR_SESSION' });
+  expect(f.calls).toEqual([]); adapter.close();
+});

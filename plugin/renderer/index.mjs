@@ -474,6 +474,19 @@ function createPluginReviewAdapter(options = {}) {
       const opened = modules.store.getState();
       if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== REVIEW_TAB_ID) denied("SIDEBAR_OPEN", "\u4FA7\u680F\u672A\u6253\u5F00 / Sidebar did not open");
     },
+    async openFile(sessionId, path) {
+      if (typeof path !== "string" || !path || /[\0\r\n]/.test(path)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u6587\u4EF6\u8DEF\u5F84 / Invalid file path");
+      const modules = await inspect();
+      alive();
+      const state = modules.store.getState();
+      if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u70B9\u51FB / Session changed");
+      if (!Array.isArray(state.pluginViews) || !state.pluginViews.some((view) => view.pluginId === "pi.file-manager" && view.viewId === "manager")) denied("SIDEBAR_VIEW", "PI-Desktop \u6587\u4EF6\u7BA1\u7406\u5668\u4E0D\u53EF\u7528\uFF0C\u8BF7\u542F\u7528\u5185\u7F6E\u6587\u4EF6\u7BA1\u7406\u5668 / File Manager unavailable");
+      if (typeof state.openWorkPanelTabForSession !== "function") denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u4E0D\u652F\u6301\u6253\u5F00\u6587\u4EF6\u7BA1\u7406\u5668 / File Manager tab opener unavailable");
+      const tab = { ...modules.tab("pi.file-manager", "manager"), location: path };
+      state.openWorkPanelTabForSession(sessionId, tab);
+      const opened = modules.store.getState();
+      if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== tab.id) denied("SIDEBAR_OPEN", "\u6587\u4EF6\u7BA1\u7406\u5668\u672A\u6253\u5F00 / File Manager did not open");
+    },
     close() {
       closed = true;
       for (const dispose of [...subscriptions]) dispose();
@@ -708,6 +721,7 @@ function trackSession(current) {
     if (current.activeSession !== sessionId) {
       current.activeSession = sessionId;
       current.sessionVersion++;
+      wake(current);
     }
     if (context) {
       queued = context;
@@ -752,6 +766,17 @@ async function restoreFeed(current, sessionId) {
   current.feeds.set(sessionId, feed);
   const first = await current.transport.invoke("replyCards", { sessionId, revision: feed.revision });
   if (!same(current)) return feed;
+  for (const request of first.fileOpens ?? []) {
+    let error;
+    try {
+      await current.adapter.openFile(request.sessionId, request.path);
+    } catch (reason) {
+      error = String(reason?.message ?? reason);
+    }
+    if (!same(current)) return feed;
+    await current.transport.invoke("openFile", { requestId: request.requestId, sessionId: request.sessionId, complete: true, error }).catch(() => {
+    });
+  }
   report(current, "bootstrap-ok");
   if (current.appearance.locale !== first.locale || current.appearance.base !== first.base) {
     current.appearance = { locale: first.locale, base: first.base };
@@ -808,7 +833,7 @@ async function refresh(current) {
   current.pumping = true;
   current.wakeAgain = false;
   try {
-    const sessions = [...new Set([...current.cards.values()].map((item) => item.props.sessionId))];
+    const sessions = [.../* @__PURE__ */ new Set([...current.activeSession ? [current.activeSession] : [], ...[...current.cards.values()].map((item) => item.props.sessionId)])];
     for (const sessionId of sessions) {
       const feed = await restoreFeed(current, sessionId);
       if (!same(current)) return;
@@ -831,7 +856,7 @@ async function refresh(current) {
     if (same(current)) report(current, "card-query-error");
   } finally {
     current.pumping = false;
-    if (same(current) && current.cards.size) wake(current, current.wakeAgain ? 0 : 2e3);
+    if (same(current) && (current.activeSession || current.cards.size)) wake(current, current.wakeAgain ? 0 : 2e3);
   }
 }
 function EntryExtra(props) {
@@ -865,7 +890,7 @@ function EntryExtra(props) {
     return () => {
       item.listeners.delete(listener);
       if (!item.listeners.size) current.cards.delete(key);
-      if (!current.cards.size && current.timer) {
+      if (!current.activeSession && !current.cards.size && current.timer) {
         clearTimeout(current.timer);
         current.timer = void 0;
       }
@@ -911,6 +936,7 @@ function onLoad(pi, options = {}) {
   void trackSession(current).catch(() => {
   });
   report(current, "entry-loaded");
+  wake(current);
 }
 function onUnload() {
   const current = hub;

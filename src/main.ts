@@ -14,6 +14,8 @@ import { dispatch as gitManageDispatch } from './git/local-management';
 import { canonical } from './core/path-policy';
 import { writeCaptureContexts, type CaptureContext } from './core/capture-context';
 import { HostEvidenceBuffer } from './core/host-evidence-buffer';
+import { FileOpenRequests } from './core/file-open';
+const fileOpens = new FileOpenRequests();
 const evidence = new HostEvidenceBuffer();
 let history: HostHistoryImporter | null = null;
 const contexts = new Map<string, CaptureContext & { syncedAt: number }>();
@@ -45,6 +47,7 @@ export async function onLoad(): Promise<void> {
   const parent = path.dirname(dataPath), plugins = path.dirname(parent);
   history = path.basename(parent) === 'data' && path.basename(plugins) === 'plugins' ? new HostHistoryImporter(store, path.dirname(plugins)) : null;
   contexts.clear(); evidence.clear();
+  fileOpens.clear();
   rendererStages = {}; runningDiagnostic = undefined; rendererDiagnostic = undefined; navigation.clear();
   navigation.restore(await readJson(path.join(store.directory, 'selections.json'), []));
   await saveRendererStatus();
@@ -76,6 +79,7 @@ export async function onUnload(): Promise<void> {
   disposed = true; if (timer) clearInterval(timer); timer = undefined;
   if (turnEnded) pi.events.off('session:turnEnded', turnEnded); turnEnded = undefined;
   jobs?.close(); jobs = null; navigation.clear();
+  fileOpens.clear();
   await tail;
   evidence.clear(); contexts.clear();
   const current = await readJson<Locator | null>(locatorFile, null).catch(() => null);
@@ -89,7 +93,7 @@ export async function onPanelInvoke(channel: string, payload: unknown): Promise<
 export async function onRendererCall(method: string, args: unknown): Promise<unknown> { return dispatch(method.startsWith('diff.') ? method.slice(5) : method, args); }
 async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (!service || disposed) fail('PLUGIN_UNLOADED', 'Diff view is not loaded');
-  if (method === 'activeReviewSession' || method === 'readTurnSelection') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
+  if (method === 'activeReviewSession' || method === 'readTurnSelection' || method === 'openFile') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'rendererReport') {
     const stage = (args as { stage?: unknown } | null)?.stage;
@@ -117,6 +121,13 @@ async function sessionRoot(args: any): Promise<string | undefined> {
   return history?.scratchRoot(args.sessionId);
 }
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
+  if (method === 'openFile') {
+    if (typeof args.requestId === 'string') {
+      if (args.complete === true) return fileOpens.complete(args.requestId, args.sessionId, typeof args.error === 'string' ? args.error : undefined);
+      return fileOpens.status(args.requestId);
+    }
+    return fileOpens.add(await s.fileOpenTarget(args));
+  }
   if (method === 'sessionEvidence') {
     const root = await sessionRoot(args);
     if (!root) fail('ROOT_DENIED', 'Unauthorized evidence project');
@@ -150,6 +161,10 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     context.syncedAt = Date.now();
     const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
+  }
+  if (method === 'replyCards') {
+    const page = await s.replyCards(args);
+    return { ...page, fileOpens: fileOpens.take(args.sessionId) };
   }
   if (method === 'runningChanges') {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
@@ -187,6 +202,6 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     await s.selectTarget({ runId: selection.request.runId!, sessionId: args.sessionId });
     return selection;
   }
-  if (method === 'clearHistory' && args?.confirmed === true) { const result = await s.invoke(method, args); evidence.clear(); navigation.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
+  if (method === 'clearHistory' && args?.confirmed === true) { const result = await s.invoke(method, args); evidence.clear(); navigation.clear(); fileOpens.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
   return s.invoke(method, args);
 }

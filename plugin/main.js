@@ -38,7 +38,7 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_promises10 = __toESM(require("node:fs/promises"), 1);
 var import_node_path12 = __toESM(require("node:path"), 1);
-var import_node_crypto9 = require("node:crypto");
+var import_node_crypto10 = require("node:crypto");
 
 // src/core/storage.ts
 var import_promises2 = __toESM(require("node:fs/promises"), 1);
@@ -111,6 +111,45 @@ async function safeResolve(root, value) {
     }
   }
   return target;
+}
+async function resolveCapturePath(root, value, privatePaths, allowMissing = false) {
+  assertPathSyntax(root);
+  assertPathSyntax(value);
+  const absolute = import_node_path.default.resolve(root, value), origin = inside(root, absolute) ? "workspace" : "external";
+  if (origin === "workspace") assertPublicPath(root);
+  if (origin === "external" && !import_node_path.default.isAbsolute(value)) fail("PATH_ESCAPE", "External capture requires an explicit absolute path");
+  if (privatePaths.some((p) => inside(p, absolute))) fail("PATH_DENIED", "Plugin-private paths cannot be captured");
+  assertPublicPath(origin === "workspace" ? import_node_path.default.relative(root, absolute) : absolute);
+  let target;
+  if (origin === "workspace") target = await safeResolve(root, value);
+  else {
+    let cursor = import_node_path.default.parse(absolute).root;
+    const segments = absolute.slice(cursor.length).split(import_node_path.default.sep);
+    for (const [i, segment] of segments.entries()) {
+      cursor = import_node_path.default.join(cursor, segment);
+      try {
+        const stat2 = await import_promises.default.lstat(cursor);
+        if (stat2.isSymbolicLink()) fail("SYMLINK_DENIED", "Symlinks and junctions cannot be captured");
+        if (i < segments.length - 1 && !stat2.isDirectory()) fail("NOT_FILE", "Capture ancestors must be directories");
+      } catch (error) {
+        if (error.code !== "ENOENT" || !allowMissing) throw error;
+        break;
+      }
+    }
+    target = absolute;
+  }
+  const stat = await import_promises.default.lstat(target).catch((error) => {
+    if (error.code === "ENOENT" && allowMissing) return null;
+    throw error;
+  });
+  if (stat && (!stat.isFile() || stat.isSymbolicLink())) fail("NOT_FILE", "Only regular files can be captured");
+  target = stat ? await import_promises.default.realpath(target) : target;
+  if (origin === "external") assertPublicPath(target);
+  if (privatePaths.some((p) => inside(p, target))) fail("PATH_DENIED", "Plugin-private paths cannot be captured");
+  if (origin === "workspace" && !inside(root, target)) fail("PATH_ESCAPE", "Capture escaped the workspace");
+  if (origin === "workspace") assertPublicPath(import_node_path.default.relative(root, target));
+  const identity = canonical(target);
+  return { id: digest(identity).slice(0, 24), identity, origin, absolutePath: target, path: origin === "workspace" ? import_node_path.default.relative(root, target).split(import_node_path.default.sep).join("/") : target };
 }
 function absentSnapshot() {
   return { exists: false, text: null, hash: "absent", size: 0, mode: 0, kind: "text" };
@@ -1995,6 +2034,12 @@ var ReviewService = class {
     if (!r || Date.now() - r.createdAt > 30 * 60 * 1e3) fail("REVIEW_EXPIRED", "Review expired; refresh");
     return r;
   }
+  async fileOpenTarget(args) {
+    const review = this.get(args.reviewId), file = review.files.find((file2) => file2.id === args.fileId);
+    if (!file || !args.sessionId || review.summary.sessionId !== args.sessionId) fail("FILE_NOT_FOUND", "\u6CA1\u6709\u5C5E\u4E8E\u672C\u4F1A\u8BDD\u7684\u6587\u4EF6\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\u3002");
+    const capture = await resolveCapturePath(review.summary.root, file.absolutePath ?? file.path, [this.store.directory]);
+    return { sessionId: args.sessionId, path: capture.absolutePath };
+  }
   async hydrateFile(review, file) {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
@@ -3586,8 +3631,53 @@ var HostEvidenceBuffer = class {
   }
 };
 
+// src/core/file-open.ts
+var import_node_crypto9 = require("node:crypto");
+var FileOpenRequests = class {
+  constructor(now = Date.now) {
+    this.now = now;
+  }
+  requests = /* @__PURE__ */ new Map();
+  add(target) {
+    for (const [id, request] of this.requests) if (this.now() - request.at > 15e3) this.requests.delete(id);
+    if (this.requests.size >= 16) fail("FILE_OPEN_BUSY", "\u6253\u5F00\u8BF7\u6C42\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
+    const requestId = (0, import_node_crypto9.randomUUID)();
+    this.requests.set(requestId, { target: { ...target, requestId }, at: this.now(), delivered: false, state: "pending" });
+    return { requestId };
+  }
+  take(sessionId) {
+    const targets = [];
+    for (const request of this.requests.values()) {
+      if (request.target.sessionId !== sessionId || request.delivered || request.state !== "pending" || this.now() - request.at > 1e4) continue;
+      request.delivered = true;
+      targets.push(request.target);
+    }
+    return targets;
+  }
+  status(requestId) {
+    const request = this.requests.get(requestId);
+    if (!request) fail("FILE_OPEN_MISSING", "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u8BD5\u3002");
+    if (request.state === "pending" && this.now() - request.at > 1e4) {
+      request.state = "error";
+      request.error = "\u6587\u4EF6\u7BA1\u7406\u5668\u6CA1\u6709\u54CD\u5E94\uFF0C\u8BF7\u786E\u8BA4 renderer \u6269\u5C55\u5DF2\u542F\u7528\u540E\u91CD\u8BD5\u3002";
+    }
+    return { state: request.state, error: request.error };
+  }
+  complete(requestId, sessionId, error) {
+    const request = this.requests.get(requestId);
+    if (!request || request.target.sessionId !== sessionId || !request.delivered || this.status(requestId).state !== "pending") fail("FILE_OPEN_MISSING", "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u5931\u6548\u3002");
+    request.state = error ? "error" : "done";
+    request.error = error?.slice(0, 500);
+    return { ok: true };
+  }
+  clear() {
+    this.requests.clear();
+  }
+};
+
 // src/main.ts
 var evidenceStore = null;
+var fileOpens = new FileOpenRequests();
 var evidence = new HostEvidenceBuffer();
 var history = null;
 var contexts = /* @__PURE__ */ new Map();
@@ -3620,7 +3710,7 @@ async function heartbeat() {
 }
 async function onLoad() {
   disposed = false;
-  generation = (0, import_node_crypto9.randomUUID)();
+  generation = (0, import_node_crypto10.randomUUID)();
   pluginRoot = await import_promises10.default.realpath(__dirname);
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
@@ -3630,6 +3720,7 @@ async function onLoad() {
   history = import_node_path12.default.basename(parent) === "data" && import_node_path12.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path12.default.dirname(plugins)) : null;
   contexts.clear();
   evidence.clear();
+  fileOpens.clear();
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
@@ -3682,6 +3773,7 @@ async function onUnload() {
   jobs?.close();
   jobs = null;
   navigation.clear();
+  fileOpens.clear();
   await tail;
   evidence.clear();
   contexts.clear();
@@ -3700,7 +3792,7 @@ async function onRendererCall(method, args) {
 }
 async function dispatch2(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
-  if (method === "activeReviewSession" || method === "readTurnSelection") return execute(service, method, args ?? {});
+  if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openFile") return execute(service, method, args ?? {});
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
     const stage = args?.stage;
@@ -3735,6 +3827,13 @@ async function sessionRoot(args) {
   return history?.scratchRoot(args.sessionId);
 }
 async function execute(s, method, args) {
+  if (method === "openFile") {
+    if (typeof args.requestId === "string") {
+      if (args.complete === true) return fileOpens.complete(args.requestId, args.sessionId, typeof args.error === "string" ? args.error : void 0);
+      return fileOpens.status(args.requestId);
+    }
+    return fileOpens.add(await s.fileOpenTarget(args));
+  }
   if (method === "sessionEvidence") {
     const root = await sessionRoot(args);
     if (!root) fail("ROOT_DENIED", "Unauthorized evidence project");
@@ -3780,6 +3879,10 @@ async function execute(s, method, args) {
     const result = await history.syncSession(args.sessionId, context.root, { running: context.running, messages: evidence.messages(args.sessionId, canonical(context.root)) });
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
   }
+  if (method === "replyCards") {
+    const page = await s.replyCards(args);
+    return { ...page, fileOpens: fileOpens.take(args.sessionId) };
+  }
   if (method === "runningChanges") {
     if (context?.running && context.taskId === args.taskId && context.since === args.since) {
       context.updatedAt = Date.now();
@@ -3823,6 +3926,7 @@ async function execute(s, method, args) {
     const result = await s.invoke(method, args);
     evidence.clear();
     navigation.clear();
+    fileOpens.clear();
     await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), []);
     return result;
   }

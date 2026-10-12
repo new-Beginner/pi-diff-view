@@ -327,7 +327,7 @@ test('every file has reference-style controls and menus act on their own file', 
   await expect(page.getByRole('status')).toHaveText('差异已复制');
   expect((await calls(page, 'diff.copyPatch')).at(-1).args.fileId).toBe('created');
   await page.keyboard.press('Escape');
-  await created.locator('.dv-file-open').click();
+  await created.locator('.dv-file').click();
   await expect(page.locator('.dv-file[aria-current="true"]')).toContainText('src/theme/index.ts');
   await expect(page.locator('.dv-row')).toHaveCount(3);
   await page.getByRole('button', { name: '折叠文件', exact: true }).click();
@@ -391,4 +391,36 @@ for (const base of ['light', 'dark']) test(`file rows stay transparent and arrow
   await file.click(); await page.mouse.move(0, 0);
   await expect(file).toHaveAttribute('aria-expanded', 'true'); await expect(arrow).toHaveCSS('opacity', '0'); await transparent();
   await file.hover(); await expect(arrow).toHaveCSS('transform', 'matrix(0, 1, -1, 0, 0, 0)');
+});
+
+test('file open icon sends File Manager navigation without expanding or selecting the diff', async ({ page }) => {
+  await ready(page, '?lang=zh-CN');
+  const current = page.locator('.dv-file[aria-current="true"]');
+  await current.click(); await expect(current).toHaveAttribute('aria-expanded', 'false');
+  const row = page.locator('.dv-file-row').filter({ has: page.locator('.dv-file', { hasText: 'src/theme/index.ts' }) });
+  const button = row.locator('.dv-file-open');
+  await expect(button).toHaveAttribute('title', '在 PI-Desktop 文件管理器中打开');
+  await button.click(); await expect(button).toBeEnabled();
+  const sent = await calls(page, 'diff.openFile');
+  expect(sent[0].args.fileId).toBe('created');
+  expect(await page.evaluate(() => (window as any).__demo.openedFile)).toBe('src/theme/index.ts');
+  await expect(current).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.dv-review')).toBeHidden();
+  await row.locator('.dv-file-menu > summary').click();
+  await row.getByRole('button', { name: '展开文件', exact: true }).click();
+  await expect(row.locator('.dv-file')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dv-row')).toHaveCount(3);
+});
+
+test('File Manager failure is visible and never falls back to expanding the diff', async ({ page }) => {
+  await ready(page, '?lang=zh-CN');
+  const current = page.locator('.dv-file[aria-current="true"]');
+  await current.click();
+  await page.evaluate(() => { (window as any).__demo.fileOpenError = '文件管理器不可用'; });
+  const button = page.locator('.dv-file-open').first();
+  await button.click();
+  await expect(page.getByRole('alert')).toContainText('文件管理器不可用');
+  await expect(button).toBeEnabled();
+  await expect(current).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.dv-review')).toBeHidden();
 });

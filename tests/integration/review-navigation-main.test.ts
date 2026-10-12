@@ -35,6 +35,15 @@ it('built main validates session-scoped navigation and restores selection after 
     expect(continuation.files.at(-1).path).toBe('file-120.txt'); expect(continuation.nextOffset).toBeNull();
     const detail = await plugin.onPanelInvoke('diff.file', { reviewId: review.id, fileId }); expect(detail.file.path).toBe('file-120.txt');
     expect(detail.hunks[0].lines.some((line: any) => line.text === 'new')).toBe(true);
+    await fs.writeFile(path.join(root, 'file-120.txt'), 'current\n');
+    const open = await plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 's' });
+    expect((await plugin.onRendererCall('replyCards', { sessionId: 'other' })).fileOpens).toEqual([]);
+    const feed = await plugin.onRendererCall('replyCards', { sessionId: 's' });
+    expect(feed.fileOpens).toEqual([{ ...open, sessionId: 's', path: path.join(root, 'file-120.txt') }]);
+    expect((await plugin.onRendererCall('replyCards', { sessionId: 's', revision: feed.revision })).fileOpens).toEqual([]);
+    await plugin.onRendererCall('openFile', { ...open, sessionId: 's', complete: true });
+    expect((await plugin.onPanelInvoke('diff.openFile', open)).state).toBe('done');
+    await expect(plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 'other' })).rejects.toThrow();
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 's', runId: run.id, fileId: 'missing' })).rejects.toThrow('no longer');
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 'other', runId: run.id })).rejects.toThrow('not found');
     await plugin.onRendererCall('activeReviewSession', { sessionId: 'other' });
