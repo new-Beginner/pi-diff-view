@@ -1,0 +1,42 @@
+import { it, expect, vi } from 'vitest';
+import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { SnapshotStore } from '../../src/core/storage';
+import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/core/path-policy';
+import type { CaptureRun } from '../../src/core/contracts';
+it('built main records only bounded renderer startup stages and rejects arbitrary stage keys', async () => {
+  const root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'renderer-status-'));
+  const data = path.join(root, 'data'), entry = path.join(root, 'main.cjs');
+  await build({ entryPoints: ['src/main.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true, external: ['original-fs'] });
+  const home = vi.spyOn(os, 'homedir').mockReturnValue(root), oldPi = (globalThis as any).pi;
+  (globalThis as any).pi = { plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => null }, app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} } };
+  const plugin = createRequire(import.meta.url)(entry); let loaded = false;
+  try {
+    await plugin.onLoad(); loaded = true;
+    expect(JSON.parse(await fs.readFile(path.join(data, 'renderer-status.json'), 'utf8')).stages).toEqual({});
+    await plugin.onRendererCall('rendererReport', { stage: 'entry-loaded', content: 'should never be recorded', sessionId: 'not stored' });
+    await plugin.onRendererCall('rendererReport', { stage: 'sidebar-opened' });
+    await plugin.onRendererCall('rendererReport', { stage: 'reply-slot-mounted' });
+    await plugin.onRendererCall('rendererReport', { stage: 'card-bound' });
+    await expect(plugin.onRendererCall('rendererReport', { stage: '../outside' })).rejects.toThrow('Unknown');
+    await expect(plugin.onRendererCall('rendererReport', null)).rejects.toThrow('Unknown');
+    const text = await fs.readFile(path.join(data, 'renderer-status.json'), 'utf8'), value = JSON.parse(text);
+    expect(Object.keys(value.stages)).toEqual(['entry-loaded', 'sidebar-opened', 'reply-slot-mounted', 'card-bound']);
+    expect(Object.values(value.stages).every(timestamp => Number.isFinite(timestamp))).toBe(true);
+    expect(text).not.toContain('should never'); expect(text).not.toContain('not stored');
+    const store = new SnapshotStore(data), project = path.join(path.parse(root).root, 'diff-diagnostic-public-project'), now = Date.now();
+    const absolutePath = path.join(project, 'old.txt'), identity = canonical(absolutePath);
+    const base: CaptureRun = { version: 2, generation: value.generation, boundary: 'user', id: 'old-run', sessionId: 's', root: project, startedAt: now - 10000, endedAt: now - 9000, state: 'completed', fileCount: 1, incomplete: false, changes: { 'old.txt': { before: absentSnapshot(), after: snapshotOfText('old\n'), capture: { id: digest(identity).slice(0, 24), identity, absolutePath, path: 'old.txt', origin: 'workspace' } } }, bindings: {}, replies: [] };
+    await store.writeRun(base);
+    await store.writeRun({ ...base, id: 'current-run', userMessageId: 'current-user', startedAt: now - 100, endedAt: undefined, state: 'running', fileCount: 0, changes: {} });
+    expect(await plugin.onRendererCall('runningChanges', { sessionId: 's', since: now - 101 })).toBeNull();
+    expect(JSON.parse(await fs.readFile(path.join(data, 'renderer-status.json'), 'utf8')).runningDiagnostic.reason).toBe('no-net-changes');
+    await plugin.onRendererCall('rendererReport', { stage: 'composer-anchor-missing' });
+    expect(JSON.parse(await fs.readFile(path.join(data, 'renderer-status.json'), 'utf8')).rendererDiagnostic.stage).toBe('composer-anchor-missing');
+    await plugin.onUnload(); loaded = false;
+    await expect(plugin.onRendererCall('rendererReport', { stage: 'entry-loaded' })).rejects.toThrow('not loaded');
+  } finally { if (loaded) await plugin.onUnload(); home.mockRestore(); (globalThis as any).pi = oldPi; await fs.rm(root, { recursive: true, force: true }); }
+});
