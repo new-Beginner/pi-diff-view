@@ -27,8 +27,8 @@ async function seed(index = 0, count = 4): Promise<CaptureRun> {
 async function bind(run: CaptureRun, index = 0) { return service.card({ sessionId: run.sessionId, messageId: `message-${index}`, content: `Progress\n\ndone-${index}`, createdAt: new Date(run.finalReply!.timestamp).toISOString() }); }
 it('persists exact card previews and restores after service restart without Git or diff recomputation', async () => {
   const run = await seed(), response = await bind(run);
-  expect(response.summary).toMatchObject({ fileCount: 4, additions: 8, deletions: 4, nextOffset: 3 });
-  expect(response.summary?.files).toHaveLength(3);
+  expect(response.summary).toMatchObject({ fileCount: 4, additions: 8, deletions: 4, nextOffset: null });
+  expect(response.summary?.files).toHaveLength(4);
   const stored = await store.getRun(run.id, false, false);
   expect(stored?.cardPreview?.summary).toEqual(response.summary);
   const hydrate = vi.spyOn(store, 'hydrate');
@@ -105,4 +105,38 @@ it('omits legacy image paths from card totals and does not make image-only tasks
   imagesOnly.changes[image] = { capture: { id: digest(identity).slice(0, 24), identity, path: image, absolutePath, origin: 'workspace' }, before: snapshotOfText('old\n'), after: snapshotOfText('new\n') };
   imagesOnly.fileCount = 1; imagesOnly.replyMessageId = 'image-only-reply'; await store.writeRun(imagesOnly);
   expect((await service.replyCards({ sessionId: 'session' })).cards.map(card => card.run.id)).toEqual([run.id]);
+});
+
+it('upgrades old three-file previews and invalidates the feed revision without changing captured evidence', async () => {
+  const run = await seed(0, 15); run.replyMessageId = 'native-reply';
+  const response = await bind(run), old = (await store.getRun(run.id, false, false))!;
+  const oldKey = digest(JSON.stringify(['review-images-v2', old.contentVersion, old.state, old.incomplete, old.changes]));
+  old.cardPreview = { key: oldKey, summary: { ...response.summary!, files: response.summary!.files.slice(0, 3), nextOffset: 3 } };
+  await store.writeRun(old);
+  const stored = (await store.getRun(run.id, false, false))!;
+  const oldRevision = digest(JSON.stringify(['stats-known-v1', [[stored.id, stored.contentVersion, stored.state, stored.incomplete, stored.replyMessageId, stored.finalReply, stored.bindings, stored.changes]]]));
+  const page = await service.replyCards({ sessionId: run.sessionId, revision: oldRevision });
+  expect(page.unchanged).not.toBe(true);
+  expect(page.cards[0].summary.files).toHaveLength(15);
+  expect(page.cards[0].summary.nextOffset).toBeNull();
+  expect((await store.getRun(run.id, false, false))!.changes).toEqual(stored.changes);
+});
+
+it('keeps large card lists paginated within the bridge budget without dropping or reordering files', async () => {
+  const run = await seed(0, 100); run.replyMessageId = 'native-reply';
+  for (const change of Object.values(run.changes)) change.note = 'verified historical note '.repeat(60);
+  host.workspace.mockResolvedValue({ path: run.root });
+  await store.writeRun(run);
+  const cards = await service.replyCards({ sessionId: run.sessionId });
+  expect(Buffer.byteLength(JSON.stringify(cards))).toBeLessThanOrEqual(28 * 1024);
+  const first = cards.cards[0].summary;
+  expect(first.files.length).toBeGreaterThan(3); expect(first.files.length).toBeLessThanOrEqual(40);
+  expect(first.nextOffset).toBe(first.files.length);
+  const files = [...first.files]; let offset = first.nextOffset;
+  while (offset != null) {
+    const page = await service.turnSummary({ sessionId: run.sessionId, runId: run.id, offset, limit: 40 });
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(28 * 1024);
+    files.push(...page.files); offset = page.nextOffset;
+  }
+  expect(files.map(file => file.path)).toEqual(Object.keys(run.changes));
 });

@@ -197,3 +197,24 @@ test('loading, error retry, empty, disabled, success, protected index and reduce
   await expect(commit).toBeDisabled();
   await noHorizontalOverflow(page);
 });
+
+for (const width of [360, 600, 1100]) for (const base of ['light', 'dark'] as const) test(`integrated mode navigation at ${width}px ${base} preserves keyboard switching`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 800 }); await open(page, `base=${base}&${session}`);
+  const nav = page.getByRole('navigation', { name: 'Diff view 功能' }), modes = nav.getByRole('group', { name: '功能切换' });
+  const sessionButton = modes.getByRole('button', { name: '会话修改', exact: true }), gitButton = modes.getByRole('button', { name: '本地 Git', exact: true });
+  await expect(sessionButton).toHaveAttribute('aria-pressed', 'true'); await expect(gitButton).toHaveAttribute('aria-pressed', 'false');
+  await expect(modes).toHaveCSS('display', 'flex'); await expect(modes).toHaveCSS('border-radius', '20px');
+  await expect(sessionButton).toHaveCSS('border-width', '0px'); await expect(sessionButton).toHaveCSS('font-size', '12px');
+  await expect(nav).toHaveCSS('border-bottom-width', '0px');
+  expect(await nav.evaluate(node => node.getBoundingClientRect().height)).toBeLessThanOrEqual(44);
+  const selectedColor = await sessionButton.evaluate(node => getComputedStyle(node).color);
+  expect(selectedColor).toBe(await page.locator('.dv-app').evaluate(node => getComputedStyle(node).color));
+  await page.screenshot({ path: info.outputPath(`mode-session-${width}-${base}.png`) });
+  await sessionButton.focus(); await page.keyboard.press('Tab'); await expect(gitButton).toBeFocused(); await focusVisible(gitButton);
+  await page.keyboard.press('Enter'); await expect(gitButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: '本地 Git 管理' })).toBeVisible(); await noHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath(`mode-git-${width}-${base}.png`) });
+  await page.keyboard.press('Shift+Tab'); await expect(sessionButton).toBeFocused(); await page.keyboard.press('Enter');
+  await expect(sessionButton).toHaveAttribute('aria-pressed', 'true'); await expect(page.locator('.dv-file').first()).toBeVisible();
+  await noHorizontalOverflow(page);
+});

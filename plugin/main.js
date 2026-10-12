@@ -2224,16 +2224,20 @@ ${text2}`;
     return run2.version === 2 && run2.boundary === "user" && run2.state !== "running" && Number.isFinite(run2.endedAt) && Object.keys(run2.changes).some((value) => !isImagePath(value)) && (!!run2.replyMessageId || run2.state !== "aborted" && !!run2.finalReply && run2.replies.filter((reply) => reply.hash === run2.finalReply.hash && reply.timestamp === run2.finalReply.timestamp).length === 1);
   }
   async cardPreview(run2) {
-    const key = digest(JSON.stringify(["review-images-v2", run2.contentVersion, run2.state, run2.incomplete, run2.changes]));
+    const key = digest(JSON.stringify(["review-images-v2", "host-fold-v1", run2.contentVersion, run2.state, run2.incomplete, run2.changes]));
     if (run2.cardPreview?.key === key && run2.cardPreview.summary.runId === run2.id && run2.cardPreview.summary.sessionId === run2.sessionId) return run2.cardPreview.summary;
-    const summary = await this.summarizeRun(run2, { limit: 3 }, true);
+    const summary = await this.summarizeRun(run2, { limit: 40 }, true);
+    while (summary.files.length > 1 && Buffer.byteLength(JSON.stringify(summary)) > 24 * 1024) {
+      summary.files.pop();
+      summary.nextOffset = summary.files.length;
+    }
     run2.cardPreview = { key, summary };
     return summary;
   }
   async replyCards(args) {
     this.validateTurn(args, false);
     const runs = (await this.store.listRuns(false)).filter((run2) => run2.sessionId === args.sessionId && this.cardEligible(run2));
-    const revision = digest(JSON.stringify(["stats-known-v1", runs.map((run2) => [run2.id, run2.contentVersion, run2.state, run2.incomplete, run2.replyMessageId, run2.finalReply, run2.bindings, run2.changes])]));
+    const revision = digest(JSON.stringify(["stats-known-v1", "host-fold-v1", runs.map((run2) => [run2.id, run2.contentVersion, run2.state, run2.incomplete, run2.replyMessageId, run2.finalReply, run2.bindings, run2.changes])]));
     const appearance = await this.host.appearance().catch(() => ({}));
     const messageId = (run2) => run2.replyMessageId ?? (run2.finalReply ? run2.bindings[run2.finalReply.hash] : void 0);
     const pending = runs.filter((run2) => !messageId(run2) && run2.finalReply).map((run2) => run2.finalReply.timestamp);

@@ -214,7 +214,7 @@ function replyTail(content) {
 }
 
 // src/renderer/TurnChangeSummary.tsx
-import React2, { useEffect, useRef, useState } from "react";
+import React2, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 // src/view/FilePath.tsx
 import React from "react";
@@ -227,13 +227,27 @@ function FilePath({ path }) {
 function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpen }) {
   const zh = locale.startsWith("zh");
   const [summary, setSummary] = useState(initialSummary ?? null);
-  const [expanded, setExpanded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const live = useRef(true);
+  const cardRef = useRef(null);
+  const [hostExpanded, setHostExpanded] = useState(false);
+  useLayoutEffect(() => {
+    const viewport = cardRef.current?.closest(".pi-entry-extra-viewport");
+    if (!viewport) return;
+    const sync = () => {
+      viewport.scrollTop = 0;
+      setHostExpanded(viewport.dataset.expanded === "true");
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(viewport, { attributes: true, attributeFilter: ["data-expanded"] });
+    return () => observer.disconnect();
+  }, [run.id, summary?.fileCount === 0]);
   useEffect(() => {
     let active = true;
     live.current = true;
     setError("");
-    if (!initialSummary) transport.invoke("turnSummary", { runId: run.id, sessionId: run.sessionId, limit: 3 }).then((data) => {
+    if (!initialSummary) transport.invoke("turnSummary", { runId: run.id, sessionId: run.sessionId, limit: 40 }).then((data) => {
       if (active) setSummary(data);
     }).catch((err) => {
       if (active) setError(String(err?.message ?? err));
@@ -245,7 +259,6 @@ function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpe
   }, [transport, run.id, run.sessionId, initialSummary]);
   useEffect(() => {
     setSummary(initialSummary ?? null);
-    setExpanded(false);
   }, [run.id, run.sessionId]);
   useEffect(() => {
     if (initialSummary) setSummary((previous) => previous && previous.fileCount === initialSummary.fileCount && previous.additions === initialSummary.additions && previous.deletions === initialSummary.deletions && previous.unknownFileCount === initialSummary.unknownFileCount && initialSummary.files.every((file) => previous.files.some((old) => old.id === file.id && old.fingerprint === file.fingerprint && old.kind === file.kind && old.statsKnown === file.statsKnown)) ? { ...initialSummary, files: previous.files, nextOffset: previous.nextOffset } : initialSummary);
@@ -262,37 +275,30 @@ function TurnChangeSummary({ run, transport, locale, base, initialSummary, onOpe
       if (live.current) setBusy(false);
     }
   };
-  const expand = async (loadMore = false) => {
-    if (!summary || busy) return;
-    if (expanded && !loadMore) {
-      setExpanded(false);
-      return;
-    }
-    if (!loadMore && summary.files.length > 3 || summary.nextOffset == null) {
-      setExpanded(true);
-      return;
-    }
+  const loadMore = async () => {
+    if (!summary || busy || summary.nextOffset == null) return;
     setBusy(true);
     setError("");
     try {
       const page = await transport.invoke("turnSummary", { runId: run.id, sessionId: run.sessionId, offset: summary.nextOffset, limit: 40 });
-      if (live.current) {
-        setSummary((previous) => previous && { ...page, offset: 0, files: [...previous.files, ...page.files.filter((file) => !previous.files.some((old) => old.id === file.id))] });
-        setExpanded(true);
-      }
+      if (page.runId !== run.id || page.sessionId !== run.sessionId || page.offset !== summary.nextOffset || page.nextOffset != null && (!Number.isSafeInteger(page.nextOffset) || page.nextOffset <= page.offset || !page.files.length)) throw new Error(zh ? "\u65E0\u6548\u7684\u6587\u4EF6\u5217\u8868\u5206\u9875\uFF0C\u8BF7\u91CD\u8BD5\u3002" : "Invalid file-list page; retry.");
+      if (live.current) setSummary((previous) => previous && previous.runId === page.runId && previous.sessionId === page.sessionId ? { ...page, offset: 0, files: [...previous.files, ...page.files.filter((file) => !previous.files.some((old) => old.id === file.id))] } : previous);
     } catch (err) {
       if (live.current) setError(String(err.message ?? err));
     } finally {
       if (live.current) setBusy(false);
     }
   };
+  useEffect(() => {
+    if (hostExpanded && summary?.nextOffset != null && !busy && !error) void loadMore();
+  }, [hostExpanded, summary, busy, error]);
   if (summary?.fileCount === 0 && !error) return null;
-  const files = summary ? expanded ? summary.files : summary.files.slice(0, 3) : [];
-  return /* @__PURE__ */ React2.createElement("section", { className: "dv-turn-card dv-reply", "data-base": base, "aria-label": zh ? "\u672C\u6B21\u4EFB\u52A1\u6587\u4EF6\u53D8\u66F4" : "Files changed in this task" }, /* @__PURE__ */ React2.createElement("header", { className: "dv-turn-head" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-icon", "aria-hidden": "true" }, /* @__PURE__ */ React2.createElement("svg", { viewBox: "0 0 24 24", width: "22", height: "22", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React2.createElement("rect", { x: "4", y: "3", width: "16", height: "18", rx: "4" }), /* @__PURE__ */ React2.createElement("path", { d: "M9 9h6M12 6v6M9 16h6" }))), /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-label" }, /* @__PURE__ */ React2.createElement("strong", null, summary ? zh ? `\u5DF2\u7F16\u8F91 ${summary.fileCount} \u4E2A\u6587\u4EF6` : `${summary.fileCount} files changed` : zh ? "\u6B63\u5728\u8BFB\u53D6\u672C\u6B21\u53D8\u66F4\u2026" : "Loading task changes\u2026"), summary && /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, (summary.unknownFileCount ?? 0) < summary.fileCount && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", summary.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", summary.deletions)), !!summary.unknownFileCount && /* @__PURE__ */ React2.createElement("span", null, zh ? summary.unknownFileCount >= summary.fileCount ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : "Partial / unknown totals"))), /* @__PURE__ */ React2.createElement("button", { className: "dv-turn-open", disabled: busy || !summary, onClick: () => void open() }, busy ? zh ? "\u6253\u5F00\u4E2D\u2026" : "Opening\u2026" : zh ? "\u67E5\u770B\u53D8\u66F4" : "View changes")), !!files.length && /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-files" }, files.map((file) => {
+  const files = summary?.files ?? [];
+  return /* @__PURE__ */ React2.createElement("section", { ref: cardRef, className: "dv-turn-card dv-reply", "data-base": base, "aria-label": zh ? "\u672C\u6B21\u4EFB\u52A1\u6587\u4EF6\u53D8\u66F4" : "Files changed in this task" }, /* @__PURE__ */ React2.createElement("header", { className: "dv-turn-head" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-icon", "aria-hidden": "true" }, /* @__PURE__ */ React2.createElement("svg", { viewBox: "0 0 24 24", width: "22", height: "22", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React2.createElement("rect", { x: "4", y: "3", width: "16", height: "18", rx: "4" }), /* @__PURE__ */ React2.createElement("path", { d: "M9 9h6M12 6v6M9 16h6" }))), /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-label" }, /* @__PURE__ */ React2.createElement("strong", null, summary ? zh ? `\u5DF2\u7F16\u8F91 ${summary.fileCount} \u4E2A\u6587\u4EF6` : `${summary.fileCount} files changed` : zh ? "\u6B63\u5728\u8BFB\u53D6\u672C\u6B21\u53D8\u66F4\u2026" : "Loading task changes\u2026"), summary && /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, (summary.unknownFileCount ?? 0) < summary.fileCount && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", summary.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", summary.deletions)), !!summary.unknownFileCount && /* @__PURE__ */ React2.createElement("span", null, zh ? summary.unknownFileCount >= summary.fileCount ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : "Partial / unknown totals"))), /* @__PURE__ */ React2.createElement("button", { className: "dv-turn-open", disabled: busy || !summary, onClick: () => void open() }, busy ? zh ? "\u6253\u5F00\u4E2D\u2026" : "Opening\u2026" : zh ? "\u67E5\u770B\u53D8\u66F4" : "View changes")), !!files.length && /* @__PURE__ */ React2.createElement("div", { className: "dv-turn-files" }, files.map((file) => {
     const known2 = file.kind === "text" && file.statsKnown !== false;
     const label = file.kind === "binary" ? zh ? "\u4E8C\u8FDB\u5236\u6587\u4EF6" : "Binary file" : file.kind === "large" ? zh ? "\u6587\u4EF6\u8FC7\u5927" : "Large file" : zh ? "\u5FEB\u7167\u4E0D\u5B8C\u6574" : "Incomplete snapshot";
     return /* @__PURE__ */ React2.createElement("button", { key: file.id, className: "dv-turn-file", title: [file.absolutePath ?? file.path, file.note].filter(Boolean).join("\n"), disabled: busy, onClick: () => void open(file) }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-path" }, /* @__PURE__ */ React2.createElement(FilePath, { path: file.path }), file.origin === "external" && /* @__PURE__ */ React2.createElement("small", null, zh ? "\u5DE5\u4F5C\u533A\u5916 \xB7 \u53EA\u8BFB" : "Outside workspace \xB7 read-only")), known2 ? /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-counts" }, /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-add" }, "+", file.additions), /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-del" }, "\u2212", file.deletions)) : /* @__PURE__ */ React2.createElement("span", { className: "dv-turn-unknown", title: label }, zh ? "\u884C\u6570\u672A\u77E5" : "Unknown totals"));
-  })), summary?.unknownFileCount || summary?.files.some((file) => file.statsKnown === false || file.kind !== "text") ? /* @__PURE__ */ React2.createElement("details", { className: "dv-turn-stats-note" }, /* @__PURE__ */ React2.createElement("summary", null, zh ? "\u7EDF\u8BA1\u8BF4\u660E" : "About these totals"), /* @__PURE__ */ React2.createElement("p", null, zh ? "\u4EC5\u7EDF\u8BA1\u6709\u5B8C\u6574\u5FEB\u7167\u7684\u6587\u672C\u6587\u4EF6\uFF1B\u7F3A\u5931\u5386\u53F2\u5185\u5BB9\u7684\u6587\u4EF6\u4E0D\u8BA1\u5165\u884C\u6570\u3002" : "Totals include text files with complete snapshots; missing historical content is excluded.")) : null, summary && summary.fileCount > 3 && /* @__PURE__ */ React2.createElement("footer", { className: "dv-turn-foot" }, /* @__PURE__ */ React2.createElement("button", { "aria-expanded": expanded, disabled: busy, onClick: () => void expand() }, expanded ? zh ? "\u6536\u8D77\u6587\u4EF6" : "Collapse files" : zh ? `\u518D\u663E\u793A ${Math.max(0, summary.fileCount - 3)} \u4E2A\u6587\u4EF6` : `Show ${Math.max(0, summary.fileCount - 3)} more files`, " ", /* @__PURE__ */ React2.createElement("span", { "aria-hidden": "true" }, expanded ? "\u2303" : "\u2304")), expanded && summary.nextOffset != null && /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => void expand(true) }, zh ? "\u52A0\u8F7D\u66F4\u591A" : "Load more")), error && /* @__PURE__ */ React2.createElement("p", { className: "dv-turn-error", role: "alert" }, error));
+  })), summary?.unknownFileCount || summary?.files.some((file) => file.statsKnown === false || file.kind !== "text") ? /* @__PURE__ */ React2.createElement("details", { className: "dv-turn-stats-note" }, /* @__PURE__ */ React2.createElement("summary", null, zh ? "\u7EDF\u8BA1\u8BF4\u660E" : "About these totals"), /* @__PURE__ */ React2.createElement("p", null, zh ? "\u4EC5\u7EDF\u8BA1\u6709\u5B8C\u6574\u5FEB\u7167\u7684\u6587\u672C\u6587\u4EF6\uFF1B\u7F3A\u5931\u5386\u53F2\u5185\u5BB9\u7684\u6587\u4EF6\u4E0D\u8BA1\u5165\u884C\u6570\u3002" : "Totals include text files with complete snapshots; missing historical content is excluded.")) : null, summary?.nextOffset != null && /* @__PURE__ */ React2.createElement("footer", { className: "dv-turn-foot" }, /* @__PURE__ */ React2.createElement("button", { disabled: busy, onClick: () => void loadMore() }, busy ? zh ? "\u52A0\u8F7D\u4E2D\u2026" : "Loading\u2026" : zh ? "\u52A0\u8F7D\u66F4\u591A\u6587\u4EF6" : "Load more files")), error && /* @__PURE__ */ React2.createElement("p", { className: "dv-turn-error", role: "alert" }, error));
 }
 
 // src/renderer/summary-style.ts
@@ -303,6 +309,12 @@ var summary_style_default = `
 .dv-turn-head{display:flex;align-items:center;gap:12px;padding:12px 14px}.dv-turn-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:10px;color:var(--tc-muted);background:color-mix(in srgb,currentColor 4%,transparent)}.dv-turn-label{display:flex;flex-direction:column;align-items:flex-start;gap:2px;flex:1;min-width:0}.dv-turn-label strong{font-size:14px;font-weight:600}.dv-turn-counts{display:inline-flex;gap:5px;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums}.dv-turn-add{color:var(--tc-add)}.dv-turn-del{color:var(--tc-del)}.dv-turn-card .dv-turn-open{border:1px solid var(--tc-border);border-radius:10px;padding:4px 10px;white-space:nowrap;font-size:13px}
 .dv-turn-files{border-top:1px solid var(--tc-border);padding:2px 0}.dv-turn-card .dv-turn-file{display:flex;align-items:center;gap:12px;width:100%;padding:8px 12px;text-align:left;min-height:38px}.dv-turn-path{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--tc-ink)}.dv-turn-card .dv-path-directory{color:var(--tc-muted)}.dv-turn-card .dv-path-basename{color:var(--tc-ink)}.dv-turn-path small{font-size:11px;margin-left:8px;display:inline-block;color:var(--tc-muted)}.dv-turn-foot{padding:0 6px 5px;display:flex;gap:8px}.dv-turn-foot button{padding:6px}.dv-turn-error{margin:0;padding:8px 12px;border-top:1px solid var(--tc-border);font-size:12px;overflow-wrap:anywhere;color:var(--tc-del)}
 .dv-turn-card .dv-turn-file{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:14px;padding:9px 14px}.dv-turn-unknown{color:var(--tc-muted);font-size:11px;white-space:nowrap}.dv-turn-stats-note{border-top:1px solid var(--tc-border);padding:8px 14px;color:var(--tc-muted);font-size:12px}.dv-turn-stats-note summary{cursor:pointer;width:fit-content}.dv-turn-stats-note p{margin:6px 0 0;max-width:60ch;line-height:1.6}.dv-turn-foot{border-top:1px solid var(--tc-border);padding:3px 8px}.dv-turn-foot button{font-size:12px;color:var(--tc-muted)}
+/* Adapt only this plugin's entryExtra viewport; keep the host's single toggle. */
+.pi-entry-extra-viewport:has(.dv-turn-card){overflow-y:auto;overscroll-behavior:contain;mask-image:none;-webkit-mask-image:none}
+.pi-entry-extra-viewport[data-expanded=true]:has(.dv-turn-card){max-height:none!important;overflow:visible;overscroll-behavior:auto}
+.pi-entry-extra-viewport .dv-turn-card{overflow:clip}
+.pi-entry-extra-viewport .dv-turn-head{position:sticky;top:0;z-index:1;border-radius:12px 12px 0 0;background:var(--ds-bg-elevated-opaque,#fafafa);box-shadow:0 1px var(--tc-border)}
+.pi-entry-extra-viewport .dv-turn-card[data-base=dark] .dv-turn-head{background:var(--ds-bg-elevated-opaque,#212121)}
 @media(max-width:420px){.dv-turn-head{padding:10px;gap:9px}.dv-turn-icon{width:36px;height:36px;flex-basis:36px}.dv-turn-label strong{font-size:13px}.dv-turn-card .dv-turn-open{font-size:12px;padding:4px 8px}.dv-turn-card .dv-turn-file{padding:7px 10px;gap:8px;font-size:13px}}
 `;
 
@@ -506,7 +518,7 @@ function createPluginReviewAdapter(options = {}) {
 }
 
 // src/renderer/RunningChangePill.tsx
-import React4, { useEffect as useEffect2, useLayoutEffect, useRef as useRef2, useState as useState2 } from "react";
+import React4, { useEffect as useEffect2, useLayoutEffect as useLayoutEffect2, useRef as useRef2, useState as useState2 } from "react";
 import { createPortal } from "react-dom";
 
 // src/renderer/running-changes.ts
@@ -634,7 +646,7 @@ function RunningChangePill({ transport, adapter, report: report2 }) {
       controller.current = void 0;
     };
   }, [transport, adapter, report2]);
-  useLayoutEffect(() => {
+  useLayoutEffect2(() => {
     const owner = anchor.current;
     if (!view.summary || !owner) {
       setPosition(hidden);

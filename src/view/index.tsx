@@ -83,7 +83,7 @@ export function Panel() {
   if (sessionId && !selecting && !error) readySession.current = sessionId;
   const showReview = Boolean(sessionId && !error && (!selecting || readySession.current === sessionId));
   return <div className="dv-panel dv-theme" data-base={appearance.base}>
-    <nav className="dv-panel-nav" aria-label="Diff view 功能"><button onClick={() => setMode('session')} aria-pressed={mode === 'session'}>会话修改</button><button onClick={() => setMode('git')} aria-pressed={mode === 'git'}>本地 Git</button>{mode === 'git' && roots.length > 1 && <select aria-label="Git 项目" title={gitRoot} value={gitRoot} onChange={e => setGitRoot(e.target.value)}>{roots.map(root => <option key={root}>{root}</option>)}</select>}</nav>
+    <nav className="dv-panel-nav" aria-label="Diff view 功能"><div className="dv-panel-modes" role="group" aria-label="功能切换"><button onClick={() => setMode('session')} aria-pressed={mode === 'session'}>会话修改</button><button onClick={() => setMode('git')} aria-pressed={mode === 'git'}>本地 Git</button></div>{mode === 'git' && roots.length > 1 && <select aria-label="Git 项目" title={gitRoot} value={gitRoot} onChange={e => setGitRoot(e.target.value)}>{roots.map(root => <option key={root}>{root}</option>)}</select>}</nav>
     <div className="dv-panel-content">
     <div className="dv-panel-page" hidden={mode !== 'git'}>
       {gitError && <p className="dv-panel-message" role="alert">{gitError}</p>}

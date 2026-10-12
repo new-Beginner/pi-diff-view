@@ -38,7 +38,7 @@
   if (scenario === 'panel') state.runs = ['session-a', 'session-b'].map(sessionId => ({ ...run, sessionId, id: `run-${sessionId}` }));
   state.navigation = new Map();
   state.openLocation = path => listeners.get('view:open')?.({ path });
-  const preview = (record = run) => ({ runId: record.id, sessionId: record.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(0, 3).map(file => ({ ...file, actions: [] })), offset: 0, nextOffset: 3 });
+  const preview = (record = run) => ({ runId: record.id, sessionId: record.sessionId, fileCount: turnFiles.length, additions: turnFiles.reduce((n, file) => n + file.additions, 0), deletions: turnFiles.reduce((n, file) => n + file.deletions, 0), incomplete: false, files: turnFiles.slice(0, 40).map(file => ({ ...file, actions: [] })), offset: 0, nextOffset: turnFiles.length > 40 ? 40 : null });
   state.replyBindings = new Map();
   const historyCount = Number(params.get('historyCards') || 0);
   if (historyCount) for (let i = 0; i < historyCount; i++) { const record = { ...run, id: `history-run-${i}` }; state.replyBindings.set(`history-${i}`, { messageId: `history-${i}`, run: record, summary: preview(record) }); }

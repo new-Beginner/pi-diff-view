@@ -6,13 +6,28 @@ let harness = '';
 test.beforeAll(async () => {
   harness = (await build({ entryPoints: ['tests/e2e/renderer-harness.tsx'], bundle: true, platform: 'browser', format: 'iife', target: 'es2022', write: false, loader: { '.css': 'empty' } })).outputFiles[0].text;
 });
-async function setup(page: Page, locale = 'en', query = '') {
+async function setup(page: Page, locale = 'en', query = '', filesPerCard = 4) {
   await page.route('**/renderer-demo*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"><script src="/mock.js"></script><style>body{margin:0;font:14px/1.7 'Segoe UI',system-ui;background:#fff;color:#30343b}#mock-chat{padding:30px;width:min(880px,100%);box-sizing:border-box;transition:none}body.sidebar-open #mock-chat{width:calc(100% - 640px)}h1{font-size:17px;margin:0 0 26px}.demo-label{color:#7b8290;font-size:12px;padding:8px 16px;background:#f4f6f9}.mock-reply-text{padding:60px 0 12px}.mock-composer{margin-top:90px;border:1px solid #e4e7ec;border-radius:20px;padding:18px 20px;color:#8a929e}#demo-plugin-sidebar{position:fixed;right:0;top:0;bottom:0;width:640px;border-left:1px solid #e4e7ec;background:#fff;display:flex;flex-direction:column}#demo-plugin-sidebar header{padding:10px 14px;border-bottom:1px solid #e4e7ec;display:flex;justify-content:space-between}#demo-plugin-sidebar header button{background:transparent;border:0;cursor:pointer}#demo-plugin-sidebar iframe{width:100%;flex:1;border:0;min-height:0}</style></head><body><div class="demo-label">界面预览 · 测试数据与模拟宿主，不是实际会话验收</div><main id="mock-chat"><h1>Diff view 文末文件变更</h1><div class="mock-reply-text"><p>已完成本次修改，文件变更与检查结果如下。</p><p>点击下面的文件名，在右侧 Diff view 页签查看对应差异。</p></div><article id="mock-reply"></article><div class="mock-composer">与 PI 协作…</div></main></body></html>` }));
   await page.route('**/sidebar-demo*', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><script src="/mock.js"></script><link rel="stylesheet" href="/index.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/index.js"></script></body></html>' }));
-  await page.goto(`/renderer-demo?scenario=renderer&lang=${locale}${query}`); await page.addScriptTag({ content: harness });
+  await page.goto(`/renderer-demo?scenario=renderer&lang=${locale}${query}`);
+  if (query.includes('base=dark')) await page.addStyleTag({ content: 'body{background:#212121;color:#eeeeee;--ds-bg-elevated-opaque:#212121}' });
+  if (query.includes('hostFold=true')) await page.evaluate(() => {
+    const article = document.getElementById('mock-reply')!;
+    const css = document.createElement('style');
+    css.textContent = '.pi-entry-extra-viewport{overflow:hidden}.pi-entry-extra-viewport[data-expanded=true]{overflow-y:auto;overscroll-behavior:contain}.pi-entry-extra-viewport[data-clipped=true]{mask-image:linear-gradient(to bottom,#000 92%,transparent)}';
+    document.head.append(css);
+    const block = document.createElement('div'); block.className = 'pi-entry-extra-block';
+    const viewport = document.createElement('div'); viewport.className = 'pi-entry-extra-viewport'; viewport.style.maxHeight = '280px'; viewport.dataset.clipped = 'true';
+    const content = document.createElement('div'); article.before(block); block.append(viewport); viewport.append(content); content.append(article);
+    const toggle = document.createElement('button'); toggle.className = 'pi-entry-extra-toggle'; toggle.textContent = '展开完整内容'; toggle.setAttribute('aria-expanded', 'false');
+    toggle.onclick = () => { const open = toggle.getAttribute('aria-expanded') !== 'true'; toggle.setAttribute('aria-expanded', String(open)); if (open) viewport.dataset.expanded = 'true'; else delete viewport.dataset.expanded; viewport.style.maxHeight = open ? '480px' : '280px'; toggle.textContent = open ? '收起内容' : '展开完整内容'; };
+    block.append(toggle);
+    const other = block.cloneNode(false) as HTMLElement; other.id = 'other-plugin'; other.innerHTML = '<div class="pi-entry-extra-viewport" data-expanded="true" style="max-height:480px"><div style="height:900px">Other plugin</div></div>'; block.after(other);
+  });
+  await page.addScriptTag({ content: harness });
   const count = Number(new URLSearchParams(query).get('historyCards') || 1);
   await expect(page.locator('.dv-turn-card')).toHaveCount(count, { timeout: 3000 });
-  await expect(page.locator('.dv-turn-file')).toHaveCount(count * 3);
+  await expect(page.locator('.dv-turn-file')).toHaveCount(count * filesPerCard);
 }
 test('latest host aggregate is queried first even with long progress and older unbound replies', async ({ page }) => {
   await setup(page, 'en', '&longReply=true&latestAtEnd=true');
@@ -45,15 +60,12 @@ test('reply-end summary opens the plugin sidebar at the clicked file with no idl
   await page.waitForTimeout(400); const before = await page.evaluate(() => (window as any).__demo.calls.length);
   await page.waitForTimeout(6400); expect(await page.evaluate(() => (window as any).__demo.calls.length)).toBe(before);
 });
-test('file expansion is cached, external files are labelled, and collapse restores first three', async ({ page }) => {
+test('ordinary cards expose all files without a second plugin expansion or per-card page request', async ({ page }) => {
   await setup(page);
-  await page.getByRole('button', { name: /Show 1 more files/ }).click();
   await expect(page.locator('.dv-turn-file')).toHaveCount(4);
   await expect(page.locator('.dv-turn-file').last()).toContainText('Outside workspace · read-only');
-  const before = await page.evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.turnSummary').length);
-  await page.getByRole('button', { name: /Collapse files/ }).click(); await expect(page.locator('.dv-turn-file')).toHaveCount(3);
-  await page.getByRole('button', { name: /Show 1 more files/ }).click(); await expect(page.locator('.dv-turn-file')).toHaveCount(4);
-  expect(await page.evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.turnSummary').length)).toBe(before);
+  await expect(page.getByRole('button', { name: /Show .*more files|Collapse files|Load more files/ })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.turnSummary').length)).toBe(0);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
 test('an old-session click cannot open a sidebar in the new session', async ({ page }) => {
@@ -135,9 +147,9 @@ test('cached history stays immediately visible on remount even while the bridge 
   await page.evaluate(() => { (window as any).__demo.failFeed = true; (window as any).__rendererDemo.hideReplies(); });
   await expect(page.locator('.dv-turn-card')).toHaveCount(0);
   await page.evaluate(() => (window as any).__rendererDemo.showReplies());
-  await expect(page.locator('.dv-turn-file')).toHaveCount(3, { timeout: 300 });
+  await expect(page.locator('.dv-turn-file')).toHaveCount(4, { timeout: 300 });
   await expect(page.locator('.dv-turn-head')).toContainText('4 files changed');
-  await page.waitForTimeout(2500); await expect(page.locator('.dv-turn-file')).toHaveCount(3);
+  await page.waitForTimeout(2500); await expect(page.locator('.dv-turn-file')).toHaveCount(4);
   await page.evaluate(async () => { (window as any).__demo.failFeed = false; await (window as any).pluginBridge.invoke('diff.clearHistory', { confirmed: true }); });
   await expect(page.locator('.dv-turn-card')).toHaveCount(0, { timeout: 4000 });
   await page.evaluate(() => (window as any).__rendererDemo.unload());
@@ -227,5 +239,80 @@ test('unknown statistics use a compact disclosure and stay aligned on narrow scr
   }
   await page.locator('.dv-turn-stats-note summary').click();
   await expect(page.locator('.dv-turn-stats-note p')).toBeVisible();
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+
+for (const [width, count, base] of [[900, 17, 'light'], [360, 65, 'dark']] as const) test(`host fold keeps header fixed and expands all ${count} files at ${width}px / ${base}`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 650 });
+  await page.addInitScript(({ count }) => {
+    let bridge: any, full: any;
+    Object.defineProperty(window, 'pluginBridge', { configurable: true, get: () => bridge, set(value) {
+      bridge = value; const invoke = value.invoke.bind(value);
+      value.invoke = async (method: string, args: any, internal: boolean) => {
+        if (method === 'diff.turnSummary' && full) return { ...full, offset: args.offset, files: full.files.slice(args.offset, args.offset + 40), nextOffset: args.offset + 40 < count ? args.offset + 40 : null };
+        const result = await invoke(method, args, internal);
+        if (method === 'diff.replyCards') for (const card of result.cards) {
+          const file = card.summary.files[0]; card.run.fileCount = card.summary.fileCount = count;
+          full = { ...card.summary, files: Array.from({ length: count }, (_, index) => ({ ...file, id: `file-${index}`, path: `src/file-${index + 1}.ts` })) };
+          card.summary.files = full.files.slice(0, 40); card.summary.nextOffset = count > 40 ? 40 : null;
+        }
+        return result;
+      };
+    } });
+  }, { count });
+  await setup(page, 'zh-CN', `&persisted=true&hostFold=true&base=${base}`, Math.min(count, 40));
+  const viewport = page.locator('.pi-entry-extra-block').first().locator('.pi-entry-extra-viewport');
+  const header = page.locator('.dv-turn-head');
+  const initialTop = (await header.boundingBox())!.y;
+  await viewport.evaluate(node => { node.scrollTop = 160; });
+  await expect.poll(() => header.evaluate(node => Math.abs(node.getBoundingClientRect().top - node.closest('.pi-entry-extra-viewport')!.getBoundingClientRect().top))).toBeLessThan(2);
+  expect((await header.boundingBox())!.y).toBeLessThanOrEqual(initialTop);
+  await expect(header.getByRole('button', { name: '查看变更' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /再显示|收起文件/ })).toHaveCount(0);
+  await page.getByRole('button', { name: '展开完整内容', exact: true }).click();
+  await expect(page.locator('.dv-turn-file')).toHaveCount(count);
+  expect(await viewport.evaluate(node => ({ max: getComputedStyle(node).maxHeight, overflow: getComputedStyle(node).overflowY, fits: node.scrollHeight <= node.clientHeight + 1, top: node.scrollTop }))).toEqual({ max: 'none', overflow: 'visible', fits: true, top: 0 });
+  await expect(page.locator('.dv-turn-file').last()).toContainText(`file-${count}.ts`);
+  await expect(page.locator('.dv-turn-foot')).toHaveCount(0);
+  expect(await page.locator('#other-plugin .pi-entry-extra-viewport').evaluate(node => ({ max: getComputedStyle(node).maxHeight, overflow: getComputedStyle(node).overflowY }))).toEqual({ max: '480px', overflow: 'auto' });
+  expect(await page.locator('.dv-turn-card').evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await page.screenshot({ path: info.outputPath(`full-${count}-${width}-${base}.png`), fullPage: true });
+  await page.evaluate(() => window.scrollTo(0, document.querySelector('.dv-turn-card')!.getBoundingClientRect().top + window.scrollY + 120));
+  await expect.poll(() => header.evaluate(node => Math.abs(node.getBoundingClientRect().top))).toBeLessThan(2);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.getByRole('button', { name: '收起内容', exact: true }).click();
+  expect(await viewport.evaluate(node => ({ max: getComputedStyle(node).maxHeight, overflow: getComputedStyle(node).overflowY, clipped: node.scrollHeight > node.clientHeight, top: node.scrollTop }))).toEqual({ max: '280px', overflow: 'auto', clipped: true, top: 0 });
+  await expect(page.locator('.dv-turn-file')).toHaveCount(count);
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+
+for (const auto of [false, true]) test(`${auto ? 'automatic' : 'manual'} pagination stops on errors, retries and retains loaded files`, async ({ page }) => {
+  await page.addInitScript(({ auto }) => {
+    let bridge: any, summary: any, requests = 0;
+    Object.defineProperty(window, 'pluginBridge', { configurable: true, get: () => bridge, set(value) {
+      bridge = value; const invoke = value.invoke.bind(value);
+      value.invoke = async (method: string, args: any, internal: boolean) => {
+        if (method === 'diff.turnSummary' && args.offset === 4) {
+          (window as any).__demo.pageRequests = ++requests;
+          if (requests === 1) { if (auto) return { ...summary, offset: 4, nextOffset: 4, files: [] }; throw new Error('page temporarily unavailable'); }
+          return { ...summary, offset: 4, nextOffset: null, files: [4, 5].map(index => ({ ...summary.files[0], id: `page-${index}`, path: `src/page-${index}.ts` })) };
+        }
+        const result = await invoke(method, args, internal);
+        if (method === 'diff.replyCards') for (const card of result.cards) { card.summary.fileCount = 6; card.summary.nextOffset = 4; summary = card.summary; }
+        return result;
+      };
+    } });
+  }, { auto });
+  await setup(page, 'en', `&persisted=true${auto ? '&hostFold=true' : ''}`);
+  if (auto) await page.getByRole('button', { name: '展开完整内容', exact: true }).click();
+  else await page.getByRole('button', { name: 'Load more files', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(auto ? 'Invalid file-list page' : 'page temporarily unavailable');
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => (window as any).__demo.pageRequests)).toBe(1);
+  await page.getByRole('button', { name: 'Load more files', exact: true }).click();
+  await expect(page.locator('.dv-turn-file')).toHaveCount(6); await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('.dv-turn-foot')).toHaveCount(0);
+  await page.waitForTimeout(2500); await expect(page.locator('.dv-turn-file')).toHaveCount(6);
+  await expect(page.getByRole('button', { name: /Show .*more files|Collapse files/ })).toHaveCount(0);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });

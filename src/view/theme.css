@@ -33,14 +33,17 @@
 }
 html, body { margin: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13px/1.5 var(--dv-font); }
 #root { min-width: 0; }
-.dv-panel { height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); min-height: 240px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; color: var(--dv-ink); background: var(--dv-bg); }
+.dv-panel { height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); min-height: 240px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13px/1.45 var(--dv-font); }
 .dv-panel *, .dv-panel *::before, .dv-panel *::after { box-sizing: border-box; }
-.dv-panel-nav { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: 8px; padding: 8px; border-bottom: 1px solid var(--dv-border); }
+.dv-panel-nav { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: 8px; padding: 6px 12px 0; background: transparent; }
 .dv-panel-nav button, .dv-panel-nav select, .dv-panel-message button { font: inherit; color: inherit; background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: 4px; padding: 4px 8px; min-height: 32px; }
 .dv-panel-nav button, .dv-panel-message button { cursor: pointer; }
 .dv-panel-nav button:hover:not(:disabled), .dv-panel-message button:hover:not(:disabled) { background: var(--dv-hover); }
 .dv-panel-nav button:active:not(:disabled), .dv-panel-message button:active:not(:disabled) { background: var(--dv-selected); }
-.dv-panel-nav button[aria-pressed='true'] { background: var(--dv-selected); border-color: var(--dv-focus); font-weight: 600; }
+.dv-panel-modes { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ds-border-default, color-mix(in srgb, var(--dv-ink) 9%, var(--dv-bg))); border-radius: 20px; }
+.dv-panel-modes button { min-height: 28px; padding: 4px 12px; border: 0; border-radius: 16px; background: transparent; color: var(--dv-muted); font-size: 12px; line-height: 20px; font-weight: 500; }
+.dv-panel-modes button[aria-pressed='true'] { background: var(--dv-selected); color: var(--dv-ink); font-weight: 600; }
+.dv-panel-nav .dv-panel-modes button:focus-visible { outline-offset: -2px; }
 .dv-panel-nav select { flex: 1 1 200px; width: 0; min-width: 0; max-width: 100%; }
 .dv-panel-nav :focus-visible, .dv-panel-message button:focus-visible { outline: 2px solid var(--dv-focus); outline-offset: 2px; }
 .dv-panel-nav :disabled, .dv-panel-message button:disabled { opacity: .5; cursor: not-allowed; }

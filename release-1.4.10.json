@@ -1,0 +1,28 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.10",
+  "package": "plugin/dist/local.diff-view-1.4.10.piplug",
+  "packageBytes": 2397674,
+  "packageFiles": 76,
+  "sha256": "dc9d9e608e7084bfc785c7a28acd446b51754f5d5f061c144933a0f41389e353",
+  "verification": {
+    "typecheck": "passed",
+    "build": "passed",
+    "unitIntegration": { "filesPassed": 37, "testsPassed": 324, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 124, "testsFailed": 0, "browser": "local Chrome", "host": "implementation components and production bundle with controlled host bridge and entryExtra layout fixture" },
+    "pluginCheck": "passed",
+    "pluginPack": "passed",
+    "gitDiffCheck": "passed",
+    "projectIndex": "No staged changes observed"
+  },
+  "changes": [
+    "Keep the summary header sticky in the collapsed host viewport and on expanded page scrolling",
+    "Allow scrolling while collapsed; remove the height cap and internal scroll area when expanded",
+    "Scope all host viewport adaptation to containers containing this plugin's summary card",
+    "Automatically continue bounded metadata pagination while expanded; stop on errors and retain manual retry",
+    "Validate page identity and forward progress; preserve existing single host expand/collapse toggle"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostFilesModified": false, "gitStageCommitPushPerformed": false },
+  "report": "docs/verification-1.4.10.md"
+}

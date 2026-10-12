@@ -355,15 +355,19 @@ export class ReviewService {
     return run.version === 2 && run.boundary === 'user' && run.state !== 'running' && Number.isFinite(run.endedAt) && Object.keys(run.changes).some(value => !isImagePath(value)) && (!!run.replyMessageId || (run.state !== 'aborted' && !!run.finalReply && run.replies.filter(reply => reply.hash === run.finalReply!.hash && reply.timestamp === run.finalReply!.timestamp).length === 1));
   }
   private async cardPreview(run: CaptureRun): Promise<TurnSummary> {
-    const key = digest(JSON.stringify(['review-images-v2', run.contentVersion, run.state, run.incomplete, run.changes]));
+    const key = digest(JSON.stringify(['review-images-v2', 'host-fold-v1', run.contentVersion, run.state, run.incomplete, run.changes]));
     if (run.cardPreview?.key === key && run.cardPreview.summary.runId === run.id && run.cardPreview.summary.sessionId === run.sessionId) return run.cardPreview.summary;
-    const summary = await this.summarizeRun(run, { limit: 3 }, true);
+    const summary = await this.summarizeRun(run, { limit: 40 }, true);
+    // Leave room for the reply ID/run wrapper inside the same 28 KiB bridge budget.
+    while (summary.files.length > 1 && Buffer.byteLength(JSON.stringify(summary)) > 24 * 1024) {
+      summary.files.pop(); summary.nextOffset = summary.files.length;
+    }
     run.cardPreview = { key, summary }; return summary;
   }
   async replyCards(args: { sessionId: string; offset?: number; revision?: string }): Promise<ReplyCardsPage> {
     this.validateTurn(args, false);
     const runs = (await this.store.listRuns(false)).filter(run => run.sessionId === args.sessionId && this.cardEligible(run));
-    const revision = digest(JSON.stringify(['stats-known-v1', runs.map(run => [run.id, run.contentVersion, run.state, run.incomplete, run.replyMessageId, run.finalReply, run.bindings, run.changes])]));
+    const revision = digest(JSON.stringify(['stats-known-v1', 'host-fold-v1', runs.map(run => [run.id, run.contentVersion, run.state, run.incomplete, run.replyMessageId, run.finalReply, run.bindings, run.changes])]));
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string }));
     const messageId = (run: CaptureRun) => run.replyMessageId ?? (run.finalReply ? run.bindings[run.finalReply.hash] : undefined);
     const pending = runs.filter(run => !messageId(run) && run.finalReply).map(run => run.finalReply!.timestamp);

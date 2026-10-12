@@ -1,0 +1,34 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.9",
+  "package": "plugin/dist/local.diff-view-1.4.9.piplug",
+  "packageBytes": 2241958,
+  "packageFiles": 73,
+  "sha256": "70a0d56ad88c3f2f5fccee68b659851ef2b9879f9ac6605adf3bd1e9c4ed55c6",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 37, "testsPassed": 324, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 122, "testsFailed": 0, "browser": "local Chrome", "host": "production bundle and source UI with mock host bridge" },
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "gitDiffCheck": "passed",
+    "projectIndexContent": "git diff --cached --exit-code passed",
+    "versionAndDocumentSync": "passed",
+    "packageHash": "verified"
+  },
+  "changes": [
+    "Integrate session and local Git navigation with the panel theme, typography and content alignment",
+    "Remove plugin file expansion and collapse controls; retain the host reply fold only",
+    "Show up to 40 initial files within the bounded bridge budget and invalidate older three-file preview caches",
+    "Preserve append-only pagination, retry, loaded pages, file opening, session isolation and Git behavior"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false, "projectStageResetCommitPerformed": false },
+  "limitations": [
+    "Manual reload or package installation is required",
+    "Native host UI acceptance remains to be observed after updating; browser checks use a mock host bridge",
+    "Large or long-metadata file lists retain load-more pagination, not another collapse control"
+  ],
+  "report": "docs/verification-1.4.9.md"
+}
