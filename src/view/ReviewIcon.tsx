@@ -1,6 +1,6 @@
 import React from 'react';
 
-type IconName = 'more' | 'search' | 'open' | 'collapse' | 'chevron' | 'close';
+type IconName = 'more' | 'search' | 'open' | 'collapse' | 'chevron' | 'close' | 'refresh' | 'stage' | 'unstage' | 'undo';
 const paths: Record<IconName, React.ReactNode> = {
   more: <><circle cx="4" cy="8" r=".9" /><circle cx="8" cy="8" r=".9" /><circle cx="12" cy="8" r=".9" /></>,
   search: <><path d="M10.5 13.5H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h5l3 3v2" /><path d="M9 2.5v3h3" /><circle cx="10.5" cy="10" r="2.5" /><path d="m12.3 11.8 2.2 2.2" /></>,
@@ -8,6 +8,10 @@ const paths: Record<IconName, React.ReactNode> = {
   collapse: <><path d="M5 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V11" /><rect x="5" y="2" width="9" height="9" rx="1.5" /><path d="M7.5 6.5h4" /></>,
   chevron: <path d="m6 4 4 4-4 4" />,
   close: <path d="m4 4 8 8M12 4l-8 8" />,
+  refresh: <><path d="M13.5 7a5.5 5.5 0 1 0-1.2 4.5M13.5 3v4h-4" /></>,
+  stage: <><path d="M3 10v3h10v-3M8 2v7M5 6l3 3 3-3" /></>,
+  unstage: <><path d="M3 10v3h10v-3M8 9V2M5 5l3-3 3 3" /></>,
+  undo: <><path d="m5 3-3 3 3 3M2 6h6a4 4 0 0 1 0 8" /></>,
 };
 export default function ReviewIcon({ name }: { name: IconName }) {
   return <svg className="dv-icon" viewBox="0 0 16 16" width="16" height="16" fill={name === 'more' ? 'currentColor' : 'none'} stroke={name === 'more' ? 'none' : 'currentColor'} strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;

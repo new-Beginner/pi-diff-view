@@ -1,0 +1,36 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.4",
+  "package": "plugin/dist/local.diff-view-1.4.4.piplug",
+  "packageBytes": 1992214,
+  "packageFiles": 63,
+  "sha256": "4dd714a4f8afe3038d65a052cd16c97f48428865a1958123c12da8fc27b836f7",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 35, "testsPassed": 297, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 108, "browser": "local Chrome", "host": "production bundle and source Panel with mock host bridge; existing Git UI test uses a real temporary repository" },
+    "focusedBrowser": { "testsPassed": 17, "newGitLayoutTests": 7, "widths": [360, 600, 1100], "themes": ["light", "dark"], "changedFilesFixture": 80 },
+    "newIntegrationTestsPassed": 3,
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "gitDiffCheck": "passed"
+  },
+  "changes": [
+    "Match local Git file rows to session review using shared file type icons and directory/basename styling",
+    "Add row-inline diff expansion, repeat-click folding and top collapse control",
+    "Use accessible vector icon buttons for explicit single-file stage, unstage and workspace discard",
+    "Keep required summary and staged-only commit controls fixed below an independently scrolling file/diff region",
+    "Show commit composer only on workspace and staged pages; preserve summary on failed commit and clear on success",
+    "Add confirmed single-file discard with index/working snapshot revalidation, protected-path checks and no effect on unrelated files",
+    "Preserve existing session review, branches, history, blame, stash, commit hooks and permissions"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false },
+  "limitations": [
+    "Native PI-Desktop window acceptance requires manual reload or installation of version 1.4.4; browser verification is not native-host acceptance",
+    "Discard restores the index version, not HEAD; untracked deletion is irreversible after confirmation",
+    "Conflict, protected, linked, non-regular, oversized and no-index restore targets remain blocked and require Git CLI review"
+  ],
+  "report": "docs/verification-1.4.4.md"
+}

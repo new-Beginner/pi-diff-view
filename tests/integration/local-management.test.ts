@@ -159,4 +159,47 @@ describe('independent authorized local Git management', () => {
     expect(await fs.readFile(path.join(root, 'renamed.txt'), 'utf8')).toBe('base\n');
     await expect(fs.stat(path.join(root, 'a.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, 30000);
+  it('discards only the selected working file, preserving the index and unrelated changes', async () => {
+    await fixture(); await write('a.txt', 'staged\n'); await call('stage', { paths: ['a.txt'] });
+    await write('a.txt', 'working\n'); await write('keep.txt', 'keep\n');
+    const target = await call<{ fingerprint: string }>('discardPreview', { paths: ['a.txt'] });
+    await expect(call('discard', { paths: ['a.txt'], ...target })).rejects.toMatchObject({ code: 'CONFIRM_REQUIRED' });
+    await call('discard', { paths: ['a.txt'], ...target, ...confirm });
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('staged\n');
+    expect(await command(['show', ':a.txt'])).toBe('staged\n');
+    expect(await command(['show', 'HEAD:a.txt'])).toBe('base\n');
+    expect(await fs.readFile(path.join(root, 'keep.txt'), 'utf8')).toBe('keep\n');
+    await fs.unlink(path.join(root, 'a.txt'));
+    const deletion = await call<{ fingerprint: string }>('discardPreview', { paths: ['a.txt'] });
+    await call('discard', { paths: ['a.txt'], ...deletion, ...confirm });
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('staged\n');
+  }, 30000);
+
+  it('refuses discard after working file or index changes, and deletes only confirmed untracked files', async () => {
+    await fixture(); await write('a.txt', 'working\n');
+    let target = await call<{ fingerprint: string }>('discardPreview', { paths: ['a.txt'] });
+    await write('a.txt', 'external edit\n');
+    await expect(call('discard', { paths: ['a.txt'], ...target, ...confirm })).rejects.toMatchObject({ code: 'FILE_CHANGED' });
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('external edit\n');
+    target = await call<{ fingerprint: string }>('discardPreview', { paths: ['a.txt'] });
+    await call('stage', { paths: ['a.txt'] }); await write('a.txt', 'external edit 2\n');
+    await expect(call('discard', { paths: ['a.txt'], ...target, ...confirm })).rejects.toMatchObject({ code: 'FILE_CHANGED' });
+    await write('new.txt', 'new\n'); await write('keep.txt', 'keep\n');
+    const untracked = await call<{ fingerprint: string; untracked: boolean }>('discardPreview', { paths: ['new.txt'] });
+    expect(untracked.untracked).toBe(true);
+    await call('discard', { paths: ['new.txt'], ...untracked, ...confirm });
+    await expect(fs.stat(path.join(root, 'new.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(root, 'keep.txt'), 'utf8')).toBe('keep\n');
+    await expect(call('discardPreview', { paths: ['a.txt', 'keep.txt'] })).rejects.toMatchObject({ code: 'INVALID_PATH' });
+    await expect(call('discardPreview', { paths: ['../escape'] })).rejects.toBeDefined();
+    await write('.env.local', 'secret');
+    await expect(call('discardPreview', { paths: ['.env.local'] })).rejects.toMatchObject({ code: 'PATH_DENIED' });
+  }, 30000);
+
+  it('requires a non-whitespace commit summary without modifying the index', async () => {
+    await write('a.txt', 'new\n'); await call('stage', { paths: ['a.txt'] });
+    for (const message of ['', '  \n ']) await expect(call('commit', { message, ...confirm })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect((await call<ManagementStatus>('status')).head).toBeNull();
+    expect(await command(['show', ':a.txt'])).toBe('new\n');
+  }, 30000);
 });

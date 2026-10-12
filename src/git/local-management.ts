@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createTwoFilesPatch } from 'diff';
-import { assertPublicPath, canonical, fail, readSnapshot, safeResolve } from '../core/path-policy';
+import { assertPublicPath, canonical, digest, fail, readSnapshot, safeResolve } from '../core/path-policy';
 import { discoverRepository } from './repository';
 import { git, headCommit, resolveCommit } from './runner';
 
@@ -20,10 +20,11 @@ export interface ManagementArgs {
   operation: string; root?: string; paths?: string[]; path?: string; scope?: 'workspace' | 'staged';
   message?: string; name?: string; newName?: string; ref?: string; oid?: string;
   confirmed?: boolean; includeUntracked?: boolean; skip?: number; limit?: number;
+  fingerprint?: string;
 }
-const mutations = new Set(['stage', 'unstage', 'commit', 'branchCreate', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
-const confirmation = new Set(['commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
-const operations = new Set(['status', 'diff', 'branches', 'history', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
+const mutations = new Set(['stage', 'unstage', 'discard', 'commit', 'branchCreate', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
+const confirmation = new Set(['discard', 'commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
+const operations = new Set(['status', 'diff', 'discardPreview', 'branches', 'history', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
 const diffFlags = ['--no-ext-diff', '--no-textconv', '--no-color', '--no-renames'];
 const queues = new Map<string, Promise<unknown>>();
 function text(value: unknown, label: string, max = 4096): string {
@@ -146,6 +147,22 @@ async function safeStashPaths(root: string, oid: string): Promise<void> {
   }
 }
 
+async function discardTarget(root: string, values: unknown) {
+  const paths = await selected(root, values);
+  if (paths.length !== 1) fail('INVALID_PATH', 'Discard requires exactly one explicit file.');
+  const rel = paths[0], state = await status(root);
+  const entry = state.entries.find(item => item.path === rel);
+  if (!entry || entry.blocked || entry.working === ' ') fail('STALE_PATH', 'File has no actionable working-tree change. Refresh first.');
+  if (entry.index === 'U' || entry.working === 'U' || ['AA', 'DD'].includes(entry.index + entry.working)) fail('CONFLICT', 'Resolve conflicts in your Git client before discarding.');
+  const index = await run(root, ['ls-files', '--stage', '-z', '--', rel]);
+  if (index && !/^(100644|100755) /.test(index)) fail('NOT_FILE', 'Only regular index files can be restored.');
+  if (entry.index !== '?' && !index) fail('STALE_PATH', 'No regular index version exists. Review this path in Git CLI.');
+  const snapshot = await readSnapshot(root, rel);
+  if (snapshot.kind === 'large') fail('GIT_LIMIT', 'File exceeds the safe discard snapshot limit. Use Git CLI.');
+  const fingerprint = digest(JSON.stringify([entry.index, entry.working, index, snapshot.exists, snapshot.hash, snapshot.mode]));
+  return { rel, fingerprint, untracked: entry.index === '?' };
+}
+
 export class LocalGitManagement {
   /** method MUST be gitManage. allowedRoots MUST come from the host, never the renderer.
    * root defaults only when exactly one root is authorized; enclosing repos are never adopted.
@@ -174,6 +191,14 @@ export class LocalGitManagement {
   private async perform(root: string, args: ManagementArgs): Promise<unknown> {
     const op = args.operation;
     if (op === 'status') return status(root);
+    if (op === 'discardPreview' || op === 'discard') {
+      const target = await discardTarget(root, args.paths);
+      if (op === 'discardPreview') return { fingerprint: target.fingerprint, untracked: target.untracked };
+      if (args.fingerprint !== target.fingerprint) fail('FILE_CHANGED', 'File or index changed since confirmation. Refresh and review before discarding.');
+      if (target.untracked) await fs.unlink(await safeResolve(root, target.rel));
+      else await run(root, ['restore', '--worktree', '--', target.rel]);
+      return { ok: true };
+    }
     if (op === 'stage' || op === 'unstage') {
       const paths = await selected(root, args.paths);
       const state = await status(root);

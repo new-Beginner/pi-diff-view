@@ -3063,9 +3063,9 @@ var HostEvidenceStore = class {
 var import_promises9 = __toESM(require("node:fs/promises"), 1);
 var import_node_path10 = __toESM(require("node:path"), 1);
 var import_node_child_process2 = require("node:child_process");
-var mutations = /* @__PURE__ */ new Set(["stage", "unstage", "commit", "branchCreate", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
-var confirmation = /* @__PURE__ */ new Set(["commit", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
-var operations = /* @__PURE__ */ new Set(["status", "diff", "branches", "history", "commitDiff", "blame", "stashList", "stashShow", ...mutations]);
+var mutations = /* @__PURE__ */ new Set(["stage", "unstage", "discard", "commit", "branchCreate", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
+var confirmation = /* @__PURE__ */ new Set(["discard", "commit", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
+var operations = /* @__PURE__ */ new Set(["status", "diff", "discardPreview", "branches", "history", "commitDiff", "blame", "stashList", "stashShow", ...mutations]);
 var diffFlags = ["--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"];
 var queues = /* @__PURE__ */ new Map();
 function text(value, label, max = 4096) {
@@ -3230,6 +3230,21 @@ async function safeStashPaths(root, oid) {
     for (const name of names) await filePath(root, name);
   }
 }
+async function discardTarget(root, values) {
+  const paths = await selected(root, values);
+  if (paths.length !== 1) fail("INVALID_PATH", "Discard requires exactly one explicit file.");
+  const rel = paths[0], state = await status(root);
+  const entry = state.entries.find((item) => item.path === rel);
+  if (!entry || entry.blocked || entry.working === " ") fail("STALE_PATH", "File has no actionable working-tree change. Refresh first.");
+  if (entry.index === "U" || entry.working === "U" || ["AA", "DD"].includes(entry.index + entry.working)) fail("CONFLICT", "Resolve conflicts in your Git client before discarding.");
+  const index = await run(root, ["ls-files", "--stage", "-z", "--", rel]);
+  if (index && !/^(100644|100755) /.test(index)) fail("NOT_FILE", "Only regular index files can be restored.");
+  if (entry.index !== "?" && !index) fail("STALE_PATH", "No regular index version exists. Review this path in Git CLI.");
+  const snapshot = await readSnapshot(root, rel);
+  if (snapshot.kind === "large") fail("GIT_LIMIT", "File exceeds the safe discard snapshot limit. Use Git CLI.");
+  const fingerprint = digest(JSON.stringify([entry.index, entry.working, index, snapshot.exists, snapshot.hash, snapshot.mode]));
+  return { rel, fingerprint, untracked: entry.index === "?" };
+}
 var LocalGitManagement = class {
   /** method MUST be gitManage. allowedRoots MUST come from the host, never the renderer.
    * root defaults only when exactly one root is authorized; enclosing repos are never adopted.
@@ -3262,6 +3277,14 @@ var LocalGitManagement = class {
   async perform(root, args) {
     const op = args.operation;
     if (op === "status") return status(root);
+    if (op === "discardPreview" || op === "discard") {
+      const target = await discardTarget(root, args.paths);
+      if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };
+      if (args.fingerprint !== target.fingerprint) fail("FILE_CHANGED", "File or index changed since confirmation. Refresh and review before discarding.");
+      if (target.untracked) await import_promises9.default.unlink(await safeResolve(root, target.rel));
+      else await run(root, ["restore", "--worktree", "--", target.rel]);
+      return { ok: true };
+    }
     if (op === "stage" || op === "unstage") {
       const paths = await selected(root, args.paths);
       const state = await status(root);
