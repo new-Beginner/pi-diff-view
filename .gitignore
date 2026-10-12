@@ -6,3 +6,20 @@ test-results/
 playwright-report/
 output/
 *.log
+
+# Authentication and private local data must never be published.
+.env
+.env.*
+*.token
+*.pem
+*.key
+credentials.json
+hosts.yml
+.pi-desktop/
+.pi-diff-view/
+
+# Internal references and verification artifacts stay local.
+reference/
+docs/
+plugin/docs/
+release-*.json
