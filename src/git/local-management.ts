@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
 import { assertPublicPath, canonical, digest, fail, readSnapshot, safeResolve } from '../core/path-policy';
 import { discoverRepository } from './repository';
@@ -16,15 +17,16 @@ export interface ManagementBranch { name: string; oid: string; current: boolean;
 export interface ManagementCommit { oid: string; author: string; date: string; subject: string; }
 export interface ManagementStash { ref: string; oid: string; subject: string; }
 export interface ManagementText { text: string; truncated: boolean; notice?: string; }
+export interface ManagementStat { path: string; additions: number | null; deletions: number | null; kind?: 'binary' | 'large' | 'unknown'; }
 export interface ManagementArgs {
   operation: string; root?: string; paths?: string[]; path?: string; scope?: 'workspace' | 'staged';
-  message?: string; name?: string; newName?: string; ref?: string; oid?: string;
+  message?: string; summary?: string; description?: string; name?: string; newName?: string; ref?: string; oid?: string;
   confirmed?: boolean; includeUntracked?: boolean; skip?: number; limit?: number;
   fingerprint?: string;
 }
 const mutations = new Set(['stage', 'unstage', 'discard', 'commit', 'branchCreate', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
 const confirmation = new Set(['discard', 'commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
-const operations = new Set(['status', 'diff', 'discardPreview', 'branches', 'history', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
+const operations = new Set(['status', 'diff', 'stats', 'discardPreview', 'branches', 'history', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
 const diffFlags = ['--no-ext-diff', '--no-textconv', '--no-color', '--no-renames'];
 const queues = new Map<string, Promise<unknown>>();
 function text(value: unknown, label: string, max = 4096): string {
@@ -47,11 +49,12 @@ function output(value: string, notice?: string): ManagementText {
  * Other operations disable hooks; commit does NOT pass core.hooksPath or --no-verify.
  * Repository filters and commit hooks remain trusted local code, like native Git.
  */
-async function run(root: string, args: string[], hooks = false): Promise<string> {
+async function run(root: string, args: string[], hooks = false, index?: string): Promise<string> {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.toUpperCase().startsWith('GIT_')) delete env[key];
   Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_LITERAL_PATHSPECS: '1', GIT_NO_LAZY_FETCH: '1',
     GIT_NO_REPLACE_OBJECTS: '1', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', LC_ALL: 'C' });
+  if (index) env.GIT_INDEX_FILE = index;
   // stash internally generates magic pathspecs for cleaning saved untracked files.
   // No stash operation accepts a caller-supplied pathspec; keeping literal mode breaks its cleanup.
   if (args[0] === 'stash') delete env.GIT_LITERAL_PATHSPECS;
@@ -125,6 +128,32 @@ async function checkedDiffPaths(root: string, args: string[]): Promise<string[]>
   for (const name of names) { assertPublicPath(name); await filePath(root, name); }
   return names;
 }
+async function stats(root: string, scope: 'workspace' | 'staged', paths: string[]): Promise<{ entries: ManagementStat[] }> {
+  const raw = (await git(root, ['diff', '--numstat', '-z', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', ...(scope === 'staged' ? ['--cached'] : []), '--', ...paths])).stdout;
+  const fields = new TextDecoder('utf-8', { fatal: true }).decode(raw).split(String.fromCharCode(0));
+  const entries: ManagementStat[] = [];
+  for (const record of fields.slice(0, -1)) {
+    const parts = record.split(String.fromCharCode(9));
+    if (parts.length < 3) continue;
+    const [adds, dels] = parts; const name = parts.slice(2).join(String.fromCharCode(9));
+    await filePath(root, name);
+    entries.push(adds === '-' || dels === '-' ? { path: name, additions: null, deletions: null, kind: 'binary' }
+      : { path: name, additions: Number(adds), deletions: Number(dels) });
+  }
+  if (scope === 'workspace') {
+    const indexed = new Set(records((await git(root, ['ls-files', '-z', '--', ...paths])).stdout));
+    for (const rel of paths) if (!indexed.has(rel)) {
+      const snapshot = await readSnapshot(root, rel);
+      if (!snapshot.exists) { entries.push({ path: rel, additions: null, deletions: null, kind: 'unknown' }); continue; }
+      if (snapshot.kind === 'large') entries.push({ path: rel, additions: null, deletions: null, kind: 'large' });
+      else if (snapshot.text === null) entries.push({ path: rel, additions: null, deletions: null, kind: snapshot.kind === 'binary' ? 'binary' : 'unknown' });
+      else entries.push({ path: rel, additions: snapshot.text.length === 0 ? 0 : snapshot.text.split(String.fromCharCode(10)).length - (snapshot.text.endsWith(String.fromCharCode(10)) ? 1 : 0), deletions: 0 });
+    }
+  }
+  for (const rel of paths) if (!entries.some(entry => entry.path === rel)) entries.push({ path: rel, additions: 0, deletions: 0 });
+  if (Buffer.byteLength(JSON.stringify({ entries })) > 48000) fail('GIT_LIMIT', 'Statistics exceed the panel budget. Request fewer paths.');
+  return { entries };
+}
 async function stashes(root: string): Promise<ManagementStash[]> {
   const raw = await run(root, ['stash', 'list', '-100', '--format=%gd%x00%H%x00%gs%x00']);
   const fields = raw.split('\0'); const result: ManagementStash[] = [];
@@ -144,6 +173,68 @@ async function safeStashPaths(root: string, oid: string): Promise<void> {
   if (third.code === 0) {
     const names = records((await git(root, ['ls-tree', '-r', '--name-only', '-z', third.stdout.toString().trim(), '--'])).stdout);
     for (const name of names) await filePath(root, name);
+  }
+}
+
+function commitMessage(args: ManagementArgs): string {
+  if (args.summary === undefined && args.paths === undefined && args.scope === undefined) return text(args.message, 'Commit message', 5000).trim();
+  const rawSummary = text(args.summary, 'Commit summary', 240);
+  if (/[\r\n]/.test(rawSummary)) fail('INVALID_ARGUMENT', 'Commit summary must be a single line.');
+  const summary = rawSummary.trim();
+  if (args.description !== undefined && (typeof args.description !== 'string' || args.description.includes('\0') || args.description.length > 4500)) fail('INVALID_ARGUMENT', 'Invalid commit description.');
+  return text(summary + (args.description?.trim() ? `\n\n${args.description.trim()}` : ''), 'Commit message', 5000);
+}
+async function indexBytes(index: string): Promise<Buffer | undefined> {
+  return fs.readFile(index).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
+}
+function sameIndex(left?: Buffer, right?: Buffer): boolean { return left === undefined ? right === undefined : right !== undefined && left.equals(right); }
+async function selectedCommit(root: string, args: ManagementArgs, message: string, state: ManagementStatus) {
+  if (args.scope !== 'workspace' && args.scope !== 'staged') fail('INVALID_SCOPE', 'Choose workspace or staged for the selected commit.');
+  const paths = await selected(root, args.paths);
+  for (const rel of paths) {
+    const entry = state.entries.find(item => item.path === rel);
+    if (!entry || entry.blocked || (args.scope === 'staged' ? [' ', '?'].includes(entry.index) : entry.working === ' ')) fail('STALE_PATH', 'Selected file is no longer actionable. Refresh before committing.');
+  }
+  const previous = await headCommit(root);
+  const realIndex = (await git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'index'])).stdout.toString().trim();
+  const original = await indexBytes(realIndex);
+  const token = `diff-view-commit-${randomUUID()}`, isolated = path.join(path.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
+  let lock: fs.FileHandle | undefined, ownsLock = false;
+  try {
+    await git(root, ['read-tree', ...(previous ? [previous] : ['--empty'])], { index: isolated });
+    if (args.scope === 'workspace') await run(root, ['add', '--', ...paths], false, isolated);
+    else {
+      const rows = records((await git(root, ['ls-files', '--stage', '-z', '--', ...paths])).stdout);
+      if (rows.some(row => !/^(100644|100755) [a-f0-9]{40,64} 0\t/.test(row))) fail('NOT_FILE', 'Selected index paths must be ordinary non-conflicted files.');
+      await git(root, ['update-index', '--force-remove', '--', ...paths], { index: isolated });
+      if (rows.length) await git(root, ['update-index', '-z', '--index-info'], { index: isolated, input: Buffer.from(rows.join('\0') + '\0') });
+    }
+    const changes = await git(root, ['diff', '--cached', '--quiet', '--exit-code', ...diffFlags, '--'], { index: isolated, allowFailure: true });
+    if (changes.code === 0) fail('NOTHING_SELECTED', 'Selected files contain no changes to commit.');
+    if (changes.code !== 1) fail('GIT_FAILED', 'Could not verify selected commit content.');
+    if (await headCommit(root) !== previous) fail('FILE_CHANGED', 'HEAD changed while preparing the commit. Refresh first.');
+    const result = await run(root, ['commit', '-m', message], true, isolated);
+    const oid = await headCommit(root);
+    if (!oid || oid === previous) fail('COMMIT_NOT_CREATED', 'Git did not create a new commit. Inspect hook output and refresh.');
+    let notice: string | undefined;
+    // Prepare a copy of the original index, changing only the committed paths.
+    // Use the actual index.lock protocol and compare bytes before publishing it.
+    // Any failure after a real commit is a notice, not a request to retry the commit.
+    try {
+      if (original) await fs.writeFile(nextIndex, original); else await git(root, ['read-tree', '--empty'], { index: nextIndex });
+      await git(root, ['reset', '-q', oid, '--', ...paths], { index: nextIndex });
+      lock = await fs.open(`${realIndex}.lock`, 'wx'); ownsLock = true;
+      if (!sameIndex(original, await indexBytes(realIndex))) notice = '提交已成功，但索引在提交期间被外部修改；已保留外部暂存，请刷新核对。';
+      else {
+        await lock.writeFile(await fs.readFile(nextIndex)); await lock.close(); lock = undefined;
+        await fs.rename(`${realIndex}.lock`, realIndex); ownsLock = false;
+      }
+    } catch { notice = '提交已成功，但无法同步所选文件的索引；已保留原索引，请刷新后使用 Git CLI 核对。'; }
+    return { ok: true, oid, ...output(result, notice) };
+  } finally {
+    await lock?.close().catch(() => undefined);
+    if (ownsLock) await fs.unlink(`${realIndex}.lock`).catch(() => undefined);
+    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await fs.unlink(file).catch(() => undefined);
   }
 }
 
@@ -199,6 +290,23 @@ export class LocalGitManagement {
       else await run(root, ['restore', '--worktree', '--', target.rel]);
       return { ok: true };
     }
+    if (op === 'diff') {
+      if (args.scope !== 'workspace' && args.scope !== 'staged') fail('INVALID_SCOPE', 'Choose workspace or staged.');
+      const paths = await selected(root, args.paths);
+      let patch = await run(root, ['diff', ...diffFlags, ...(args.scope === 'staged' ? ['--cached'] : []), '--', ...paths]);
+      if (args.scope === 'workspace') {
+        const indexed = new Set(records((await git(root, ['ls-files', '-z', '--', ...paths])).stdout));
+        for (const rel of paths.filter(item => !indexed.has(item))) {
+          const snapshot = await readSnapshot(root, rel);
+          if (snapshot.exists) patch += snapshot.text === null ? `\n${rel}: binary or oversized untracked file (no text preview).\n` : createTwoFilesPatch('/dev/null', rel, '', snapshot.text);
+        }
+      }
+      return output(patch);
+    }
+    if (op === 'stats') {
+      if (args.scope !== 'workspace' && args.scope !== 'staged') fail('INVALID_SCOPE', 'Choose workspace or staged.');
+      return stats(root, args.scope, await selected(root, args.paths));
+    }
     if (op === 'stage' || op === 'unstage') {
       const paths = await selected(root, args.paths);
       const state = await status(root);
@@ -211,24 +319,11 @@ export class LocalGitManagement {
       else await run(root, ['rm', '--cached', '-q', '-f', '--', ...paths]); // unborn index only; never working files
       return { ok: true };
     }
-    if (op === 'diff') {
-      if (args.scope !== 'workspace' && args.scope !== 'staged') fail('INVALID_SCOPE', 'Choose workspace or staged.');
-      const paths = await selected(root, args.paths);
-      let patch = await run(root, ['diff', ...diffFlags, ...(args.scope === 'staged' ? ['--cached'] : []), '--', ...paths]);
-      if (args.scope === 'workspace') {
-        const state = await status(root);
-        for (const rel of paths.filter(rel => state.entries.some(e => e.path === rel && e.index === '?'))) {
-          const snapshot = await readSnapshot(root, rel);
-          patch += snapshot.text === null ? `\n${rel}: binary or oversized untracked file (no text preview).\n`
-            : createTwoFilesPatch('/dev/null', rel, '', snapshot.text);
-        }
-      }
-      return output(patch);
-    }
     if (op === 'commit') {
-      const message = text(args.message, 'Commit message', 5000).trim();
+      const message = commitMessage(args);
       const state = await status(root);
       if (state.entries.some(e => e.index === 'U' || e.working === 'U' || ['AA', 'DD'].includes(e.index + e.working))) fail('CONFLICT', 'Resolve and stage all conflicts before committing.');
+      if (args.paths !== undefined || args.scope !== undefined || args.summary !== undefined) return selectedCommit(root, args, message, state);
       const staged = state.entries.filter(e => ![' ', '?'].includes(e.index));
       if (!staged.length) fail('NOTHING_STAGED', 'Nothing is staged. Select files and stage them first.');
       if (staged.some(e => e.blocked)) fail('PATH_DENIED', 'The index contains protected or unsupported paths. Review them in the Git CLI before committing.');

@@ -1,0 +1,39 @@
+{
+  "pluginId": "local.diff-view",
+  "version": "1.4.5",
+  "package": "plugin/dist/local.diff-view-1.4.5.piplug",
+  "packageBytes": 2086362,
+  "packageFiles": 66,
+  "sha256": "59ca647f5fadf470aa6b761a1aa725e78a2166d49c2b020210623c6355ea2b6d",
+  "verification": {
+    "typecheck": "passed",
+    "unitIntegration": { "filesPassed": 35, "testsPassed": 304, "testsSkipped": 1, "skipReason": "POSIX FIFO test is not applicable on Windows" },
+    "browser": { "testsPassed": 112, "browser": "local Chrome", "host": "production bundle and source UI with mock host bridge; selected Commit UI uses a real temporary repository" },
+    "build": "passed",
+    "pluginCheck": "passed",
+    "pluginPackValidation": "passed",
+    "gitDiffCheck": "passed",
+    "projectHeadUnchanged": true,
+    "projectIndexContent": "No staged changes; git diff --cached --exit-code passed. Index byte hash changed during status checks, so byte identity is not claimed.",
+    "docsSynchronized": true
+  },
+  "changes": [
+    "Create real Git history from selected workspace files without requiring prior staging, or from selected staged content",
+    "Require a single-line summary with an optional description; preserve unselected worktree and index content",
+    "Use an isolated commit index, retain hooks, and report post-commit index synchronization warnings truthfully",
+    "Separate read-only previews from global mutation busy state; cache, deduplicate, prefetch and ignore stale requests",
+    "Avoid whole-repository status scans when identifying the selected untracked diff target",
+    "Align selection checkbox, count and icon toolbar with file rows",
+    "Show real per-file additions/deletions with explicit binary, large and unknown states"
+  ],
+  "warnings": ["Existing agent.extension and renderer.extension permissions require explicit user grant; no permissions added"],
+  "deployment": { "localDirectoryUpdated": true, "reloadPerformed": false, "installationPerformed": false, "nativeUiAcceptancePerformed": false, "hostHistoryModified": false, "projectStageResetCommitPerformed": false },
+  "limitations": [
+    "Manual reload or package installation is required; browser tests do not constitute native PI-Desktop window acceptance",
+    "Workspace statistics compare index to worktree; staged statistics compare HEAD to index",
+    "External edits require explicit refresh to invalidate preview cache",
+    "Hooks and filters remain trusted local code and may modify files",
+    "External index updates during commit are retained and require user review when a success notice reports them"
+  ],
+  "report": "docs/verification-1.4.5.md"
+}

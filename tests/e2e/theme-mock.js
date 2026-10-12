@@ -34,12 +34,14 @@
     const status = () => ({ root: args.root || root, branch: '演示数据 · 模拟后端 · main', head: 'demo-head', entries: demo.entries });
     switch (args.operation) {
       case 'status': return status();
+      case 'stats': return { entries: args.paths.map(path => ({ path, additions: 3, deletions: 2 })) };
       case 'branches': return { branches: [{ name: 'main', oid: 'demo-main', current: true }, { name: 'feature/' + 'long-branch-name-'.repeat(8), oid: 'demo-feature', current: false }], truncated: false };
       case 'history': return { commits: [{ oid: '0123456789abcdef', subject: '演示提交：' + '很长的提交标题与说明'.repeat(12), author: '演示用户', date: '2026-10-11' }], hasMore: false };
       case 'stashList': return { stashes: [{ ref: 'stash@{0}', oid: 'demo-stash', subject: '演示备份：' + 'stash-description-'.repeat(8) }], notice: 'Showing at most 100 stashes.' };
       case 'diff': case 'commitDiff': case 'blame': case 'stashShow': return { text: '演示数据 · 模拟后端\n--- before\n+++ after\n+' + 'long code '.repeat(100), truncated: false };
       case 'stage': demo.entries = demo.entries.map(entry => args.paths?.includes(entry.path) ? { ...entry, index: 'M', working: ' ' } : entry); break;
       case 'unstage': demo.entries = demo.entries.map(entry => args.paths?.includes(entry.path) ? { ...entry, index: ' ', working: 'M' } : entry); break;
+      case 'commit': return { ok: true, oid: 'demo-commit' };
     }
     return { ok: true }; // Simulated confirmation only; never a real repository mutation.
   };

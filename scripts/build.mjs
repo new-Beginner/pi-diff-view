@@ -44,3 +44,5 @@ await fs.copyFile('docs/verification-1.4.2.md', 'plugin/docs/verification-1.4.2.
 await fs.copyFile('docs/verification-1.4.3.md', 'plugin/docs/verification-1.4.3.md');
 await fs.copyFile('docs/verification-1.4.4.md', 'plugin/docs/verification-1.4.4.md');
 for (const name of ['360-light', '600-dark']) await fs.copyFile(`docs/screenshots/git-1.4.4-${name}.png`, `plugin/docs/screenshots/git-1.4.4-${name}.png`);
+await fs.copyFile('docs/verification-1.4.5.md', 'plugin/docs/verification-1.4.5.md');
+for (const name of ['360-light', '600-dark']) await fs.copyFile(`docs/screenshots/git-1.4.5-${name}.png`, `plugin/docs/screenshots/git-1.4.5-${name}.png`);

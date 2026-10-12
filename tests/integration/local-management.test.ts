@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { dispatch, type ManagementArgs, type ManagementStatus, type ManagementText, type ManagementStash } from '../../src/git/local-management';
+import { dispatch, type ManagementArgs, type ManagementStatus, type ManagementText, type ManagementStat, type ManagementStash } from '../../src/git/local-management';
 
 const exec = promisify(execFile);
 let container: string, root: string;
@@ -201,5 +201,95 @@ describe('independent authorized local Git management', () => {
     for (const message of ['', '  \n ']) await expect(call('commit', { message, ...confirm })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     expect((await call<ManagementStatus>('status')).head).toBeNull();
     expect(await command(['show', ':a.txt'])).toBe('new\n');
+  }, 30000);
+
+  it('returns scoped real-Git line statistics for tracked, untracked and binary files', async () => {
+    await fixture();
+    await write('a.txt', 'base\nchanged\n');
+    await write('unicode中文.txt', 'one\ntwo\n');
+    await write('empty.txt', '');
+    await fs.writeFile(path.join(root, 'binary.dat'), Buffer.from([0, 1, 2]));
+    await call('stage', { paths: ['a.txt'] });
+    await write('a.txt', 'worktree\n');
+    const workspace = await call<{ entries: ManagementStat[] }>('stats', { scope: 'workspace', paths: ['a.txt', 'unicode中文.txt', 'empty.txt', 'binary.dat'] });
+    expect(workspace.entries).toEqual(expect.arrayContaining([
+      { path: 'a.txt', additions: 1, deletions: 2 },
+      { path: 'unicode中文.txt', additions: 2, deletions: 0 },
+      { path: 'empty.txt', additions: 0, deletions: 0 },
+      expect.objectContaining({ path: 'binary.dat', additions: null, deletions: null }),
+    ]));
+    const staged = await call<{ entries: ManagementStat[] }>('stats', { scope: 'staged', paths: ['a.txt'] });
+    expect(staged.entries).toEqual([{ path: 'a.txt', additions: 1, deletions: 0 }]);
+  }, 30000);
+  it('directly commits selected workspace contents and body without including unselected staged edits', async () => {
+    await fixture(); await write('delete.txt', 'delete\n'); await write('keep.txt', 'base keep\n');
+    await call('stage', { paths: ['delete.txt', 'keep.txt'] }); await call('commit', { message: 'setup', ...confirm });
+    await write('a.txt', 'partial\n'); await call('stage', { paths: ['a.txt'] }); await write('a.txt', 'direct\n');
+    await write('new.txt', 'new\n'); await fs.unlink(path.join(root, 'delete.txt'));
+    await write('keep.txt', 'staged keep\n'); await call('stage', { paths: ['keep.txt'] }); await write('keep.txt', 'working keep\n');
+    await write('unrelated.txt', 'unrelated\n');
+    const result = await call<{ ok: boolean; oid: string; notice?: string }>('commit', { scope: 'workspace', paths: ['a.txt', 'new.txt', 'delete.txt'], summary: '  direct commit  ', description: ' reason\nsecond line ', ...confirm });
+    expect(result.ok).toBe(true); expect(result.notice).toBeUndefined();
+    expect(await command(['show', 'HEAD:a.txt'])).toBe('direct\n'); expect(await command(['show', 'HEAD:new.txt'])).toBe('new\n');
+    expect(await command(['ls-tree', '--name-only', 'HEAD'])).not.toContain('delete.txt');
+    expect(await command(['show', 'HEAD:keep.txt'])).toBe('base keep\n'); expect(await command(['show', ':keep.txt'])).toBe('staged keep\n');
+    expect(await fs.readFile(path.join(root, 'keep.txt'), 'utf8')).toBe('working keep\n');
+    expect(await command(['show', ':a.txt'])).toBe('direct\n');
+    expect(await command(['log', '-1', '--format=%B'])).toBe('direct commit\n\nreason\nsecond line\n\n');
+    expect(await call('history')).toMatchObject({ commits: expect.arrayContaining([expect.objectContaining({ oid: result.oid, subject: 'direct commit' })]) });
+    expect((await fs.readdir(path.join(root, '.git'))).some(name => name.startsWith('diff-view-commit-'))).toBe(false);
+  }, 30000);
+
+  it('commits only selected staged versions and supports staged deletion and unborn HEAD', async () => {
+    await write('first.txt', 'first\n'); await write('keep.txt', 'keep\n'); await call('stage', { paths: ['first.txt', 'keep.txt'] });
+    await write('first.txt', 'later\n');
+    await call('commit', { scope: 'staged', paths: ['first.txt'], summary: 'first selected', ...confirm });
+    expect(await command(['show', 'HEAD:first.txt'])).toBe('first\n');
+    expect(await command(['ls-tree', '--name-only', 'HEAD'])).toBe('first.txt\n');
+    expect(await fs.readFile(path.join(root, 'first.txt'), 'utf8')).toBe('later\n');
+    expect(await command(['show', ':keep.txt'])).toBe('keep\n');
+    await fs.unlink(path.join(root, 'first.txt')); await call('stage', { paths: ['first.txt'] });
+    await call('commit', { scope: 'staged', paths: ['first.txt'], summary: 'delete selected', ...confirm });
+    expect(await command(['ls-tree', '--name-only', 'HEAD'])).toBe(''); expect(await command(['show', ':keep.txt'])).toBe('keep\n');
+  }, 30000);
+
+  it('creates a first workspace commit without prior staging and validates required one-line summary', async () => {
+    await write('new.txt', 'new\n');
+    const args = { scope: 'workspace' as const, paths: ['new.txt'], ...confirm };
+    for (const summary of ['', '  ', 'one\ntwo', 'one\r\ntwo', '\none\n']) await expect(call('commit', { ...args, summary })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(call('commit', { ...args, summary: 'valid', description: 'bad\0body' })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(call('commit', { ...args, summary: 'valid', paths: ['.env.local'] })).rejects.toMatchObject({ code: 'PATH_DENIED' });
+    expect((await call<ManagementStatus>('status')).head).toBeNull(); expect(await command(['ls-files'])).toBe('');
+    await call('commit', { ...args, summary: 'first workspace' });
+    expect(await command(['show', 'HEAD:new.txt'])).toBe('new\n'); expect(await command(['ls-files'])).toBe('new.txt\n');
+  }, 30000);
+
+  it('preserves actual index bytes and reports hook rejection without creating a selected commit', async () => {
+    await fixture(); await write('a.txt', 'staged\n'); await call('stage', { paths: ['a.txt'] }); await write('a.txt', 'working\n');
+    await write('new.txt', 'new\n');
+    const before = await fs.readFile(path.join(root, '.git/index')), head = await command(['rev-parse', 'HEAD']);
+    await write('.git/hooks/pre-commit', '#!/bin/sh\necho selected-hook-blocked >&2\nexit 1\n'); await fs.chmod(path.join(root, '.git/hooks/pre-commit'), 0o755);
+    for (const scope of ['workspace', 'staged'] as const) await expect(call('commit', { scope, paths: ['a.txt'], summary: 'rejected', ...confirm })).rejects.toThrow('selected-hook-blocked');
+    expect(await fs.readFile(path.join(root, '.git/index'))).toEqual(before); expect(await command(['rev-parse', 'HEAD'])).toBe(head);
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('working\n');
+    expect((await fs.readdir(path.join(root, '.git'))).some(name => name.startsWith('diff-view-commit-'))).toBe(false);
+  }, 30000);
+
+  it('keeps external index writes during hooks and truthfully returns a successful commit notice', async () => {
+    await fixture(); await write('a.txt', 'selected\n'); await write('keep.txt', 'external staged\n');
+    await write('.git/hooks/pre-commit', '#!/bin/sh\nGIT_INDEX_FILE=.git/index git add -- keep.txt\n'); await fs.chmod(path.join(root, '.git/hooks/pre-commit'), 0o755);
+    const result = await call<{ ok: boolean; notice?: string }>('commit', { scope: 'workspace', paths: ['a.txt'], summary: 'external index retained', ...confirm });
+    expect(result.ok).toBe(true); expect(result.notice).toContain('索引在提交期间被外部修改');
+    expect(await command(['show', 'HEAD:a.txt'])).toBe('selected\n'); expect(await command(['show', ':keep.txt'])).toBe('external staged\n');
+    expect(await command(['ls-tree', '--name-only', 'HEAD'])).not.toContain('keep.txt');
+  }, 30000);
+
+  it('counts deleted, unborn and unchanged paths and refuses protected stats', async () => {
+    await write('empty.txt', ''); await write('new.txt', 'no trailing newline'); await call('stage', { paths: ['empty.txt', 'new.txt'] });
+    expect(await call('stats', { scope: 'staged', paths: ['empty.txt', 'new.txt'] })).toMatchObject({ entries: expect.arrayContaining([{path:'empty.txt',additions:0,deletions:0},{path:'new.txt',additions:1,deletions:0}]) });
+    await call('commit', { message: 'setup', ...confirm }); await fs.unlink(path.join(root, 'new.txt'));
+    expect(await call('stats', { scope: 'workspace', paths: ['missing.txt'] })).toMatchObject({ entries: [{path:'missing.txt',additions:null,deletions:null,kind:'unknown'}] });
+    expect(await call('stats', { scope: 'workspace', paths: ['new.txt', 'empty.txt'] })).toMatchObject({ entries: expect.arrayContaining([{path:'new.txt',additions:0,deletions:1},{path:'empty.txt',additions:0,deletions:0}]) });
+    await expect(call('stats', { scope: 'workspace', paths: ['.env.local'] })).rejects.toMatchObject({code:'PATH_DENIED'});
   }, 30000);
 });
