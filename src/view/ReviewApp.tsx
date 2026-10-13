@@ -383,7 +383,6 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         {searchOpen && <input autoFocus type="search" aria-label={t.search} placeholder={t.search} value={query} onChange={event => setQuery(event.target.value)} />}
       </div>
     </header>
-    {boot?.recoveryNotice && <div className="dv-message" role="status">历史恢复：{boot.recoveryNotice}</div>}
     {unknownFiles > 0 && <details className="dv-stats-note"><summary>{unknownFiles} 个文件暂无法显示行数</summary><p>仅统计有完整快照的文本文件。缺失历史内容的文件仍保留记录，但无法重建差异。</p></details>}
     {reviewError && matchingReview && <div className="dv-message dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div>}
     {error && <div className="dv-message dv-error" role="alert">{error}</div>}

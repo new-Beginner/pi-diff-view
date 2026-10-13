@@ -72,8 +72,7 @@ export async function onLoad(): Promise<void> {
     const context = contexts.get(event.sessionId);
     if (history && context && service) {
       // Re-read actual final message evidence; do not bind the event's internal turnId.
-      const result = await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
-      service.setRecoveryNotice(event.sessionId, result.warnings.join(' '));
+      await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
       context.syncedAt = 0; // The renderer's settled state may arrive immediately afterwards.
     }
     // The event has no captureRunId/timestamp: retain audit evidence, never guess a binding.
@@ -166,7 +165,7 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   }
   if (method === 'sessionContext') {
     const root = await sessionRoot(args);
-    if (!root) { const warning = '会话项目路径缺失或未授权，未导入历史。'; contexts.delete(args.sessionId); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]); s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
+    if (!root) { const warning = '会话项目路径缺失或未授权，未导入历史。'; contexts.delete(args.sessionId); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]); return { ok: false, warning }; }
     sessionRoots.set(args.sessionId, root);
     while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value!);
     await atomicJson(path.join(store!.directory, 'session-roots.json'), Object.fromEntries(sessionRoots));
@@ -178,9 +177,8 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     while (contexts.size > 200) contexts.delete(contexts.keys().next().value!);
     await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
     await evidenceStore!.restore(evidence, args.sessionId, root);
-    if (!history) { const warning = '宿主历史路径契约不匹配，未导入历史。'; s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
-    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)!));
-    s.setRecoveryNotice(args.sessionId, result.warnings.join(' ')); return result;
+    if (!history) return { ok: false, warning: '宿主历史路径契约不匹配，未导入历史。' };
+    return history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)!));
   }
   const context = typeof args?.sessionId === 'string' ? contexts.get(args.sessionId) : undefined;
   if (method === 'runningChanges' && context?.running && context.taskId === args.taskId && context.since === args.since) {
@@ -189,9 +187,8 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   const preparedReview = method === 'review' && history && context && (args.scope === 'turn' || args.scope === 'lastTurn');
   if (preparedReview) await store!.importInbox(generation);
   if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) {
-    const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
+    await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
     context.syncedAt = Date.now(); store!.acknowledgeRecovery(args.sessionId);
-    s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
   }
   if (method === 'review' && (args.scope === 'turn' || args.scope === 'lastTurn')) return s.review(args, Boolean(preparedReview), context);
   if (method === 'runningChanges') {
@@ -213,11 +210,15 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   }
   if (method === 'selectTurn') {
     if (typeof args?.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== 'string' || !args.runId || args.runId.length > 128 || (args.fileId != null && (typeof args.fileId !== 'string' || args.fileId.length > 256))) fail('NAVIGATION_INVALID', 'Invalid recorded-task target');
+    if (args.scope != null && args.scope !== 'turn' && args.scope !== 'lastTurn') fail('NAVIGATION_INVALID', 'Invalid recorded-task scope');
+    if (args.scope === 'lastTurn' && (args.runningSince == null || args.fileId != null)) fail('NAVIGATION_INVALID', 'Latest-turn entry requires a running task without a fixed file');
     const version = navigationVersion;
     const run = await s.selectTarget(args);
     if (!run) fail('RUN_MISSING', 'Recorded task not found in this session');
     if (disposed || service !== s || version !== navigationVersion) fail('SELECTION_MISSING', 'Selection cleared or plugin unloaded');
-    const selection = navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, await store!.resolveFileId(args.runId, args.fileId));
+    const selection = args.scope === 'lastTurn'
+      ? navigation.set({ scope: 'lastTurn', sessionId: run.sessionId })
+      : navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, await store!.resolveFileId(args.runId, args.fileId));
     await atomicJson(path.join(store!.directory, 'selections.json'), navigation.export());
     return selection;
   }
@@ -226,6 +227,7 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     if (typeof args?.sessionId !== 'string' || !args.sessionId) fail('SESSION_REQUIRED', '当前视图缺少会话标识；请从本会话重新打开差异审查。');
     const selection = navigation.get(args.nonce, args.sessionId);
     if (!selection) fail('SELECTION_MISSING', '本会话的文件选择不存在或已清除；可返回本会话修改记录重新选择。');
+    if (selection.request.scope === 'lastTurn') return selection;
     const target = await s.selectTarget({ runId: selection.request.runId!, sessionId: args.sessionId });
     if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
       const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store!.resolveFileId(selection.request.runId!, selection.fileId));

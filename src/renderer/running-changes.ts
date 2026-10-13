@@ -48,9 +48,9 @@ export function createRunningChangesController(transport: UiTransport, adapter: 
       const guard = () => { if (!valid(version) || view.summary?.runId !== summary.runId) throw new Error('任务已结束或切换 / Task ended or changed'); };
       emit({ ...view, busy: true, error: '' });
       try {
-        // selectTurn verifies the task/run/session; the host opener verifies the
-        // active session. No redundant summary or active-session round trip.
-        const selection = await transport.invoke<{ nonce: string }>('selectTurn', { sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
+        // Validate the running task, but open the session's latest-turn mode rather
+        // than pinning this captured run as a historical selection.
+        const selection = await transport.invoke<{ nonce: string }>('selectTurn', { scope: 'lastTurn', sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
         guard(); await adapter.open(task.sessionId, `diff-view:${selection.nonce}`, guard); guard();
       } catch (error) {
         if (valid(version) && view.summary?.runId === summary.runId) {

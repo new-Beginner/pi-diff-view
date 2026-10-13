@@ -71,7 +71,7 @@ export default function RunningChangePill({ transport, adapter, ui, report }: { 
   const summary = view.summary, zh = summary?.locale.startsWith('zh');
   const unknown = summary?.unknownFileCount ?? 0, allUnknown = !!summary && unknown >= summary.fileCount;
   return <><span ref={anchor} className="dv-running-anchor" aria-hidden="true" />{layerError && <span className="dv-running-error" role="alert">{layerError}</span>}{summary && visible && layer && createPortal(<div className="dv-running-float" data-base={summary.base} style={{ left: position.left, top: position.top, maxWidth: position.width }}>
-    <button type="button" className="dv-running-pill" disabled={view.busy} aria-busy={view.busy} title={zh ? '查看本轮已捕获变更；仅统计可验证文本' : 'Review captured changes in this task; verified text counts only'} onClick={() => void controller.current?.open()}>
+    <button type="button" className="dv-running-pill" disabled={view.busy} aria-busy={view.busy} title={zh ? '查看本会话最近轮次的变更；仅统计可验证文本' : 'Review the latest turn in this session; verified text counts only'} onClick={() => void controller.current?.open()}>
       <span className="dv-running-label">{zh ? `${summary.fileCount} 个文件已更改` : `${summary.fileCount} ${summary.fileCount === 1 ? 'file' : 'files'} changed`}</span>{!allUnknown && <><span className="dv-running-add">+{summary.additions}</span><span className="dv-running-del">-{summary.deletions}</span></>}{unknown > 0 && <span className="dv-running-unknown">{zh ? allUnknown ? '行数未知' : '部分统计' : allUnknown ? 'Unknown lines' : 'Partial totals'}</span>}
     </button>{view.error && <p className="dv-running-error" role="alert">{view.error}</p>}
   </div>, layer.element)}</>;

@@ -36,8 +36,8 @@ __export(main_exports, {
   onUnload: () => onUnload
 });
 module.exports = __toCommonJS(main_exports);
-var import_promises11 = __toESM(require("node:fs/promises"), 1);
-var import_node_path13 = __toESM(require("node:path"), 1);
+var import_promises10 = __toESM(require("node:fs/promises"), 1);
+var import_node_path12 = __toESM(require("node:path"), 1);
 var import_node_crypto10 = require("node:crypto");
 
 // src/core/storage.ts
@@ -315,16 +315,16 @@ var Diff = class {
       }
     }
   }
-  addToPath(path14, added, removed, oldPosInc, options) {
-    const last = path14.lastComponent;
+  addToPath(path13, added, removed, oldPosInc, options) {
+    const last = path13.lastComponent;
     if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
       return {
-        oldPos: path14.oldPos + oldPosInc,
+        oldPos: path13.oldPos + oldPosInc,
         lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
       };
     } else {
       return {
-        oldPos: path14.oldPos + oldPosInc,
+        oldPos: path13.oldPos + oldPosInc,
         lastComponent: { count: 1, added, removed, previousComponent: last }
       };
     }
@@ -1147,31 +1147,6 @@ function isImagePath(filePath2) {
   return dot > 0 && dot < basename.length - 1 && IMAGE_EXTENSIONS.has(basename.slice(dot + 1).toLowerCase());
 }
 
-// src/agent/workspace-capture.ts
-var import_promises3 = __toESM(require("node:fs/promises"), 1);
-var import_node_path4 = __toESM(require("node:path"), 1);
-
-// src/core/capture-context.ts
-var import_node_path3 = __toESM(require("node:path"), 1);
-var CAPTURE_CONTEXT_TTL = 6e3;
-async function writeCaptureContexts(directory, generation2, contexts2) {
-  await atomicJson(import_node_path3.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
-}
-
-// src/agent/workspace-capture.ts
-async function inspectCaptureLeases(store2) {
-  const file = import_node_path4.default.join(store2.directory, "capture-leases.json");
-  const stat = await import_promises3.default.lstat(file).catch((error) => {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  });
-  if (!stat) return { fingerprint: digest("absent"), leases: [] };
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error("Unsafe lease journal");
-  const text2 = await import_promises3.default.readFile(file, "utf8"), data = JSON.parse(text2);
-  if (data.version !== 1 || !Array.isArray(data.leases)) throw new Error("Invalid lease journal");
-  return { fingerprint: digest(text2), leases: data.leases };
-}
-
 // src/core/reply-content.ts
 var MAX_REPLY_PAYLOAD = 24e3;
 var encoder = new TextEncoder();
@@ -1189,67 +1164,67 @@ function finalReplyCandidates(content) {
 }
 
 // src/core/review-service.ts
-var import_node_path8 = __toESM(require("node:path"), 1);
+var import_node_path6 = __toESM(require("node:path"), 1);
 var import_node_crypto5 = require("node:crypto");
 
 // src/core/rollback.ts
-var import_promises4 = __toESM(require("node:fs/promises"), 1);
+var import_promises3 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs2 = require("node:fs");
-var import_node_path5 = __toESM(require("node:path"), 1);
+var import_node_path3 = __toESM(require("node:path"), 1);
 var import_node_crypto3 = require("node:crypto");
 async function replaceSnapshot(root, value, expected, desired, backupDir) {
   if (expected.kind !== "text" || desired.kind !== "text" || desired.exists && (desired.text === null || digest(desired.text) !== desired.hash)) fail("RESTORE_UNAVAILABLE", "Complete validated text snapshots are required");
   const target = await safeResolve(root, value);
   if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed outside this review; refresh before retrying");
-  await import_promises4.default.mkdir(backupDir, { recursive: true, mode: 448 });
-  const backups = await import_promises4.default.readdir(backupDir);
+  await import_promises3.default.mkdir(backupDir, { recursive: true, mode: 448 });
+  const backups = await import_promises3.default.readdir(backupDir);
   let backupBytes = 0;
-  for (const file of backups) backupBytes += (await import_promises4.default.stat(import_node_path5.default.join(backupDir, file))).size;
+  for (const file of backups) backupBytes += (await import_promises3.default.stat(import_node_path3.default.join(backupDir, file))).size;
   if (backups.length >= 998 || backupBytes + 2 * expected.size + desired.size + 8192 > 64 * 1024 * 1024) fail("BACKUP_LIMIT", "Recovery backup limit reached; export needed backups before clearing plugin history");
-  const id2 = (0, import_node_crypto3.randomUUID)(), record = import_node_path5.default.join(backupDir, `${id2}.json`);
+  const id2 = (0, import_node_crypto3.randomUUID)(), record = import_node_path3.default.join(backupDir, `${id2}.json`);
   await atomicJson(record, { version: 1, root, path: value, before: expected, after: desired });
   if (!expected.exists && !desired.exists) return;
-  await import_promises4.default.mkdir(import_node_path5.default.dirname(target), { recursive: true });
+  await import_promises3.default.mkdir(import_node_path3.default.dirname(target), { recursive: true });
   await safeResolve(root, value);
-  const temp = import_node_path5.default.join(import_node_path5.default.dirname(target), `.diff-view-${id2}.tmp`);
-  const original = import_node_path5.default.join(import_node_path5.default.dirname(target), `.diff-view-${id2}.original`);
-  const originalRel = import_node_path5.default.relative(root, original);
+  const temp = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id2}.tmp`);
+  const original = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id2}.original`);
+  const originalRel = import_node_path3.default.relative(root, original);
   let held = false;
   try {
     if (desired.exists) {
-      const handle = await import_promises4.default.open(temp, "wx", desired.mode & 511 || 420);
+      const handle = await import_promises3.default.open(temp, "wx", desired.mode & 511 || 420);
       try {
         await handle.writeFile(desired.text, "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
-      if (process.platform !== "win32") await import_promises4.default.chmod(temp, desired.mode & 511);
+      if (process.platform !== "win32") await import_promises3.default.chmod(temp, desired.mode & 511);
     }
     await safeResolve(root, value);
     if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed before restore");
     if (expected.exists) {
-      await import_promises4.default.rename(target, original);
+      await import_promises3.default.rename(target, original);
       held = true;
       const actual = await readSnapshot(root, originalRel);
       if (!sameSnapshot(actual, expected)) fail("FILE_CONFLICT", "Actual moved file changed; original content will be preserved");
-      const rawBackup = import_node_path5.default.join(backupDir, `${id2}.original`);
-      await import_promises4.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
-      await import_promises4.default.chmod(rawBackup, 384);
+      const rawBackup = import_node_path3.default.join(backupDir, `${id2}.original`);
+      await import_promises3.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
+      await import_promises3.default.chmod(rawBackup, 384);
       if (!sameSnapshot(await readSnapshot(root, originalRel), expected)) fail("FILE_CONFLICT", "Moved file changed while backing up");
     }
-    if (desired.exists) await import_promises4.default.link(temp, target);
+    if (desired.exists) await import_promises3.default.link(temp, target);
     else if ((await readSnapshot(root, value)).exists) fail("FILE_CONFLICT", "Another file appeared before deletion completed");
     if (held) {
-      await import_promises4.default.unlink(original);
+      await import_promises3.default.unlink(original);
       held = false;
     }
   } catch (error) {
     if (held) {
       try {
         await safeResolve(root, value);
-        await import_promises4.default.link(original, target);
-        await import_promises4.default.unlink(original);
+        await import_promises3.default.link(original, target);
+        await import_promises3.default.unlink(original);
         held = false;
       } catch {
       }
@@ -1258,13 +1233,13 @@ async function replaceSnapshot(root, value, expected, desired, backupDir) {
     if (error.code === "EEXIST") fail("FILE_CONFLICT", "Another file appeared; it was not overwritten");
     throw error;
   } finally {
-    await import_promises4.default.rm(temp, { force: true });
+    await import_promises3.default.rm(temp, { force: true });
   }
 }
 
 // src/git/repository.ts
-var import_promises5 = __toESM(require("node:fs/promises"), 1);
-var import_node_path6 = __toESM(require("node:path"), 1);
+var import_promises4 = __toESM(require("node:fs/promises"), 1);
+var import_node_path4 = __toESM(require("node:path"), 1);
 var import_node_crypto4 = require("node:crypto");
 
 // src/git/runner.ts
@@ -1425,12 +1400,12 @@ function reviewState(review) {
   return state;
 }
 async function discoverRepository(authorizedRoot, includeBranch = true) {
-  const root = await import_promises5.default.realpath(authorizedRoot);
-  if (!(await import_promises5.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
-  const result = { root, name: import_node_path6.default.basename(root), git: false };
+  const root = await import_promises4.default.realpath(authorizedRoot);
+  if (!(await import_promises4.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
+  const result = { root, name: import_node_path4.default.basename(root), git: false };
   const top = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true, limit: 16384 });
   if (top.code !== 0) return result;
-  const gitRoot = await import_promises5.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
+  const gitRoot = await import_promises4.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
   if (canonical(gitRoot) !== canonical(root)) return result;
   result.git = true;
   if (!includeBranch) return result;
@@ -1452,10 +1427,10 @@ async function boundedRead(handle, size, code) {
 async function readIndex(indexPath) {
   let handle;
   try {
-    const stat = await import_promises5.default.lstat(indexPath);
+    const stat = await import_promises4.default.lstat(indexPath);
     if (!stat.isFile() || stat.isSymbolicLink()) fail("INDEX_DENIED", "Git index must be a regular file");
     if (stat.size > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
-    handle = await import_promises5.default.open(indexPath, "r");
+    handle = await import_promises4.default.open(indexPath, "r");
     const bytes = await boundedRead(handle, stat.size, "STALE_INDEX");
     if (bytes.length > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
     const after = await handle.stat();
@@ -1486,21 +1461,21 @@ async function captureWorking(root, rel, reserve, onBytes) {
     target = await safeResolve(root, rel);
   } catch (error) {
     if (error.code !== "SYMLINK_DENIED") throw error;
-    const parent = import_node_path6.default.posix.dirname(rel);
+    const parent = import_node_path4.default.posix.dirname(rel);
     if (parent !== ".") await safeResolve(root, parent);
-    const leaf = import_node_path6.default.resolve(root, rel);
-    const stat = await import_promises5.default.lstat(leaf);
+    const leaf = import_node_path4.default.resolve(root, rel);
+    const stat = await import_promises4.default.lstat(leaf);
     if (!stat.isSymbolicLink()) throw error;
-    return metadata("symlink", digest(await import_promises5.default.readlink(leaf)), 40960, stat.size);
+    return metadata("symlink", digest(await import_promises4.default.readlink(leaf)), 40960, stat.size);
   }
   let handle;
   try {
-    const stat = await import_promises5.default.lstat(target);
+    const stat = await import_promises4.default.lstat(target);
     if (stat.isDirectory()) return metadata("submodule", `directory:${stat.mtimeMs}`, 57344);
     if (!stat.isFile()) return metadata("unavailable", `special:${stat.mode}`, stat.mode);
     if (stat.size > MAX_TEXT_BYTES) return metadata("large", `large:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
     if (!await reserve(stat.size)) return metadata("unavailable", `budget:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
-    handle = await import_promises5.default.open(target, "r");
+    handle = await import_promises4.default.open(target, "r");
     const opened = await handle.stat();
     if (!opened.isFile() || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs)
       fail("FILE_CHANGED", "Working file changed during capture");
@@ -1834,8 +1809,8 @@ async function readGitReview(requestedRoot, scope, ref) {
 }
 
 // src/git/actions.ts
-var import_promises6 = __toESM(require("node:fs/promises"), 1);
-var import_node_path7 = __toESM(require("node:path"), 1);
+var import_promises5 = __toESM(require("node:fs/promises"), 1);
+var import_node_path5 = __toESM(require("node:path"), 1);
 var import_node_os2 = __toESM(require("node:os"), 1);
 function reverseHunkText(before, after, hunkId) {
   const hunk = buildHunks(before, after).find((h) => h.id === hunkId);
@@ -1888,7 +1863,7 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
   const lockPath = `${state.indexPath}.lock`;
   let lock;
   try {
-    lock = await import_promises6.default.open(lockPath, "wx", 384);
+    lock = await import_promises5.default.open(lockPath, "wx", 384);
   } catch (error) {
     if (error.code === "EEXIST") fail("INDEX_LOCKED", "Git index is locked; retry after the other operation finishes");
     throw error;
@@ -1901,11 +1876,11 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
       await replaceSnapshot(state.root, file.path, state.working.get(file.path), desired, backupDir);
       return;
     }
-    tempDir = await import_promises6.default.mkdtemp(import_node_path7.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
-    const tempIndex = import_node_path7.default.join(tempDir, "index");
+    tempDir = await import_promises5.default.mkdtemp(import_node_path5.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
+    const tempIndex = import_node_path5.default.join(tempDir, "index");
     const current = await readIndex(state.indexPath);
     if (current.fingerprint !== state.indexFingerprint) fail("STALE_INDEX", "Index changed; refresh the review");
-    if (current.bytes) await import_promises6.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
+    if (current.bytes) await import_promises5.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
     else await git(state.root, ["read-tree", "--empty"], { index: tempIndex, limit: 4096 });
     await git(state.root, ["update-index", "--no-split-index"], { index: tempIndex, limit: 4096 });
     const changes2 = file.oldPath ? action === "stage" ? [{ path: file.oldPath, snapshot: absentSnapshot() }, { path: file.path, snapshot: desired }] : [{ path: file.path, snapshot: absentSnapshot() }, { path: file.oldPath, snapshot: file.before }] : [{ path: file.path, snapshot: desired }];
@@ -1931,14 +1906,14 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
     await lock.sync();
     await guard(state, file, action);
     await lock.close();
-    await import_promises6.default.rename(lockPath, state.indexPath);
+    await import_promises5.default.rename(lockPath, state.indexPath);
     installed = true;
   } finally {
     await lock.close().catch(() => {
     });
-    if (!installed) await import_promises6.default.unlink(lockPath).catch(() => {
+    if (!installed) await import_promises5.default.unlink(lockPath).catch(() => {
     });
-    if (tempDir) await import_promises6.default.rm(tempDir, { recursive: true, force: true });
+    if (tempDir) await import_promises5.default.rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -1966,11 +1941,6 @@ var ReviewService = class {
   mutableRoots = /* @__PURE__ */ new Set();
   summaries = /* @__PURE__ */ new Map();
   mutations = Promise.resolve();
-  recoveryNotices = /* @__PURE__ */ new Map();
-  setRecoveryNotice(sessionId, notice) {
-    if (notice) this.recoveryNotices.set(sessionId, notice);
-    else this.recoveryNotices.delete(sessionId);
-  }
   async authorize(sessionId, run2) {
     const workspace = await this.host.workspace();
     const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
@@ -1998,18 +1968,15 @@ var ReviewService = class {
         if (!repositories.some((r) => canonical(r.root) === canonical(repo.root))) repositories.push(repo);
         this.allowed.add(canonical(repo.root));
       } catch {
-        repositories.push({ root, name: import_node_path8.default.basename(root), git: false });
+        repositories.push({ root, name: import_node_path6.default.basename(root), git: false });
       }
     }
     this.mutableRoots = new Set(this.allowed);
     const runs = (await this.store.listRuns(false, true)).filter((r) => Object.keys(r.changes).length > 0 || r.version === 2 && r.boundary === "user" && r.state === "running");
     const filtered = sessionId ? runs.filter((r) => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
-    const leases = await inspectCaptureLeases(this.store).catch(() => null);
-    const unresolved = leases?.leases.filter((l) => !l.sessionId && filtered.some((r) => canonical(r.root) === canonical(l.root))).length ?? 0;
-    const recoveryNotice = [sessionId ? this.recoveryNotices.get(sessionId) : void 0, unresolved ? `${unresolved} \u9879\u5386\u53F2\u79DF\u7EA6\u7F3A\u5C11\u751F\u547D\u5468\u671F\u8BC1\u636E\uFF0C\u53EF\u80FD\u5F71\u54CD\u5F52\u5C5E\uFF1B\u8BF7\u5148\u9884\u89C8\u5E76\u786E\u8BA4\u65E7 runner/\u540E\u53F0\u5199\u5165\u5DF2\u505C\u6B62\uFF0C\u4E0D\u80FD\u76F4\u63A5\u6E05\u7A7A\u3002` : void 0].filter(Boolean).join(" ") || void 0;
     const appearance = await this.host.appearance().catch(() => ({})), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   validateTurn(args, requireRun = true) {
     if (typeof args.sessionId !== "string" || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail("SESSION_REQUIRED", "A valid sessionId is required for recorded turns");
@@ -2071,7 +2038,7 @@ var ReviewService = class {
     return { runId: run2.id, sessionId: run2.sessionId, startedAt: run2.startedAt, fileCount: summary.fileCount, additions: summary.additions, deletions: summary.deletions, unknownFileCount: summary.unknownFileCount, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark" };
   }
   async summarizeRun(run2, args, readOnly = false, netOnly = false) {
-    const states2 = readOnly ? {} : await readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {});
+    const states2 = readOnly ? {} : await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
     const { bindings: _bindings, cardPreview: _preview, ...content } = run2;
     const key = digest(JSON.stringify(["stats-known-v1", content, states2, readOnly ? [] : [...this.mutableRoots].sort(), readOnly, netOnly]));
     let cached = this.summaries.get(run2.id);
@@ -2135,7 +2102,7 @@ var ReviewService = class {
       } else {
         root = run2.root;
         if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
-        const states2 = await readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
         const entries = Object.entries(run2.changes).filter(([value]) => !isImagePath(value));
         for (let offset = 0; offset < entries.length; offset += 16) {
           const currentRun = run2;
@@ -2215,7 +2182,7 @@ var ReviewService = class {
   async hydrateFile(review, file) {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
-    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {})]);
+    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {})]);
     Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states2));
     review.hydratedFiles?.add(file.id);
   }
@@ -2269,7 +2236,7 @@ var ReviewService = class {
       if (file) await this.hydrateFile(review, file);
       if (!file || file.fingerprint !== args.fingerprint || !file.actions.includes(args.action)) fail("ACTION_DENIED", "Action is not available for this version");
       if (file.origin === "external" || !this.mutableRoots.has(canonical(review.summary.root))) fail("ACTION_DENIED", "External or historical project captures are read-only");
-      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path8.default.join(this.store.directory, "backups"));
+      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path6.default.join(this.store.directory, "backups"));
       else if (review.run) {
         if (args.hunkId) fail("ACTION_DENIED", "Turn restore requires a complete file snapshot");
         await this.store.importInbox(this.generation);
@@ -2278,12 +2245,12 @@ var ReviewService = class {
         const latestChange = latest.changes[file.path];
         if (latestChange?.capture?.origin !== "workspace") fail("ACTION_DENIED", "External captures cannot authorize mutations");
         if (!latestChange || !sameSnapshot(latestChange.before, file.before) || !sameSnapshot(latestChange.after, file.after)) fail("FILE_CONFLICT", "Captured file version changed; refresh");
-        const states2 = await readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
         const key = `${review.run.id}:${file.path}`;
         if (states2[key] === "reverted" !== (args.action === "reapply")) fail("FILE_CONFLICT", "Restore state changed; refresh");
-        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path8.default.join(this.store.directory, "backups"));
+        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path6.default.join(this.store.directory, "backups"));
         states2[key] = args.action === "reapply" ? "active" : "reverted";
-        await atomicJson(import_node_path8.default.join(this.store.directory, "restores.json"), states2);
+        await atomicJson(import_node_path6.default.join(this.store.directory, "restores.json"), states2);
       } else fail("ACTION_DENIED", "Read-only scope");
       await this.store.audit({ action: args.action, root: review.summary.root, path: file.path, runId: review.run?.id, hunkId: args.hunkId });
       this.reviews.delete(args.reviewId);
@@ -2472,7 +2439,7 @@ ${text2}`;
       case "copyPath": {
         const review = this.get(args.reviewId), file = review.files.find((file2) => file2.id === args.fileId);
         if (!file) fail("FILE_NOT_FOUND", "No validated review file for this path");
-        const value = file.absolutePath ?? import_node_path8.default.resolve(review.summary.root, file.path);
+        const value = file.absolutePath ?? import_node_path6.default.resolve(review.summary.root, file.path);
         assertPublicPath(file.path);
         await this.host.clipboard(value);
         return { ok: true };
@@ -2556,8 +2523,8 @@ var JobQueue = class {
 };
 
 // src/core/native-host-build.ts
-var import_promises7 = __toESM(require("node:fs/promises"), 1);
-var import_node_path9 = __toESM(require("node:path"), 1);
+var import_promises6 = __toESM(require("node:fs/promises"), 1);
+var import_node_path7 = __toESM(require("node:path"), 1);
 
 // src/core/native-build-contract.ts
 var NATIVE_BUILD = {
@@ -2578,12 +2545,12 @@ async function inspectNativeHostBuild(version, executable = process.execPath) {
   if (version !== NATIVE_BUILD.version) return { version, hashes, supported: false, reason: `Only the inspected PI-Desktop ${NATIVE_BUILD.version} build is supported` };
   let handle;
   try {
-    let archiveFs = import_promises7.default;
+    let archiveFs = import_promises6.default;
     try {
       archiveFs = require("original-fs").promises;
     } catch {
     }
-    const archive = import_node_path9.default.join(import_node_path9.default.dirname(executable), "resources", "app.asar");
+    const archive = import_node_path7.default.join(import_node_path7.default.dirname(executable), "resources", "app.asar");
     const stat = await archiveFs.lstat(archive);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Host archive is not a regular file");
     handle = await archiveFs.open(archive, "r");
@@ -2621,7 +2588,8 @@ var ReviewNavigationStore = class {
     this.activeSession = sessionId;
   }
   set(request, fileId) {
-    if (!request.sessionId || request.scope !== "turn" || !request.runId) fail("NAVIGATION_INVALID", "A recorded task/session is required");
+    if (!request.sessionId || request.scope !== "lastTurn" && (request.scope !== "turn" || !request.runId)) fail("NAVIGATION_INVALID", "A recorded task/session is required");
+    if (request.scope === "lastTurn" && (request.runId != null || request.root != null || fileId != null)) fail("NAVIGATION_INVALID", "Latest turn cannot pin a recorded task, project or file");
     const previous = this.selections.get(request.sessionId);
     const entry = { nonce: previous?.nonce ?? (0, import_node_crypto7.randomUUID)(), revision: (previous?.revision ?? 0) + 1, sessionId: request.sessionId, request, fileId, at: Date.now() };
     this.selections.set(request.sessionId, entry);
@@ -2637,7 +2605,10 @@ var ReviewNavigationStore = class {
   restore(entries) {
     if (!Array.isArray(entries)) return;
     for (const entry of entries) {
-      if (!entry || !/^[0-9a-f-]{36}$/i.test(entry.nonce) || typeof entry.sessionId !== "string" || !entry.sessionId || entry.request?.scope !== "turn" || entry.request.sessionId !== entry.sessionId || !/^[a-zA-Z0-9-]{1,80}$/.test(entry.request.runId) || !Number.isSafeInteger(entry.revision)) continue;
+      if (!entry || !/^[0-9a-f-]{36}$/i.test(entry.nonce) || typeof entry.sessionId !== "string" || !entry.sessionId || entry.request?.sessionId !== entry.sessionId || !Number.isSafeInteger(entry.revision)) continue;
+      if (entry.request.scope === "lastTurn") {
+        if (entry.request.runId != null || entry.request.root != null || entry.fileId != null) continue;
+      } else if (entry.request.scope !== "turn" || !/^[a-zA-Z0-9-]{1,80}$/.test(entry.request.runId)) continue;
       this.selections.set(entry.sessionId, entry);
     }
   }
@@ -2717,9 +2688,9 @@ function collectDelegations(messages, ownerOf) {
 }
 
 // src/core/host-history.ts
-var import_promises8 = __toESM(require("node:fs/promises"), 1);
+var import_promises7 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs3 = require("node:fs");
-var import_node_path10 = __toESM(require("node:path"), 1);
+var import_node_path8 = __toESM(require("node:path"), 1);
 
 // src/core/edit-replay.ts
 function replayRecordedEdit(before, args, expectedHash) {
@@ -2799,32 +2770,32 @@ var unknownSnapshot = (exists, hash, label) => ({ exists, text: null, hash: type
 var HostHistoryImporter = class {
   constructor(store2, hostDataRoot) {
     this.store = store2;
-    if (!import_node_path10.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
-    this.hostDataRoot = import_node_path10.default.resolve(hostDataRoot);
+    if (!import_node_path8.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
+    this.hostDataRoot = import_node_path8.default.resolve(hostDataRoot);
   }
   hostDataRoot;
   /** Native session scratch contract; this root is for recording only, never disk actions. */
   scratchRoot(sessionId) {
     if (!ID.test(sessionId)) throw new Error("Invalid history session");
-    return import_node_path10.default.join(this.hostDataRoot, "scratch", sessionId);
+    return import_node_path8.default.join(this.hostDataRoot, "scratch", sessionId);
   }
   async checked(relative, directory = false) {
-    const target = import_node_path10.default.resolve(this.hostDataRoot, relative);
+    const target = import_node_path8.default.resolve(this.hostDataRoot, relative);
     if (!inside(this.hostDataRoot, target)) throw new Error("Host evidence escape");
-    let cursor = import_node_path10.default.parse(target).root;
-    for (const segment of target.slice(cursor.length).split(import_node_path10.default.sep)) {
-      cursor = import_node_path10.default.join(cursor, segment);
-      const stat2 = await import_promises8.default.lstat(cursor);
+    let cursor = import_node_path8.default.parse(target).root;
+    for (const segment of target.slice(cursor.length).split(import_node_path8.default.sep)) {
+      cursor = import_node_path8.default.join(cursor, segment);
+      const stat2 = await import_promises7.default.lstat(cursor);
       if (stat2.isSymbolicLink() || cursor !== target && !stat2.isDirectory()) throw new Error("Unsafe host evidence ancestry");
     }
-    const stat = await import_promises8.default.lstat(target);
+    const stat = await import_promises7.default.lstat(target);
     if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error("Invalid host evidence type");
     return target;
   }
   async read(relative, limit) {
     const file = await this.checked(relative);
-    const initial = await import_promises8.default.lstat(file);
-    const handle = await import_promises8.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
+    const initial = await import_promises7.default.lstat(file);
+    const handle = await import_promises7.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > limit || stat.ino !== initial.ino || stat.dev !== initial.dev) throw new Error("Host evidence limit/identity");
@@ -2837,7 +2808,7 @@ var HostHistoryImporter = class {
       }
       const after = await handle.stat();
       await this.checked(relative);
-      const live = await import_promises8.default.lstat(file);
+      const live = await import_promises7.default.lstat(file);
       if (length > limit || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || live.ino !== stat.ino || live.dev !== stat.dev) throw new Error("Host evidence changed; retry sync");
       return bytes.subarray(0, length);
     } finally {
@@ -2846,12 +2817,12 @@ var HostHistoryImporter = class {
   }
   capture(root, value, sessionId) {
     assertPublicPath(value);
-    const absolutePath = import_node_path10.default.resolve(root, value);
+    const absolutePath = import_node_path8.default.resolve(root, value);
     assertPublicPath(absolutePath);
     if (inside(this.hostDataRoot, absolutePath) && !inside(this.scratchRoot(sessionId), absolutePath) || inside(this.store.directory, absolutePath)) throw new Error("Private history path");
     const origin = inside(root, absolutePath) ? "workspace" : "external";
-    if (origin === "external" && !import_node_path10.default.isAbsolute(value)) throw new Error("Relative external history path");
-    const display = origin === "workspace" ? import_node_path10.default.relative(root, absolutePath).split(import_node_path10.default.sep).join("/") : absolutePath;
+    if (origin === "external" && !import_node_path8.default.isAbsolute(value)) throw new Error("Relative external history path");
+    const display = origin === "workspace" ? import_node_path8.default.relative(root, absolutePath).split(import_node_path8.default.sep).join("/") : absolutePath;
     assertPublicPath(display);
     const identity = canonical(absolutePath);
     return { id: digest(identity).slice(0, 24), identity, path: display, absolutePath, origin };
@@ -2869,8 +2840,8 @@ var HostHistoryImporter = class {
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
   async syncSession(sessionId, root, options = {}) {
-    if (!ID.test(sessionId) || !import_node_path10.default.isAbsolute(root)) throw new Error("Invalid history session/root");
-    root = import_node_path10.default.resolve(root);
+    if (!ID.test(sessionId) || !import_node_path8.default.isAbsolute(root)) throw new Error("Invalid history session/root");
+    root = import_node_path8.default.resolve(root);
     const capture = (value) => this.capture(root, value, sessionId);
     const running = typeof options === "boolean" ? options : options.running === true;
     const mainRunning = typeof options === "boolean" ? options : options.mainRunning ?? running;
@@ -2994,7 +2965,7 @@ var HostHistoryImporter = class {
     const relative = `review-changes/${sessionId}`;
     try {
       const dir = await this.checked(relative, true);
-      const entries = await import_promises8.default.readdir(dir, { withFileTypes: true });
+      const entries = await import_promises7.default.readdir(dir, { withFileTypes: true });
       if (entries.length > 4096) {
         warn("Host modification directory limit exceeded");
         return d;
@@ -3022,7 +2993,7 @@ var HostHistoryImporter = class {
         add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
       } else {
         const name2 = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
-        if (!["write", "edit"].includes(name2) || typeof target !== "string" || !import_node_path10.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
+        if (!["write", "edit"].includes(name2) || typeof target !== "string" || !import_node_path8.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
         const text2 = name2 === "write" && typeof b.args.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name2, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
       }
@@ -3222,11 +3193,11 @@ var HostHistoryImporter = class {
             warn("Existing run root conflict; content frozen; verified repair requires explicit approval");
             continue;
           }
-          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises8.default.readFile(import_node_path10.default.join(this.store.directory, file), "utf8").catch((error) => {
+          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises7.default.readFile(import_node_path8.default.join(this.store.directory, file), "utf8").catch((error) => {
             if (error.code === "ENOENT") return null;
             throw error;
           })])));
-          await atomicJson(import_node_path10.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
+          await atomicJson(import_node_path8.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
         }
         if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
@@ -3430,8 +3401,8 @@ function applyReview(before, hunks, expected) {
 }
 
 // src/core/host-evidence-store.ts
-var import_promises9 = __toESM(require("node:fs/promises"), 1);
-var import_node_path11 = __toESM(require("node:path"), 1);
+var import_promises8 = __toESM(require("node:fs/promises"), 1);
+var import_node_path9 = __toESM(require("node:path"), 1);
 
 // src/core/host-transcript.ts
 function hostEvidenceMessages(messages) {
@@ -3486,14 +3457,14 @@ var LIMIT = 8 * 1024 * 1024;
 var HostEvidenceStore = class {
   directory;
   constructor(dataPath) {
-    this.directory = import_node_path11.default.join(dataPath, "evidence");
+    this.directory = import_node_path9.default.join(dataPath, "evidence");
   }
   file(sessionId, root) {
-    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path11.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
-    return import_node_path11.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
+    return import_node_path9.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
   }
   async checkDirectory() {
-    const stat = await import_promises9.default.lstat(this.directory);
+    const stat = await import_promises8.default.lstat(this.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence directory");
   }
   async restore(buffer, sessionId, root) {
@@ -3502,7 +3473,7 @@ var HostEvidenceStore = class {
     await this.checkDirectory();
     let record;
     try {
-      const stat = await import_promises9.default.lstat(file);
+      const stat = await import_promises8.default.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LIMIT) throw new Error("Unsafe persisted evidence record");
       record = await readJson(file);
     } catch (error) {
@@ -3520,12 +3491,12 @@ var HostEvidenceStore = class {
     const record = { version: 1, sessionId, root: canonical(root), messages: hostEvidenceMessages(messages) };
     const bytes = Buffer.byteLength(JSON.stringify(record));
     if (bytes > LIMIT) throw new Error("Persisted evidence exceeds 8 MiB limit");
-    const entries = (await import_promises9.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
-    const present = entries.includes(import_node_path11.default.basename(file));
+    const entries = (await import_promises8.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
+    const present = entries.includes(import_node_path9.default.basename(file));
     if (!present && entries.length >= MAX_RUNS) throw new Error("Persisted evidence session limit reached");
     let size = bytes;
-    for (const name2 of entries) if (name2 !== import_node_path11.default.basename(file)) {
-      const stat = await import_promises9.default.lstat(import_node_path11.default.join(this.directory, name2));
+    for (const name2 of entries) if (name2 !== import_node_path9.default.basename(file)) {
+      const stat = await import_promises8.default.lstat(import_node_path9.default.join(this.directory, name2));
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence record");
       size += stat.size;
     }
@@ -3535,8 +3506,8 @@ var HostEvidenceStore = class {
 };
 
 // src/git/local-management.ts
-var import_promises10 = __toESM(require("node:fs/promises"), 1);
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_promises9 = __toESM(require("node:fs/promises"), 1);
+var import_node_path10 = __toESM(require("node:path"), 1);
 var import_node_child_process2 = require("node:child_process");
 var import_node_crypto8 = require("node:crypto");
 var mutations = /* @__PURE__ */ new Set(["stage", "unstage", "discard", "commit", "branchCreate", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
@@ -3624,10 +3595,10 @@ async function run(root, args, hooks = false, index) {
 }
 async function filePath(root, value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path12.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
+  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
   assertPublicPath(rel);
   const resolved = await safeResolve(root, rel);
-  const stat = await import_promises10.default.lstat(resolved).catch((error) => {
+  const stat = await import_promises9.default.lstat(resolved).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -3673,7 +3644,7 @@ async function requireHead(root) {
 async function requireIdle(root) {
   for (const name2 of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
     const result = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", name2]);
-    if (await import_promises10.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
+    if (await import_promises9.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
   }
 }
 async function checkedDiffPaths(root, args) {
@@ -3747,7 +3718,7 @@ function commitMessage(args) {
 ${args.description.trim()}` : ""), "Commit message", 5e3);
 }
 async function indexBytes(index) {
-  return import_promises10.default.readFile(index).catch((error) => {
+  return import_promises9.default.readFile(index).catch((error) => {
     if (error.code === "ENOENT") return void 0;
     throw error;
   });
@@ -3765,7 +3736,7 @@ async function selectedCommit(root, args, message, state) {
   const previous = await headCommit(root);
   const realIndex = (await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).stdout.toString().trim();
   const original = await indexBytes(realIndex);
-  const token = `diff-view-commit-${(0, import_node_crypto8.randomUUID)()}`, isolated = import_node_path12.default.join(import_node_path12.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
+  const token = `diff-view-commit-${(0, import_node_crypto8.randomUUID)()}`, isolated = import_node_path10.default.join(import_node_path10.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
   let lock, ownsLock = false;
   try {
     await git(root, ["read-tree", ...previous ? [previous] : ["--empty"]], { index: isolated });
@@ -3785,17 +3756,17 @@ async function selectedCommit(root, args, message, state) {
     if (!oid || oid === previous) fail("COMMIT_NOT_CREATED", "Git did not create a new commit. Inspect hook output and refresh.");
     let notice;
     try {
-      if (original) await import_promises10.default.writeFile(nextIndex, original);
+      if (original) await import_promises9.default.writeFile(nextIndex, original);
       else await git(root, ["read-tree", "--empty"], { index: nextIndex });
       await git(root, ["reset", "-q", oid, "--", ...paths], { index: nextIndex });
-      lock = await import_promises10.default.open(`${realIndex}.lock`, "wx");
+      lock = await import_promises9.default.open(`${realIndex}.lock`, "wx");
       ownsLock = true;
       if (!sameIndex(original, await indexBytes(realIndex))) notice = "\u63D0\u4EA4\u5DF2\u6210\u529F\uFF0C\u4F46\u7D22\u5F15\u5728\u63D0\u4EA4\u671F\u95F4\u88AB\u5916\u90E8\u4FEE\u6539\uFF1B\u5DF2\u4FDD\u7559\u5916\u90E8\u6682\u5B58\uFF0C\u8BF7\u5237\u65B0\u6838\u5BF9\u3002";
       else {
-        await lock.writeFile(await import_promises10.default.readFile(nextIndex));
+        await lock.writeFile(await import_promises9.default.readFile(nextIndex));
         await lock.close();
         lock = void 0;
-        await import_promises10.default.rename(`${realIndex}.lock`, realIndex);
+        await import_promises9.default.rename(`${realIndex}.lock`, realIndex);
         ownsLock = false;
       }
     } catch {
@@ -3804,8 +3775,8 @@ async function selectedCommit(root, args, message, state) {
     return { ok: true, oid, ...output(result, notice) };
   } finally {
     await lock?.close().catch(() => void 0);
-    if (ownsLock) await import_promises10.default.unlink(`${realIndex}.lock`).catch(() => void 0);
-    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises10.default.unlink(file).catch(() => void 0);
+    if (ownsLock) await import_promises9.default.unlink(`${realIndex}.lock`).catch(() => void 0);
+    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises9.default.unlink(file).catch(() => void 0);
   }
 }
 async function discardTarget(root, values) {
@@ -3833,9 +3804,9 @@ var LocalGitManagement = class {
     if (!value || typeof value !== "object" || Array.isArray(value)) fail("INVALID_ARGUMENT", "Git management arguments are required.");
     const args = value;
     if (!operations.has(args.operation)) fail("INVALID_OPERATION", "Unsupported local-only Git operation.");
-    const roots = await Promise.all(allowedRoots.map((root2) => import_promises10.default.realpath(root2)));
+    const roots = await Promise.all(allowedRoots.map((root2) => import_promises9.default.realpath(root2)));
     const requested = args.root ?? (roots.length === 1 ? roots[0] : fail("ROOT_REQUIRED", "Select an authorized project root."));
-    const root = await import_promises10.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
+    const root = await import_promises9.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
     if (!roots.some((allowed) => canonical(allowed) === canonical(root))) fail("ROOT_DENIED", "Repository is not an authorized project root.");
     const key = canonical(root);
     const previous = queues.get(key) ?? Promise.resolve();
@@ -3859,7 +3830,7 @@ var LocalGitManagement = class {
       const target = await discardTarget(root, args.paths);
       if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };
       if (args.fingerprint !== target.fingerprint) fail("FILE_CHANGED", "File or index changed since confirmation. Refresh and review before discarding.");
-      if (target.untracked) await import_promises10.default.unlink(await safeResolve(root, target.rel));
+      if (target.untracked) await import_promises9.default.unlink(await safeResolve(root, target.rel));
       else await run(root, ["restore", "--worktree", "--", target.rel]);
       return { ok: true };
     }
@@ -4003,6 +3974,13 @@ Stash was not dropped. Inspect status and resolve any conflicts manually; do not
 };
 var localManagement = new LocalGitManagement();
 var dispatch = (method, args, allowedRoots) => localManagement.dispatch(method, args, allowedRoots);
+
+// src/core/capture-context.ts
+var import_node_path11 = __toESM(require("node:path"), 1);
+var CAPTURE_CONTEXT_TTL = 6e3;
+async function writeCaptureContexts(directory, generation2, contexts2) {
+  await atomicJson(import_node_path11.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
+}
 
 // src/core/host-evidence-buffer.ts
 var HostEvidenceBuffer = class {
@@ -4165,7 +4143,7 @@ var rendererStages = {};
 var runningDiagnostic;
 var rendererDiagnostic;
 async function saveRendererStatus() {
-  if (store && !disposed) await atomicJson(import_node_path13.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+  if (store && !disposed) await atomicJson(import_node_path12.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
 }
 var navigation = new ReviewNavigationStore();
 function serial(work) {
@@ -4181,24 +4159,24 @@ async function heartbeat() {
 async function onLoad() {
   disposed = false;
   generation = (0, import_node_crypto10.randomUUID)();
-  pluginRoot = await import_promises11.default.realpath(__dirname);
+  pluginRoot = await import_promises10.default.realpath(__dirname);
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
-  const parent = import_node_path13.default.dirname(dataPath), plugins = import_node_path13.default.dirname(parent);
-  history = import_node_path13.default.basename(parent) === "data" && import_node_path13.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path13.default.dirname(plugins)) : null;
+  const parent = import_node_path12.default.dirname(dataPath), plugins = import_node_path12.default.dirname(parent);
+  history = import_node_path12.default.basename(parent) === "data" && import_node_path12.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path12.default.dirname(plugins)) : null;
   contexts.clear();
   evidence.clear();
   sessionRoots.clear();
-  const savedRoots = await readJson(import_node_path13.default.join(store.directory, "session-roots.json"), {});
-  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path13.default.isAbsolute(root)) sessionRoots.set(id2, root);
+  const savedRoots = await readJson(import_node_path12.default.join(store.directory, "session-roots.json"), {});
+  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path12.default.isAbsolute(root)) sessionRoots.set(id2, root);
   fileOpens.clear();
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
   navigation.clear();
-  navigation.restore(await readJson(import_node_path13.default.join(store.directory, "selections.json"), []));
+  navigation.restore(await readJson(import_node_path12.default.join(store.directory, "selections.json"), []));
   await saveRendererStatus();
   await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot);
@@ -4218,8 +4196,7 @@ async function onLoad() {
       await store.importInbox(generation);
       const context = contexts.get(event.sessionId);
       if (history && context && service) {
-        const result = await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
-        service.setRecoveryNotice(event.sessionId, result.warnings.join(" "));
+        await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
         context.syncedAt = 0;
       }
       await store.audit({ action: "host-turn-ended", sessionId: String(event.sessionId).slice(0, 128), turnId: String(event.turnId ?? "").slice(0, 128), reason: String(event.reason ?? "").slice(0, 128) });
@@ -4252,7 +4229,7 @@ async function onUnload() {
   evidence.clear();
   contexts.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises11.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises10.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -4347,12 +4324,11 @@ async function execute(s, method, args) {
       const warning = "\u4F1A\u8BDD\u9879\u76EE\u8DEF\u5F84\u7F3A\u5931\u6216\u672A\u6388\u6743\uFF0C\u672A\u5BFC\u5165\u5386\u53F2\u3002";
       contexts.delete(args.sessionId);
       await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
-      s.setRecoveryNotice(args.sessionId, warning);
       return { ok: false, warning };
     }
     sessionRoots.set(args.sessionId, root);
     while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
-    await atomicJson(import_node_path13.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
+    await atomicJson(import_node_path12.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
     const now = Date.now();
     const taskId = typeof args.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : void 0;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : void 0;
@@ -4361,14 +4337,8 @@ async function execute(s, method, args) {
     while (contexts.size > 200) contexts.delete(contexts.keys().next().value);
     await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
     await evidenceStore.restore(evidence, args.sessionId, root);
-    if (!history) {
-      const warning = "\u5BBF\u4E3B\u5386\u53F2\u8DEF\u5F84\u5951\u7EA6\u4E0D\u5339\u914D\uFF0C\u672A\u5BFC\u5165\u5386\u53F2\u3002";
-      s.setRecoveryNotice(args.sessionId, warning);
-      return { ok: false, warning };
-    }
-    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)));
-    s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
-    return result;
+    if (!history) return { ok: false, warning: "\u5BBF\u4E3B\u5386\u53F2\u8DEF\u5F84\u5951\u7EA6\u4E0D\u5339\u914D\uFF0C\u672A\u5BFC\u5165\u5386\u53F2\u3002" };
+    return history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)));
   }
   const context = typeof args?.sessionId === "string" ? contexts.get(args.sessionId) : void 0;
   if (method === "runningChanges" && context?.running && context.taskId === args.taskId && context.since === args.since) {
@@ -4378,10 +4348,9 @@ async function execute(s, method, args) {
   const preparedReview = method === "review" && history && context && (args.scope === "turn" || args.scope === "lastTurn");
   if (preparedReview) await store.importInbox(generation);
   if (history && context && ["runningChanges", "replyCards", "bootstrap", "review", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
-    const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
+    await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
     context.syncedAt = Date.now();
     store.acknowledgeRecovery(args.sessionId);
-    s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
   }
   if (method === "review" && (args.scope === "turn" || args.scope === "lastTurn")) return s.review(args, Boolean(preparedReview), context);
   if (method === "runningChanges") {
@@ -4405,12 +4374,14 @@ async function execute(s, method, args) {
   }
   if (method === "selectTurn") {
     if (typeof args?.sessionId !== "string" || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== "string" || !args.runId || args.runId.length > 128 || args.fileId != null && (typeof args.fileId !== "string" || args.fileId.length > 256)) fail("NAVIGATION_INVALID", "Invalid recorded-task target");
+    if (args.scope != null && args.scope !== "turn" && args.scope !== "lastTurn") fail("NAVIGATION_INVALID", "Invalid recorded-task scope");
+    if (args.scope === "lastTurn" && (args.runningSince == null || args.fileId != null)) fail("NAVIGATION_INVALID", "Latest-turn entry requires a running task without a fixed file");
     const version = navigationVersion;
     const run2 = await s.selectTarget(args);
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
     if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
-    const selection = navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
-    await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+    const selection = args.scope === "lastTurn" ? navigation.set({ scope: "lastTurn", sessionId: run2.sessionId }) : navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
+    await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
   }
   if (method === "readTurnSelection") {
@@ -4418,10 +4389,11 @@ async function execute(s, method, args) {
     if (typeof args?.sessionId !== "string" || !args.sessionId) fail("SESSION_REQUIRED", "\u5F53\u524D\u89C6\u56FE\u7F3A\u5C11\u4F1A\u8BDD\u6807\u8BC6\uFF1B\u8BF7\u4ECE\u672C\u4F1A\u8BDD\u91CD\u65B0\u6253\u5F00\u5DEE\u5F02\u5BA1\u67E5\u3002");
     const selection = navigation.get(args.nonce, args.sessionId);
     if (!selection) fail("SELECTION_MISSING", "\u672C\u4F1A\u8BDD\u7684\u6587\u4EF6\u9009\u62E9\u4E0D\u5B58\u5728\u6216\u5DF2\u6E05\u9664\uFF1B\u53EF\u8FD4\u56DE\u672C\u4F1A\u8BDD\u4FEE\u6539\u8BB0\u5F55\u91CD\u65B0\u9009\u62E9\u3002");
+    if (selection.request.scope === "lastTurn") return selection;
     const target = await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
     if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
       const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store.resolveFileId(selection.request.runId, selection.fileId));
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+      await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), navigation.export());
       return repaired;
     }
     return selection;
@@ -4435,7 +4407,7 @@ async function execute(s, method, args) {
       evidence.clear();
       navigation.clear();
       fileOpens.clear();
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), []);
+      await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {
       navigationClearing = false;

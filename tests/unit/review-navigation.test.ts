@@ -25,3 +25,21 @@ it('updates selected files while retaining the same persistent session capabilit
   const clock = vi.spyOn(Date, 'now').mockReturnValue(second.at + 31 * 60 * 1000);
   try { const fresh = store.set(request, 'c'); expect(fresh.nonce).toBe(first.nonce); expect(fresh.revision).toBe(3); expect(store.get(first.nonce, 's')?.fileId).toBe('c'); } finally { clock.mockRestore(); }
 });
+it('replaces a historical selection with unpinned latest mode and restores it per session', () => {
+  const store = new ReviewNavigationStore();
+  const old = store.set({ scope: 'turn', sessionId: 's', runId: 'old-run', root: '/old-project' }, 'old-file');
+  const latest = store.set({ scope: 'lastTurn', sessionId: 's' });
+  expect(latest.nonce).toBe(old.nonce); expect(latest.revision).toBe(old.revision + 1);
+  expect(latest.request).toEqual({ scope: 'lastTurn', sessionId: 's' }); expect(latest.fileId).toBeUndefined();
+  const restored = new ReviewNavigationStore(); restored.restore(JSON.parse(JSON.stringify(store.export())));
+  expect(restored.get(latest.nonce, 's')?.request).toEqual(latest.request);
+  expect(restored.get(latest.nonce, 'other')).toBeNull();
+  for (const pinned of [{ runId: 'old-run' }, { root: '/old-project' }]) {
+    expect(() => store.set({ scope: 'lastTurn', sessionId: 's', ...pinned })).toThrow('cannot pin');
+    const invalid = new ReviewNavigationStore(); invalid.restore([{ ...latest, request: { ...latest.request, ...pinned } }]);
+    expect(invalid.get(latest.nonce, 's')).toBeNull();
+  }
+  expect(() => store.set({ scope: 'lastTurn', sessionId: 's' }, 'old-file')).toThrow('cannot pin');
+  const history = store.set({ scope: 'turn', sessionId: 's', runId: 'old-run' }, 'old-file');
+  expect(history.request.scope).toBe('turn'); expect(history.fileId).toBe('old-file');
+});

@@ -14,11 +14,11 @@ function fixture() {
   const controller = createRunningChangesController({ invoke: invoke as any }, adapter, next => view = next);
   return { controller, adapter, invoke, get view() { return view; }, result(next: RunningChanges | null) { result = next; } };
 }
-it('updates net totals while running, revalidates the selection and opens directly', async () => {
+it('updates net totals while running, revalidates the task and opens latest-turn mode', async () => {
   const f = fixture(); f.controller.setActivity(task); await flush(); expect(f.view.summary).toEqual(summary);
   f.result({ ...summary, fileCount: 2, additions: 20 }); await vi.advanceTimersByTimeAsync(1000); expect(f.view.summary?.fileCount).toBe(2);
   await f.controller.open(); expect(f.adapter.open).toHaveBeenCalledWith('s', 'diff-view:00000000-0000-4000-8000-000000000001', expect.any(Function));
-  expect(f.invoke).toHaveBeenCalledWith('selectTurn', { sessionId: 's', runId: 'run', runningSince: 100, taskId: 'user' }); expect(f.view.busy).toBe(false); f.controller.dispose();
+  expect(f.invoke).toHaveBeenCalledWith('selectTurn', { scope: 'lastTurn', sessionId: 's', runId: 'run', runningSince: 100, taskId: 'user' }); expect(f.view.busy).toBe(false); f.controller.dispose();
 });
 it('hides immediately on completion, ignores a late poll and stops the timer', async () => {
   const f = fixture(); let release!: (data: RunningChanges) => void;

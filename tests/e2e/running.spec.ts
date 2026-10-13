@@ -35,9 +35,11 @@ async function setup(page: Page, options: { layerApi?: 'public' | 'missing' | 'r
     if (method === 'rendererReport') return { ok: true };
     if (method === 'sessionEvidence' || method === 'sessionContext') return { ok: true }; // Contract-only mock; history recovery is covered by main integration tests.
     if (method === 'activeReviewSession') { navigation.setActiveSession(args.sessionId); return { ok: true }; }
-    if (method === 'selectTurn') { const target = await service.selectTarget(args); return navigation.set({ scope: 'turn', sessionId: target.sessionId, runId: target.id, root: target.root }, args.fileId); }
+    if (method === 'selectTurn') { const target = await service.selectTarget(args); return args.scope === 'lastTurn' ? navigation.set({ scope: 'lastTurn', sessionId: target.sessionId }) : navigation.set({ scope: 'turn', sessionId: target.sessionId, runId: target.id, root: target.root }, args.fileId); }
     if (method === 'readTurnSelection') { if (!args.sessionId) throw new Error('Session required'); const selection = navigation.get(args.nonce, args.sessionId); if (!selection) throw new Error('Selection expired'); return selection; }
     if (method === 'runningChanges' && hold) await hold();
+    // An older backend may still send this field: the UI must ignore it entirely.
+    if (method === 'bootstrap') return { ...await service.bootstrap(args.sessionId), recoveryNotice: '35 项历史租约缺少生命周期证据，请先预览恢复。' };
     return service.invoke(method, args);
   };
   const jobs = new JobQueue(execute);
@@ -70,16 +72,20 @@ for (const width of [360, 600, 1100]) for (const theme of ['light', 'dark'] as c
   await page.locator('#live-chat').evaluate(node => (node as HTMLElement).style.width = '90%'); await page.waitForTimeout(100); await layout();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width); await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
-test('updates real net totals, opens the exact read-only task and preserves the draft', async ({ page }) => {
+test('updates real net totals, opens latest-turn mode without recovery UI and preserves the draft', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toContainText('+11'); await change('first\nsecond\n'); await expect(page.locator('.dv-running-pill')).toHaveText('1 个文件已更改+2-0');
   await page.locator('.dv-running-pill').click(); const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toHaveText('current.txt'); await expect(frame.locator('.dv-code').filter({ hasText: 'second' })).toBeVisible();
+  await expect(frame.getByRole('combobox', { name: '范围', exact: true })).toHaveValue('lastTurn');
+  await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
+  await expect(frame.getByText(/历史恢复|历史租约|预览恢复/)).toHaveCount(0);
   await expect(frame.getByRole('button', { name: /撤销|重新应用|暂存/ })).toHaveCount(0); await expect(page.locator('.dv-layer, dialog')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__liveHost.opens)).toHaveLength(1); await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
 test('hides on complete, then shows the original reply card with no simultaneous pill', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible(); run.state = 'completed'; run.endedAt = Date.now(); run.finalReply = { hash: digest('Done live task'), timestamp: replyAt }; run.replies = [run.finalReply]; await store.writeRun(run);
   await page.evaluate(() => (window as any).__liveHost.setRunning(false)); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 500 }); await expect(page.locator('.dv-turn-card')).toHaveCount(1);
-  await page.locator('.dv-turn-file').click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt'); await expect(page.locator('.dv-running-pill')).toHaveCount(0); await stop(page);
+  await page.locator('.dv-turn-file').click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt'); await expect(page.locator('.dv-running-pill')).toHaveCount(0);
+  await expect(page.frameLocator('iframe').getByRole('combobox', { name: '范围', exact: true })).toHaveValue('turn'); await stop(page);
 });
 test('stops, switches, rejects old task totals, and hides zero-net changes', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible(); await page.evaluate(() => (window as any).__liveHost.switchSession('other')); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 500 });
@@ -223,4 +229,20 @@ test('one parent entry retains all child changes while main is idle, then one pa
   run.state = 'completed'; run.endedAt = Date.now(); run.delegations[0].status = 'completed'; run.finalReply = { hash: digest('Done live task'), timestamp: replyAt }; run.replies = [run.finalReply]; await store.writeRun(run);
   await page.evaluate(rows => (window as any).__liveHost.updateEvidence(rows), messages('completed'));
   await expect(page.locator('.dv-running-pill')).toHaveCount(0); await expect(page.locator('.dv-turn-card')).toHaveCount(1); await expect(page.locator('.dv-turn-card')).toContainText('已编辑 2 个文件'); await stop(page);
+});
+test('reopening from the pill resets history mode and follows the next modified turn', async ({ page }) => {
+  await setup(page); const frame = page.frameLocator('iframe');
+  await page.locator('.dv-running-pill').click();
+  const scope = frame.getByRole('combobox', { name: '范围', exact: true });
+  await expect(scope).toHaveValue('lastTurn'); await scope.selectOption('turn');
+  await expect(frame.getByRole('combobox', { name: '对话轮次' })).toBeVisible();
+  await page.locator('.dv-running-pill').click(); await expect(scope).toHaveValue('lastTurn');
+  await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
+  const nextSince = Date.now(); run.state = 'completed'; run.endedAt = nextSince; await store.writeRun(run);
+  await page.evaluate(value => (window as any).__liveHost.task('next-user', value), nextSince);
+  run = { ...run, id: 'next-live-run', userMessageId: 'next-user', startedAt: nextSince + 1, state: 'running', endedAt: undefined, changes: {}, replies: [], bindings: {} };
+  await change('latest turn content\n');
+  await expect(frame.locator('.dv-code').filter({ hasText: 'latest turn content' })).toBeVisible();
+  await expect(scope).toHaveValue('lastTurn'); await expect(page.locator('.dv-running-pill')).toBeVisible();
+  await stop(page);
 });

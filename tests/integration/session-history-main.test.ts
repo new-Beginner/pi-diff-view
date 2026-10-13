@@ -64,8 +64,8 @@ it('main imports authorized session evidence, isolates shared roots and resolves
     expect(current.runId).toBe(damaged.id); expect(current.files).toHaveLength(1);
     expect((await plugin.onRendererCall('bootstrap', { sessionId: 's1' })).runs.filter((run: any) => run.state === 'running')).toHaveLength(1);
     expect(await plugin.onRendererCall('runningChanges', { sessionId: 's1', since, taskId: 'new-user-s1' })).toBeNull();
-    await plugin.onRendererCall('sessionContext', { sessionId: 's1', root: temp, running: false });
-    expect((await plugin.onRendererCall('bootstrap', { sessionId: 's1' })).recoveryNotice).toContain('未授权');
+    expect(await plugin.onRendererCall('sessionContext', { sessionId: 's1', root: temp, running: false })).toMatchObject({ ok: false, warning: expect.stringContaining('未授权') });
+    expect(await plugin.onRendererCall('bootstrap', { sessionId: 's1' })).not.toHaveProperty('recoveryNotice');
     await expect(plugin.onRendererCall('gitManage', { operation: 'status', root: temp })).rejects.toThrow();
   } finally { if (loaded) await plugin.onUnload(); home.mockRestore(); (globalThis as any).pi = previous; await fs.rm(temp, { recursive: true, force: true }); }
 });

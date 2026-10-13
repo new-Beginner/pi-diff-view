@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { SnapshotStore } from '../../src/core/storage';
-import { snapshotOfText } from '../../src/core/path-policy';
+import { canonical, digest, snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureRun, ReviewSummary } from '../../src/core/contracts';
 it('built main validates session-scoped navigation and restores selection after reload', async () => {
   const directory = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'review-nav-'));
@@ -70,5 +70,28 @@ it('built main validates session-scoped navigation and restores selection after 
     await plugin.onLoad(); loaded = true;
     expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: selection.nonce, sessionId: 's' })).fileId).toBe(fileId);
     expect((await plugin.onRendererCall('bootstrap', {})).runs).toEqual([]);
+    const since = Date.now() - 1000;
+    const liveRun: CaptureRun = { ...run, version: 2, boundary: 'user', source: 'host-history', id: 'live-nav-run', userMessageId: 'current-user', startedAt: since + 1, state: 'running', endedAt: undefined };
+    liveRun.changes = Object.fromEntries(Object.entries(run.changes).map(([value, change]) => {
+      const absolutePath = path.join(root, value), identity = canonical(absolutePath);
+      return [value, { ...change, capture: { id: digest(identity).slice(0, 24), identity, absolutePath, path: value, origin: 'workspace' as const } }];
+    }));
+    await store.writeRun(liveRun);
+    expect(await store.getRun(liveRun.id, false, false)).toMatchObject({ id: liveRun.id, state: 'running', boundary: 'user', userMessageId: 'current-user', source: 'host-history', bindings: {} });
+    const latestArgs = { scope: 'lastTurn', sessionId: 's', runId: liveRun.id, runningSince: since, taskId: 'current-user' };
+    const latest = await plugin.onRendererCall('selectTurn', latestArgs);
+    expect(latest.request).toEqual({ scope: 'lastTurn', sessionId: 's' }); expect(latest.fileId).toBeUndefined();
+    expect(latest.nonce).toBe(selection.nonce); expect(latest.revision).toBeGreaterThan(selection.revision);
+    expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: latest.nonce, sessionId: 's' })).request).toEqual(latest.request);
+    await expect(plugin.onPanelInvoke('diff.readTurnSelection', { nonce: latest.nonce, sessionId: 'other' })).rejects.toThrow('不存在');
+    await expect(plugin.onRendererCall('selectTurn', { ...latestArgs, runningSince: undefined })).rejects.toThrow('running task');
+    await expect(plugin.onRendererCall('selectTurn', { ...latestArgs, fileId })).rejects.toThrow('fixed file');
+    liveRun.state = 'completed'; liveRun.endedAt = Date.now(); await store.writeRun(liveRun);
+    await expect(plugin.onRendererCall('selectTurn', latestArgs)).rejects.toThrow('no longer current');
+    // A saved latest-mode entry still resolves after the task ends or plugin reloads.
+    await plugin.onUnload(); loaded = false; await plugin.onLoad(); loaded = true;
+    expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: latest.nonce, sessionId: 's' })).request).toEqual(latest.request);
+    const historical = await plugin.onRendererCall('selectTurn', { sessionId: 's', runId: run.id, fileId });
+    expect(historical.request.scope).toBe('turn'); expect(historical.fileId).toBe(fileId);
   } finally { if (loaded) await plugin.onUnload(); home.mockRestore(); (globalThis as any).pi = oldPi; await fs.rm(directory, { recursive: true, force: true }); }
 });

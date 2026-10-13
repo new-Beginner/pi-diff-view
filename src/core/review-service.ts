@@ -1,6 +1,5 @@
 import type { CaptureContext } from './capture-context';
 import { isImagePath } from './review-file-policy';
-import { inspectCaptureLeases } from '../agent/workspace-capture';
 import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -29,8 +28,6 @@ export class ReviewService {
   private mutableRoots = new Set<string>();
   private summaries = new Map<string, { key: string; files: ReviewFile[]; additions: number; deletions: number; unknownFileCount: number; incomplete: boolean; notice?: string; createdAt: number }>();
   private mutations = Promise.resolve();
-  private recoveryNotices = new Map<string, string>();
-  setRecoveryNotice(sessionId: string, notice?: string): void { if (notice) this.recoveryNotices.set(sessionId, notice); else this.recoveryNotices.delete(sessionId); }
   constructor(readonly store: SnapshotStore, readonly host: ServiceHost, readonly generation: string) {}
   private async authorize(sessionId?: string, run?: CaptureRun): Promise<void> {
     const workspace = await this.host.workspace();
@@ -63,11 +60,8 @@ export class ReviewService {
     const runs = (await this.store.listRuns(false, true)).filter(r => Object.keys(r.changes).length > 0 || (r.version === 2 && r.boundary === 'user' && r.state === 'running'));
     const filtered = sessionId ? runs.filter(r => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
-    const leases = await inspectCaptureLeases(this.store).catch(() => null);
-    const unresolved = leases?.leases.filter(l => !l.sessionId && filtered.some(r => canonical(r.root) === canonical(l.root))).length ?? 0;
-    const recoveryNotice = [sessionId ? this.recoveryNotices.get(sessionId) : undefined, unresolved ? `${unresolved} 项历史租约缺少生命周期证据，可能影响归属；请先预览并确认旧 runner/后台写入已停止，不能直接清空。` : undefined].filter(Boolean).join(' ') || undefined;
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string })), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   private validateTurn(args: { runId?: string; sessionId?: string }, requireRun = true): void {
     if (typeof args.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail('SESSION_REQUIRED', 'A valid sessionId is required for recorded turns');
