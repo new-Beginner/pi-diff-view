@@ -2,12 +2,15 @@ import type { UiTransport } from '../core/contracts';
 
 // A bounded burst avoids imposing 160ms on every step of a cold open.
 // Never exceed six short requests in a rolling second (including polls/diagnostics).
-const realm = globalThis as typeof globalThis & { __piDiffBurstQueue?: { tail: Promise<unknown>; navigationTail?: Promise<unknown>; starts: number[] } };
+const realm = globalThis as typeof globalThis & { __piDiffBurstQueue?: { tail: Promise<unknown>; navigationTail?: Promise<unknown>; mutationTail?: Promise<unknown>; gitTail?: Promise<unknown>; starts: number[] } };
 const queue: NonNullable<typeof realm.__piDiffBurstQueue> = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
-const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'card', 'replyCards']);
+const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards']);
+const reads = new Set(['bootstrap', 'review', 'reviewFiles', 'turnSummary', 'runningChanges', 'file', 'comments', 'feedback', 'replyCards', 'rendererReport', 'nativeProbeInfo']);
+const gitReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
+const navigationMethods = new Set(['openFile', 'openSystemFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
-  const wire = <T,>(method: string, args?: unknown, navigation = ['openFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn'].includes(method)): Promise<T> => {
+  const wire = <T,>(method: string, args?: unknown, navigation = navigationMethods.has(method)): Promise<T> => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error('Request exceeds the bridge payload limit (48 KiB).'));
     if (method === 'saveComment' && bytes > 24000) return Promise.reject(new Error('Comment payload too large; shorten the comment or excerpt.'));
@@ -32,12 +35,12 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
         return response;
       } finally { if (timer) clearTimeout(timer); }
     });
-    if (!navigation) queue.tail = request;
+    if (!navigation) queue.tail = admission;
     return request;
   };
-  return { async invoke<T>(method: string, args?: unknown): Promise<T> {
+  const call = async <T,>(method: string, args?: unknown): Promise<T> => {
     if (!background.has(method)) return wire<T>(method, args);
-    const navigation = method === 'selectTurn';
+    const navigation = method === 'selectTurn' || method === 'openSystemFile';
     const started = await wire<{ jobId: string } & Partial<JobResult<T>>>('jobStart', { method, args, waitMs: 40 }, navigation);
     if (started.state === 'done') return started.result as T;
     if (started.state === 'error') throw Object.assign(new Error(started.error?.message ?? 'Review failed'), { code: started.error?.code });
@@ -51,6 +54,18 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
       delay = Math.min(300, delay * 2);
     }
     throw new Error('Background operation is still running. Refresh to check the result; it was not retried.');
+  };
+  return { invoke<T>(method: string, args?: unknown): Promise<T> {
+    if (navigationMethods.has(method)) return call<T>(method, args);
+    const read = reads.has(method) || (method === 'gitManage' && gitReads.has((args as { operation?: string } | undefined)?.operation ?? ''));
+    const repository = method === 'gitManage' || method === 'action' || method === 'batchAction';
+    const lane = repository ? 'gitTail' : 'mutationTail';
+    const dependencies = [queue[lane] ?? Promise.resolve()];
+    if (method === 'clearHistory' || (method === 'review' && !['turn', 'lastTurn'].includes((args as { scope?: string } | undefined)?.scope ?? ''))) dependencies.push(queue.gitTail ?? Promise.resolve());
+    const result = Promise.all(dependencies.map(task => task.catch(() => undefined))).then(() => call<T>(method, args));
+    // Serialize complete writes within their domain; long Git jobs never fence unrelated UI reads.
+    if (!read) queue[lane] = result.then(() => undefined, () => undefined);
+    return result;
   } };
 }
 const known = new WeakMap<UiTransport, UiTransport>();

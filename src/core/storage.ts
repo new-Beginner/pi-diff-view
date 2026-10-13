@@ -119,7 +119,11 @@ export class SnapshotStore {
           const entries = await fs.readdir(path.dirname(file));
           if (entries.length > 4096) fail('STORE_LIMIT', 'Snapshot limit reached; clear plugin history after stopping Agents');
           let size = 0;
-          for (const entry of entries) size += (await fs.stat(path.join(path.dirname(file), entry))).size;
+          for (let offset = 0; offset < entries.length; offset += 16) {
+            const batch = entries.slice(offset, offset + 16);
+            const sizes = await Promise.all(batch.map(entry => fs.stat(path.join(path.dirname(file), entry)).then(stat => stat.size)));
+            size += sizes.reduce((total, value) => total + value, 0);
+          }
           if (size + snapshot.size > MAX_HISTORY_BYTES) fail('STORE_LIMIT', '128 MiB snapshot capacity reached; clear plugin history after stopping Agents');
           try { await fs.writeFile(file, snapshot.text, { flag: 'wx', mode: 0o600 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
         } finally { await handle.close(); await fs.rm(lock, { force: true }); }
@@ -175,11 +179,15 @@ export class SnapshotStore {
     if (inbox) await this.captureLock(save); else await save();
   }
   async getRun(id: string, inbox = false, hydrate = true): Promise<CaptureRun | null> {
+    const aliases = inbox ? undefined : await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {});
+    return this.readRun(id, inbox, hydrate, aliases);
+  }
+  private async readRun(id: string, inbox: boolean, hydrate: boolean, aliases?: Record<string, string>): Promise<CaptureRun | null> {
     validId(id);
     if (!inbox) {
-      const aliases = await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {});
+      const resolved = aliases ?? await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {});
       const seen = new Set<string>();
-      while (aliases[id]) { if (seen.has(id) || seen.size >= MAX_RUNS) fail('REPAIR_IDENTITY', 'Invalid run alias chain'); seen.add(id); id = aliases[id]; validId(id); }
+      while (resolved[id]) { if (seen.has(id) || seen.size >= MAX_RUNS) fail('REPAIR_IDENTITY', 'Invalid run alias chain'); seen.add(id); id = resolved[id]; validId(id); }
     }
     const run = await readJson<CaptureRun | null>(path.join(this.directory, inbox ? 'inbox' : 'runs', `${id}.json`), null);
     if (!run || !validRun(run, id)) return null;
@@ -272,12 +280,15 @@ export class SnapshotStore {
   }
   async listRuns(hydrate = true, includeUnchanged = false): Promise<CaptureRun[]> {
     const files = (await fs.readdir(path.join(this.directory, 'runs'))).filter(e => /^[\w-]+\.json$/.test(e));
+    if (!files.length) return [];
+    const aliases = await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {}).catch(() => null);
+    if (!aliases) return [];
     const runs: CaptureRun[] = [];
     // Bounded parallel metadata reads; history size must not serialize hundreds of disk round trips.
     const selected = files.slice(-MAX_RUNS * 2);
     for (let offset = 0; offset < selected.length; offset += 16) {
       const page = await Promise.all(selected.slice(offset, offset + 16).map(async file => {
-        try { return await this.getRun(file.slice(0, -5), false, hydrate); } catch { return null; }
+        try { return await this.readRun(file.slice(0, -5), false, hydrate, aliases); } catch { return null; }
       }));
       for (const run of page) if (run && !runs.some(r => r.id === run.id) && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
     }

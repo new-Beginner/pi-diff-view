@@ -758,7 +758,11 @@ var SnapshotStore = class {
           const entries = await fs2.readdir(path2.dirname(file));
           if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
           let size = 0;
-          for (const entry of entries) size += (await fs2.stat(path2.join(path2.dirname(file), entry))).size;
+          for (let offset = 0; offset < entries.length; offset += 16) {
+            const batch = entries.slice(offset, offset + 16);
+            const sizes = await Promise.all(batch.map((entry) => fs2.stat(path2.join(path2.dirname(file), entry)).then((stat) => stat.size)));
+            size += sizes.reduce((total, value) => total + value, 0);
+          }
           if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
           try {
             await fs2.writeFile(file, snapshot.text, { flag: "wx", mode: 384 });
@@ -830,14 +834,18 @@ var SnapshotStore = class {
     else await save();
   }
   async getRun(id3, inbox = false, hydrate = true) {
+    const aliases = inbox ? void 0 : await readJson(path2.join(this.directory, "run-aliases.json"), {});
+    return this.readRun(id3, inbox, hydrate, aliases);
+  }
+  async readRun(id3, inbox, hydrate, aliases) {
     validId(id3);
     if (!inbox) {
-      const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {});
+      const resolved = aliases ?? await readJson(path2.join(this.directory, "run-aliases.json"), {});
       const seen = /* @__PURE__ */ new Set();
-      while (aliases[id3]) {
+      while (resolved[id3]) {
         if (seen.has(id3) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
         seen.add(id3);
-        id3 = aliases[id3];
+        id3 = resolved[id3];
         validId(id3);
       }
     }
@@ -934,12 +942,15 @@ var SnapshotStore = class {
   }
   async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await fs2.readdir(path2.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
+    if (!files.length) return [];
+    const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {}).catch(() => null);
+    if (!aliases) return [];
     const runs = [];
     const selected = files.slice(-MAX_RUNS * 2);
     for (let offset = 0; offset < selected.length; offset += 16) {
       const page = await Promise.all(selected.slice(offset, offset + 16).map(async (file) => {
         try {
-          return await this.getRun(file.slice(0, -5), false, hydrate);
+          return await this.readRun(file.slice(0, -5), false, hydrate, aliases);
         } catch {
           return null;
         }

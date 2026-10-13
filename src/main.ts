@@ -1,3 +1,4 @@
+import { ReadWriteQueue } from './core/read-write-queue';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -15,6 +16,8 @@ import { canonical } from './core/path-policy';
 import { CAPTURE_CONTEXT_TTL, writeCaptureContexts, type CaptureContext } from './core/capture-context';
 import { HostEvidenceBuffer } from './core/host-evidence-buffer';
 import { FileOpenRequests } from './core/file-open';
+import { openSystemFile } from './core/system-open';
+let systemOpenController = new AbortController();
 const fileOpens = new FileOpenRequests();
 const evidence = new HostEvidenceBuffer();
 let history: HostHistoryImporter | null = null;
@@ -23,6 +26,9 @@ const sessionRoots = new Map<string, string>();
 const freshHistoryContext = (context: CaptureContext) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 declare const pi: any;
 let service: ReviewService | null = null, store: SnapshotStore | null = null;
+const repositoryQueue = new ReadWriteQueue(4);
+const repositoryTasks = new Set<Promise<unknown>>();
+const managementReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
 let jobs: JobQueue | null = null;
 let locatorFile = '', generation = '', pluginRoot = '';
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -40,12 +46,32 @@ async function saveRendererStatus(): Promise<void> {
 }
 const navigation = new ReviewNavigationStore();
 function serial<T>(work: () => Promise<T>): Promise<T> { const result = tail.then(work); tail = result.catch(() => {}); return result; }
+function schedule(s: ReviewService, method: string, args: any): Promise<unknown> {
+  const work = async () => { if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args); };
+  if (method === 'openSystemFile') return work();
+  if (method === 'gitManage') {
+    const result = repositoryQueue.run(work, !managementReads.has(args?.operation));
+    repositoryTasks.add(result);
+    void result.then(() => repositoryTasks.delete(result), () => repositoryTasks.delete(result));
+    return result;
+  }
+  if (method === 'action' || method === 'batchAction' || (method === 'review' && !['turn', 'lastTurn'].includes(args?.scope))) {
+    // Reserve the history queue position now, but enter only after the repository fence.
+    // Git management does not occupy the history queue, so long hooks cannot block cards/comments.
+    let release!: () => void;
+    const admitted = new Promise<void>(resolve => release = resolve);
+    const queued = serial(async () => { await admitted; return work(); });
+    return repositoryQueue.run(async () => { release(); return queued; }, method !== 'review');
+  }
+  return serial(work);
+}
 async function heartbeat(): Promise<void> {
   if (disposed || !store) return;
   await atomicJson(locatorFile, { version: 1, pluginRoot, dataPath: store.directory, generation, expiresAt: Date.now() + 60000 } satisfies Locator);
 }
 export async function onLoad(): Promise<void> {
   disposed = false; generation = randomUUID(); pluginRoot = await fs.realpath(__dirname);
+  systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath(); store = new SnapshotStore(dataPath); await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
   // Native getDataPath contract: <host-data>/plugins/data/<plugin-id>.
@@ -63,7 +89,7 @@ export async function onLoad(): Promise<void> {
   locatorFile = await locatorPath(pluginRoot); await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: v => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: text => pi.clipboard.writeText(text), openPanel: () => pi.ui.openPanel({ title: 'Diff view' }) }, generation);
   const currentService = service;
-  jobs = new JobQueue((method, args) => method === 'selectTurn' ? dispatch(method, args) : serial(async () => { if (disposed) fail('PLUGIN_UNLOADED', 'Plugin unloaded'); return execute(currentService, method, args ?? {}); }));
+  jobs = new JobQueue((method, args) => method === 'selectTurn' ? dispatch(method, args) : schedule(currentService, method, args ?? {}));
   await store.importInbox(generation); await store.prune();
   await pi.commands.register({ id: 'diff-view.open', title: 'Diff view: Open review', keywords: ['diff', 'review', '审查', '变更'], run: () => pi.ui.openPanel({ title: 'Diff view' }) });
   turnEnded = event => { void serial(async () => {
@@ -79,16 +105,24 @@ export async function onLoad(): Promise<void> {
     await store.audit({ action: 'host-turn-ended', sessionId: String(event.sessionId).slice(0, 128), turnId: String(event.turnId ?? '').slice(0, 128), reason: String(event.reason ?? '').slice(0, 128) });
   }).catch(error => console.warn('Diff view turn import:', error.message)); };
   pi.events.on('session:turnEnded', turnEnded);
-  timer = setInterval(() => { void serial(async () => { if (!disposed) { await heartbeat(); await store?.importInbox(generation); await store?.prune(); } }).catch(error => console.warn('Diff view capture import:', error.message)); }, 2000);
+  let maintenancePending = false;
+  timer = setInterval(() => {
+    if (disposed || maintenancePending) return;
+    maintenancePending = true;
+    void serial(async () => { if (!disposed) { await heartbeat(); await store?.importInbox(generation); await store?.prune(); } })
+      .catch(error => console.warn('Diff view capture import:', error.message)).finally(() => { maintenancePending = false; });
+  }, 2000);
   timer.unref?.();
 }
 export async function onUnload(): Promise<void> {
   disposed = true; if (timer) clearInterval(timer); timer = undefined;
+  systemOpenController.abort();
   if (turnEnded) pi.events.off('session:turnEnded', turnEnded); turnEnded = undefined;
   jobs?.close(); jobs = null; navigation.clear();
   fileOpens.clear();
   await tail;
   await navigationTail;
+  await Promise.allSettled([...repositoryTasks]);
   evidence.clear(); contexts.clear();
   const current = await readJson<Locator | null>(locatorFile, null).catch(() => null);
   if (current?.generation === generation) await fs.rm(locatorFile, { force: true });
@@ -107,7 +141,7 @@ async function dispatch(method: string, args: unknown): Promise<unknown> {
     const result = navigationTail.catch(() => {}).then(async () => { if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args ?? {}); });
     navigationTail = result.catch(() => {}); return result;
   }
-  if (method === 'activeReviewSession' || method === 'readTurnSelection' || method === 'openFile') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
+  if (method === 'activeReviewSession' || method === 'readTurnSelection' || method === 'openFile' || method === 'openSystemFile') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'rendererReport') {
     const stage = (args as { stage?: unknown } | null)?.stage;
@@ -122,8 +156,7 @@ async function dispatch(method: string, args: unknown): Promise<unknown> {
     return result.state === 'pending' ? started : { ...started, ...result };
   }
   if (method === 'jobPoll') return jobs!.poll((args as { jobId: string }).jobId);
-  const s = service;
-  return serial(async () => { if (disposed) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args ?? {}); });
+  return schedule(service, method, args ?? {});
 }
 /** Recording scope is not mutation authorization: workspace roots stay owned by ReviewService. */
 async function sessionRoot(args: any): Promise<string | undefined> {
@@ -139,6 +172,22 @@ async function sessionRoot(args: any): Promise<string | undefined> {
   return history?.scratchRoot(args.sessionId);
 }
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
+  if (method === 'openSystemFile') {
+    const controller = systemOpenController;
+    const resolveTarget = async () => {
+      if (disposed || service !== s || controller.signal.aborted) fail('PLUGIN_UNLOADED', 'Diff view unloaded');
+      try { return await s.fileOpenTarget(args); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') fail('FILE_NOT_FOUND', '文件已不存在，无法系统打开。 / The file no longer exists.');
+        throw error;
+      }
+    };
+    const target = await resolveTarget();
+    return openSystemFile(target.path, { signal: controller.signal, validate: async () => {
+      const current = await resolveTarget();
+      if (canonical(current.path) !== canonical(target.path)) fail('FILE_CHANGED', 'File identity changed; refresh before opening');
+    } });
+  }
   if (method === 'openFile') {
     if (args.listen === true) return fileOpens.listen(args.sessionId, args.listenerId);
     if (typeof args.cancelListen === 'string') return fileOpens.cancelListen(args.sessionId, args.cancelListen);

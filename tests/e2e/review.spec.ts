@@ -424,3 +424,58 @@ test('File Manager failure is visible and never falls back to expanding the diff
   await expect(current).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('.dv-review')).toBeHidden();
 });
+
+test('system-open menu closes, sends only identities once and preserves PI internal opening', async ({ page }) => {
+  await ready(page, '?session=session-demo&lang=zh-CN');
+  await page.evaluate(() => { (window as any).__demo.deferSystemOpen = true; });
+  await fileActions(page);
+  const open = fileMenu(page).getByRole('button', { name: '外部打开', exact: true });
+  await expect(open).toHaveAttribute('title', '使用系统默认程序打开当前磁盘文件');
+  await open.click();
+  await expect(fileMenu(page)).not.toHaveAttribute('open', '');
+  await expect.poll(async () => (await calls(page, 'diff.openSystemFile')).length).toBe(1);
+  const sent = (await calls(page, 'diff.openSystemFile'))[0].args;
+  expect(sent).toEqual({ reviewId: expect.any(String), fileId: 'review', sessionId: 'session-demo' });
+  await fileActions(page); await expect(open).toBeDisabled();
+  await open.evaluate(node => (node as HTMLButtonElement).click());
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(1);
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__demo.finishSystemOpen)).toBe('function');
+  await page.evaluate(() => (window as any).__demo.finishSystemOpen());
+  await expect(page.getByRole('status').filter({ hasText: '已向系统提交打开请求' })).toBeVisible();
+  await expect(open).toBeEnabled();
+  await fileMenu(page).locator('summary').click();
+  await page.locator('.dv-file-row:has(.dv-file[aria-current="true"]) .dv-file-open').click();
+  await expect.poll(async () => (await calls(page, 'diff.openFile')).filter((call: { args: { fileId?: string } }) => call.args.fileId).length).toBe(1);
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(1);
+});
+
+test('system-open executable confirmation cancels without launch and confirms one launch', async ({ page }) => {
+  await ready(page, '?session=session-demo&scenario=system-executable');
+  await fileActions(page); await fileMenu(page).getByRole('button', { name: 'Open with default app', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm system open' });
+  await expect(dialog).toContainText('may execute a program or script');
+  await expect(dialog).toContainText('scripts/run.CMD');
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(0);
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(0);
+  await fileActions(page); await fileMenu(page).getByRole('button', { name: 'Open with default app', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Confirm operation', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(async () => (await calls(page, 'diff.openSystemFile')).length).toBe(1);
+  await expect(page.getByRole('status').filter({ hasText: 'Open request submitted to the system' })).toBeVisible();
+});
+
+test('system-open allows binary/unavailable diffs and displays failure without retrying', async ({ page }) => {
+  await ready(page, '?session=session-demo&lang=zh-CN');
+  await page.locator('.dv-file').filter({ hasText: 'assets/data.bin' }).click();
+  await fileActions(page); await fileMenu(page).getByRole('button', { name: '外部打开', exact: true }).click();
+  await expect.poll(async () => (await calls(page, 'diff.openSystemFile')).length).toBe(1);
+  expect((await calls(page, 'diff.openSystemFile'))[0].args.fileId).toBe('binary');
+  await expect(page.getByRole('status').filter({ hasText: '已向系统提交打开请求' })).toBeVisible();
+  await page.evaluate(() => { (window as any).__demo.systemOpenError = '文件已不存在，无法系统打开。'; });
+  await page.locator('.dv-file').filter({ hasText: 'src/historical.ts' }).click();
+  await fileActions(page); await fileMenu(page).getByRole('button', { name: '外部打开', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('文件已不存在，无法系统打开');
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(2);
+  expect((await calls(page, 'diff.openSystemFile'))[1].args.fileId).toBe('missing');
+});

@@ -21,3 +21,13 @@ it('reserves one bounded navigation job while four ordinary jobs are pending', a
   expect(q.poll(first.jobId).state).toBe('pending'); expect(calls).toEqual(['review', 'selectTurn']);
   release(); await vi.waitFor(() => expect(q.poll(first.jobId).state).toBe('done')); q.close();
 });
+it('reserves one independent system-open job without fencing navigation or ordinary jobs', async () => {
+  let release!: () => void;
+  const q = new JobQueue(async method => { if (method === 'openSystemFile') await new Promise<void>(resolve => release = resolve); return method; });
+  const opened = q.start('openSystemFile', {});
+  expect(() => q.start('openSystemFile', {})).toThrow('Too many');
+  const selected = q.start('selectTurn', {}), card = q.start('card', {});
+  await vi.waitFor(() => { expect(q.poll(selected.jobId).result).toBe('selectTurn'); expect(q.poll(card.jobId).result).toBe('card'); });
+  expect(q.poll(opened.jobId).state).toBe('pending');
+  release(); await vi.waitFor(() => expect(q.poll(opened.jobId).state).toBe('done')); q.close();
+});

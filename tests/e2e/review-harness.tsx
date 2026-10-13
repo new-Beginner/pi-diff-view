@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import ReviewApp from '../../src/view/ReviewApp';
 import type { UiTransport } from '../../src/core/contracts';
 const transport: UiTransport = { invoke: (method, args) => window.pluginBridge!.invoke(`diff.${method}`, args) };
+const sessionId = new URLSearchParams(location.search).get('session') ?? undefined;
 function Harness() {
   const [appearance, setAppearance] = useState<{ locale?: string; base?: 'light' | 'dark' }>({});
   useEffect(() => {
@@ -11,6 +12,6 @@ function Harness() {
     window.pluginBridge?.invoke('app.getAppearance').then(value => setAppearance(value as typeof appearance));
     return () => { if (typeof dispose === 'function') dispose(); };
   }, []);
-  return <ReviewApp transport={transport} {...appearance} />;
+  return <ReviewApp transport={transport} initialRequest={sessionId ? { scope: 'turn', sessionId, runId: 'run-demo', root: 'D:/projects/diff-view' } : undefined} {...appearance} />;
 }
 createRoot(document.getElementById('root')!).render(<Harness />);

@@ -6,6 +6,7 @@ import { createTwoFilesPatch } from 'diff';
 import { assertPublicPath, canonical, digest, fail, readSnapshot, safeResolve } from '../core/path-policy';
 import { discoverRepository } from './repository';
 import { git, headCommit, resolveCommit } from './runner';
+import { ReadWriteQueue } from '../core/read-write-queue';
 
 /** Independent human-UI API; never uses session records. See dispatch() for the operation vocabulary.
  * Reference: official PI-Desktop pi.gitlens 0.2.7 (main.js/git.js/renderer/panel.js),
@@ -28,7 +29,7 @@ const mutations = new Set(['stage', 'unstage', 'discard', 'commit', 'branchCreat
 const confirmation = new Set(['discard', 'commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
 const operations = new Set(['status', 'diff', 'stats', 'discardPreview', 'branches', 'history', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
 const diffFlags = ['--no-ext-diff', '--no-textconv', '--no-color', '--no-renames'];
-const queues = new Map<string, Promise<unknown>>();
+const queues = new Map<string, ReadWriteQueue>();
 function text(value: unknown, label: string, max = 4096): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max || value.includes('\0')) fail('INVALID_ARGUMENT', `${label} is required (maximum ${max} characters).`);
   return value;
@@ -97,10 +98,13 @@ async function status(root: string): Promise<ManagementStatus> {
   const rows = records(raw.stdout);
   if (rows.length > 500) fail('GIT_LIMIT', 'More than 500 changed files. Use the Git CLI or narrow this repository.');
   const entries: ManagementEntry[] = [];
-  for (const row of rows) {
-    const entry: ManagementEntry = { path: row.slice(3), index: row[0], working: row[1] };
-    try { await filePath(root, entry.path); } catch (error) { entry.blocked = (error as Error).message; }
-    entries.push(entry);
+  for (let offset = 0; offset < rows.length; offset += 8) {
+    const batch = await Promise.all(rows.slice(offset, offset + 8).map(async row => {
+      const entry: ManagementEntry = { path: row.slice(3), index: row[0], working: row[1] };
+      try { await filePath(root, entry.path); } catch (error) { entry.blocked = (error as Error).message; }
+      return entry;
+    }));
+    entries.push(...batch);
   }
   const result = { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null, entries };
   if (Buffer.byteLength(JSON.stringify(result)) > 48000) fail('GIT_LIMIT', 'Status exceeds the panel budget. Use the Git CLI.');
@@ -257,7 +261,7 @@ async function discardTarget(root: string, values: unknown) {
 export class LocalGitManagement {
   /** method MUST be gitManage. allowedRoots MUST come from the host, never the renderer.
    * root defaults only when exactly one root is authorized; enclosing repos are never adopted.
-   * Returns operation-specific JSON or throws Error with code/message. Serialize through one instance.
+   * Returns operation-specific JSON or throws Error with code/message. Writes are exclusive per root.
    */
   async dispatch(method: string, value: unknown, allowedRoots: readonly string[]): Promise<unknown> {
     if (method !== 'gitManage') fail('INVALID_METHOD', 'Unsupported local Git method.');
@@ -269,15 +273,14 @@ export class LocalGitManagement {
     const root = await fs.realpath(text(requested, 'Project root')).catch(() => fail('INVALID_ROOT', 'Project directory is unavailable. Open an existing project.'));
     if (!roots.some(allowed => canonical(allowed) === canonical(root))) fail('ROOT_DENIED', 'Repository is not an authorized project root.');
     const key = canonical(root);
-    const previous = queues.get(key) ?? Promise.resolve();
-    const pending = previous.catch(() => undefined).then(async () => {
+    const queue = queues.get(key) ?? new ReadWriteQueue(4); queues.set(key, queue);
+    const pending = queue.run(async () => {
       if (!(await discoverRepository(root, false)).git) fail('NO_REPOSITORY', 'Selected project is not a Git root. Open the repository root; enclosing repositories are not authorized.');
       if (confirmation.has(args.operation) && args.confirmed !== true) fail('CONFIRM_REQUIRED', 'Confirm this operation in the Git panel before continuing.');
       if (mutations.has(args.operation)) await requireIdle(root);
       return this.perform(root, args);
-    });
-    queues.set(key, pending);
-    try { return await pending; } finally { if (queues.get(key) === pending) queues.delete(key); }
+    }, mutations.has(args.operation));
+    try { return await pending; } finally { if (queue.pending === 0 && queues.get(key) === queue) queues.delete(key); }
   }
   private async perform(root: string, args: ManagementArgs): Promise<unknown> {
     const op = args.operation;

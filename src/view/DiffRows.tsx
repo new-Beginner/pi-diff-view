@@ -15,6 +15,7 @@ import type { Messages } from './i18n';
 for (const [name, language] of Object.entries({ javascript, typescript, python, json, css, xml, bash, markdown, yaml })) hljs.registerLanguage(name, language);
 type Range = [number, number];
 type Pair = { left?: DiffLine; right?: DiffLine; oldRanges?: Range[]; newRanges?: Range[] };
+const emptyRanges: Range[] = [];
 const rangeCache = new Map<string, [Range[], Range[]]>();
 function ranges(before: string, after: string): [Range[], Range[]] {
   if (before.length + after.length > 4000) return [[], []];
@@ -65,7 +66,7 @@ function getHighlightedHtml(text: string, lang: string): string {
   }
   return html;
 }
-const Code = React.memo(function Code({ text, path, changes = [] }: { text: string; path: string; changes?: Range[] }) {
+const Code = React.memo(function Code({ text, path, changes = emptyRanges }: { text: string; path: string; changes?: Range[] }) {
   const nodes = useMemo(() => {
     const lang = language(path);
     const template = document.createElement('template');
@@ -101,6 +102,20 @@ const Code = React.memo(function Code({ text, path, changes = [] }: { text: stri
 });
 export const DiffRows = React.memo(function DiffRows({ lines, path, layout, t }: { lines: DiffLine[]; path: string; layout: 'unified' | 'split'; t: Messages }) {
   const pairs = useMemo(() => alignLines(lines), [lines]);
+  const codeWidth = useMemo(() => {
+    let width = 240;
+    for (const line of lines) {
+      let columns = 0;
+      for (const char of line.text) columns += char === '\t' ? 4 : char.charCodeAt(0) > 255 ? 2 : 1;
+      width = Math.max(width, columns * 8 + 72);
+    }
+    return `${width}px`;
+  }, [lines]);
+  const changes = useMemo(() => {
+    const result = new Map<DiffLine, Range[]>();
+    for (const pair of pairs) { if (pair.left) result.set(pair.left, pair.oldRanges ?? emptyRanges); if (pair.right) result.set(pair.right, pair.newRanges ?? emptyRanges); }
+    return result;
+  }, [pairs]);
   const number = (line: DiffLine | undefined, side: 'old' | 'new') => {
     const value = side === 'old' ? line?.oldLine : line?.newLine;
     return <span className="dv-number" data-side={side} aria-label={value == null ? undefined : `${t[side]} ${value}`}>{value}</span>;
@@ -108,12 +123,10 @@ export const DiffRows = React.memo(function DiffRows({ lines, path, layout, t }:
   const cell = (line: DiffLine | undefined, side: 'old' | 'new', changes?: Range[]) => <div className={`dv-side dv-${line?.kind ?? 'blank'}`}>
     {number(line, side)}{line ? <Code text={line.text} path={path} changes={changes} /> : <span className="dv-code" />}
   </div>;
-  if (layout === 'split') return <div className="dv-rows dv-split" role="group" aria-label={`${t.old} / ${t.new}`} style={{ '--dv-code-width': `${Math.max(240, ...lines.map(line => [...line.text].reduce((width, char) => width + (char === '\t' ? 4 : char.charCodeAt(0) > 255 ? 2 : 1), 0) * 8 + 72))}px` } as React.CSSProperties}>
+  if (layout === 'split') return <div className="dv-rows dv-split" role="group" aria-label={`${t.old} / ${t.new}`} style={{ '--dv-code-width': codeWidth } as React.CSSProperties}>
     <div className="dv-side-labels"><span>{t.old}</span><span>{t.new}</span></div>
     {pairs.map((pair, index) => pair.left?.kind === 'notice' ? <div key={index} className="dv-notice-line">{pair.left.text}</div> : <div key={index} className="dv-pair">{cell(pair.left, 'old', pair.oldRanges)}{cell(pair.right, 'new', pair.newRanges)}</div>)}
   </div>;
-  const changes = new Map<DiffLine, Range[]>();
-  for (const pair of pairs) { if (pair.left) changes.set(pair.left, pair.oldRanges ?? []); if (pair.right) changes.set(pair.right, pair.newRanges ?? []); }
   return <div className="dv-rows dv-unified">{lines.map((line, index) => line.kind === 'notice' ? <div key={index} className="dv-notice-line">{line.text}</div> : <div className={`dv-row dv-${line.kind}`} key={index}>
     {number(line, line.kind === 'del' ? 'old' : 'new')}<Code text={line.text} path={path} changes={changes.get(line)} />
   </div>)}</div>;

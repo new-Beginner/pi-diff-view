@@ -10,6 +10,7 @@ import { createPluginReviewAdapter, type PluginReviewAdapter } from './plugin-re
 import RunningChangePill, { runningPillStyle } from './RunningChangePill';
 import { startFileOpenChannel } from './file-open-channel';
 import type { RendererHost, RendererUi } from './host-contract';
+import { JsonCache } from './json-cache';
 export type { RendererHost } from './host-contract';
 type Disposer = () => void;
 export interface ReplyProps { sessionId: string; messageId: string; message: { content?: unknown; blocks?: { type: string; text?: string }[]; createdAt?: string | number; role?: string; parentToolCallId?: string; meta?: { parentMessageId?: string } } }
@@ -18,7 +19,7 @@ type Feed = { revision?: string; pending: number[] };
 interface Hub {
   transport: UiTransport; ui: RendererUi; disposed: boolean; timer?: ReturnType<typeof setTimeout>; pumping: boolean; wakeAgain: boolean;
   appearance: { locale: string; base: 'light' | 'dark' }; listeners: Set<() => void>;
-  cards: Map<string, CardItem>; cache: Map<string, ReplyCard>; feeds: Map<string, Feed>;
+  cards: Map<string, CardItem>; cache: JsonCache<string, ReplyCard>; feeds: Map<string, Feed>;
   activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; sessionRetry?: ReturnType<typeof setTimeout>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
   stopFileOpen?: Disposer;
   reported: Set<string>;
@@ -78,15 +79,12 @@ function trackSession(current: Hub): Promise<void> {
   });
 }
 function remember(current: Hub, card: ReplyCard): void {
-  const key = cardKey(card.run.sessionId, card.messageId), previous = current.cache.get(key);
-  // Keep the same summary object on unchanged refreshes so expansion and error state do not reset.
-  if (previous && JSON.stringify(previous) === JSON.stringify(card)) card = previous;
-  current.cache.delete(key); current.cache.set(key, card);
-  let bytes = [...current.cache.values()].reduce((n, value) => n + new TextEncoder().encode(JSON.stringify(value)).length, 0);
-  for (const [oldKey, value] of current.cache) {
-    if (current.cache.size <= 200 && bytes <= 4 * 1024 * 1024) break;
+  const key = cardKey(card.run.sessionId, card.messageId);
+  current.cache.set(key, card); card = current.cache.get(key)!;
+  for (const oldKey of current.cache.keys()) {
+    if (current.cache.size <= 200 && current.cache.byteSize <= 4 * 1024 * 1024) break;
     if (current.cards.has(oldKey)) continue;
-    bytes -= new TextEncoder().encode(JSON.stringify(value)).length; current.cache.delete(oldKey);
+    current.cache.delete(oldKey);
   }
   current.cards.get(key)?.listeners.forEach(listener => listener(card));
 }
@@ -204,7 +202,7 @@ function ComposerControl() {
 export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapter } = {}) {
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
-  const current: Hub = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new Map(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
+  const current: Hub = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new JsonCache(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
   hub = current; realm.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summaryStyle + runningPillStyle)); disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
   disposers.push(pi.slots.register({ slot: 'composerControl', positions: ['left'], component: ComposerControl }));

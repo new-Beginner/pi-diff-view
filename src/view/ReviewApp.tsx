@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Action, ActionResult, Bootstrap, DiffHunk, ReviewActionRequest, ReviewFile, ReviewFilesPage, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
 import { isImagePath } from '../core/review-file-policy';
+import { requiresSystemOpenConfirmation } from '../core/system-open-policy';
 import { DiffRows } from './DiffRows';
 import FilePath from './FilePath';
 import FileIcon from './FileIcon';
@@ -12,7 +13,7 @@ import { captureScrollAnchor, restoreScrollAnchor, reconcileHunkViews, reviewFil
 import './review.css';
 
 export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; navigationKey?: string; active?: boolean; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
-type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' };
+type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' } | { kind: 'systemOpen'; file: ReviewFile; review: ReviewSummary; scope: string };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 function Modal({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -62,6 +63,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const [error, setError] = useState('');
   const [openingFile, setOpeningFile] = useState(false);
   const fileOpenPending = useRef(false);
+  const [openingSystemFile, setOpeningSystemFile] = useState(false);
+  const systemOpenPending = useRef(false);
   const [status, setStatus] = useState('');
   const statusTimer = useRef<ReturnType<typeof setTimeout>>();
   const showStatus = (message: string) => {
@@ -76,6 +79,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const sessionKey = initialRequest.sessionId ?? request.sessionId;
   const scopeKey = `${request.scope}|${request.root}|${request.ref}|${request.sessionId}|${request.runId}`;
   const scopeRef = useRef(scopeKey); scopeRef.current = scopeKey;
+  useEffect(() => { setConfirmation(value => value?.kind === 'systemOpen' && value.scope !== scopeKey ? null : value); }, [scopeKey]);
   const diffPane = useRef<HTMLDivElement>(null);
   const reviewPending = useRef(false), loadedScope = useRef('');
   const historyRevision = useRef('');
@@ -240,16 +244,19 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     return () => clearInterval(timer);
   }, [panelActive, request.scope, scopeKey, matchingReview?.runId, matchingReview?.run?.state]);
   const currentFile = detail?.file.id === selected ? detail.file : matchingReview?.files.find(file => file.id === selected);
-  const visibleFiles = matchingReview?.files.filter(file => `${file.path} ${file.oldPath ?? ''}`.toLowerCase().includes(query.toLowerCase())) ?? [];
+  const visibleFiles = useMemo(() => {
+    const needle = query.toLowerCase();
+    return matchingReview?.files.filter(file => `${file.path} ${file.oldPath ?? ''}`.toLowerCase().includes(needle)) ?? [];
+  }, [matchingReview?.files, query]);
   const sessionRuns = useMemo(() => {
     const runs = (boot?.runs ?? []).filter(run => !sessionKey || run.sessionId === sessionKey);
     if (matchingReview?.run && (!sessionKey || matchingReview.run.sessionId === sessionKey)) return [matchingReview.run, ...runs.filter(run => run.id !== matchingReview.runId)].sort((a, b) => b.startedAt - a.startedAt);
     return runs;
   }, [boot?.runs, matchingReview?.run, sessionKey]);
   const selectedRunId = request.scope === 'lastTurn' ? matchingReview?.runId ?? '' : request.runId ?? '';
-  const unknownFiles = matchingReview?.files.filter(file => file.statsKnown === false || file.kind !== 'text').length ?? 0;
-  const verifiedFiles = matchingReview?.files.filter(file => file.statsKnown !== false && file.kind === 'text') ?? [];
-  const roots = [...new Set([...(boot?.repositories.map(repo => repo.root) ?? []), ...sessionRuns.map(run => run.root), ...(request.root ? [request.root] : [])])];
+  const verifiedFiles = useMemo(() => matchingReview?.files.filter(file => file.statsKnown !== false && file.kind === 'text') ?? [], [matchingReview?.files]);
+  const unknownFiles = (matchingReview?.files.length ?? 0) - verifiedFiles.length;
+  const roots = useMemo(() => [...new Set([...(boot?.repositories.map(repo => repo.root) ?? []), ...sessionRuns.map(run => run.root), ...(request.root ? [request.root] : [])])], [boot?.repositories, sessionRuns, request.root]);
   const perform = async (job: () => Promise<void>) => {
     if (busy) return;
     setBusy(true); setError(''); setStatus('');
@@ -285,6 +292,9 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       await transport.invoke('clearHistory', { confirmed: true });
       if (!live.current) return;
       setConfirmation(null); showStatus(t.cleared); setBootTick(value => value + 1);
+    } else if (target.kind === 'systemOpen') {
+      setConfirmation(null);
+      if (target.scope === scopeRef.current && panelActive) await openWithDefaultApp(target.file, target.review);
     }
   });
   const copyPatch = (fileId = currentFile?.id) => perform(async () => {
@@ -319,6 +329,22 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     } catch (err) { if (live.current && scopeRef.current === scope) setError(errorText(err)); }
     finally { fileOpenPending.current = false; if (live.current) setOpeningFile(false); }
   };
+  const openWithDefaultApp = async (file: ReviewFile, targetReview = matchingReview) => {
+    if (!targetReview?.sessionId || systemOpenPending.current || !panelActive) return;
+    systemOpenPending.current = true; setOpeningSystemFile(true); setError(''); setStatus('');
+    const scope = scopeKey;
+    try {
+      await transport.invoke('openSystemFile', { reviewId: targetReview.id, fileId: file.id, sessionId: targetReview.sessionId });
+      if (live.current && scopeRef.current === scope) showStatus(locale.startsWith('zh') ? '已向系统提交打开请求' : 'Open request submitted to the system');
+    } catch (err) { if (live.current && scopeRef.current === scope) setError(errorText(err)); }
+    finally { systemOpenPending.current = false; if (live.current) setOpeningSystemFile(false); }
+  };
+  const requestSystemOpen = (file: ReviewFile) => {
+    if (!matchingReview?.sessionId || systemOpenPending.current || busy) return;
+    if (requiresSystemOpenConfirmation(file.absolutePath ?? file.path)) {
+      setError(''); setConfirmation({ kind: 'systemOpen', file, review: matchingReview, scope: scopeKey });
+    } else void openWithDefaultApp(file);
+  };
   const closeFileMenu = (event: React.MouseEvent<HTMLButtonElement>) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; };
   const placeFileMenu = (menu: HTMLDetailsElement) => {
     if (!menu.open) return;
@@ -340,6 +366,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     <button className="dv-icon-button dv-file-open" disabled={busy || openingFile} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '在 PI-Desktop 文件管理器中打开' : 'Open in PI-Desktop File Manager'} onClick={() => void openInFileManager(file)}><ReviewIcon name="open" /></button>
     <details className="dv-menu dv-file-menu" onToggle={event => placeFileMenu(event.currentTarget)}><summary aria-label={`${t.action} ${file.path}`} title={t.action}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
       <button disabled={busy || !matchingReview} onClick={event => { closeFileMenu(event); void copyPath(file); }}>{locale.startsWith('zh') ? '复制路径' : 'Copy path'}</button>
+      <button disabled={busy || openingSystemFile || !matchingReview?.sessionId} title={locale.startsWith('zh') ? '使用系统默认程序打开当前磁盘文件' : 'Open the current disk file with its default app'} onClick={event => { closeFileMenu(event); requestSystemOpen(file); }}>{locale.startsWith('zh') ? '外部打开' : 'Open with default app'}</button>
       <button disabled={busy} onClick={event => { closeFileMenu(event); openFile(file); }}>{locale.startsWith('zh') ? '展开文件' : 'Expand file'}</button>
       <button disabled={busy || !matchingReview || file.kind === 'unavailable'} onClick={() => void copyPatch(file.id)}>{t.copy}</button>
       {file.actions.length > 0 && <><hr />{actionButtons(file)}</>}
@@ -408,8 +435,9 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       </section>
       {selectedIndex >= 0 && <nav className="dv-file-list" aria-label={t.files}>{visibleFiles.slice(selectedIndex + 1).map(fileRow)}</nav>}
     </div>}
-    {confirmation && <Modal title={confirmation.kind === 'action' || confirmation.kind === 'batch' ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory} busy={busy} onClose={() => setConfirmation(null)}>
-      <p>{confirmation.kind === 'batch' ? t.batchHint : confirmation.kind === 'action' ? t.confirmHint : t.clearHint}</p>
+    {confirmation && <Modal title={confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '确认外部打开' : 'Confirm system open' : confirmation.kind === 'action' || confirmation.kind === 'batch' ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory} busy={busy || openingSystemFile} onClose={() => setConfirmation(null)}>
+      <p>{confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '此文件类型可能执行程序或脚本。确认使用系统默认程序打开当前磁盘文件？' : 'This file type may execute a program or script. Open the current disk file with its default app?' : confirmation.kind === 'batch' ? t.batchHint : confirmation.kind === 'action' ? t.confirmHint : t.clearHint}</p>
+      {confirmation.kind === 'systemOpen' && <p>{confirmation.file.absolutePath ?? `${confirmation.review.root}/${confirmation.file.path}`}</p>}
       {confirmation.kind === 'batch' && <><p>{confirmation.review.root} · {t[confirmation.review.scope]}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{confirmation.files.map(file => file.path).join('\n')}</pre></>}
       {confirmation.kind === 'action' ? <dl className="dv-target"><dt>{t.repository}</dt><dd>{confirmation.review.root}</dd><dt>{t.scope}</dt><dd>{t[confirmation.review.scope]}</dd><dt>{t.target}</dt><dd>{confirmation.file.path}{confirmation.file.oldPath && <> ← {confirmation.file.oldPath}</>}</dd><dt>{t.action}</dt><dd>{t[confirmation.action]} · {confirmation.hunk ? `${t.hunk} ${confirmation.hunk.header}` : t.wholeFile}</dd></dl> : confirmation.kind === 'history' ? <p>{t.history}: {boot?.runs.length ?? 0}</p> : null}
       {error && <p className="dv-error" role="alert">{error}</p>}<div className="dv-dialog-actions"><button disabled={busy} onClick={() => setConfirmation(null)} autoFocus>{t.cancel}</button><button className="dv-primary" disabled={busy} onClick={confirmOperation}>{busy ? t.loading : t.confirm}</button></div>

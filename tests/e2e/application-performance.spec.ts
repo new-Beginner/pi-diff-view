@@ -1,0 +1,90 @@
+import { expect, test } from '@playwright/test';
+import { build } from 'esbuild';
+let code: string;
+test.beforeAll(async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import {createRoot} from 'react-dom/client';
+    import {GitManagement} from './src/view/GitManagement';
+    const transport = {invoke: (method, args) => window.performanceInvoke(args)};
+    createRoot(document.getElementById('app')).render(<GitManagement transport={transport}/>);
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', loader: { '.css': 'empty' }, define: { 'process.env.NODE_ENV': '"test"' } });
+  code = bundle.outputFiles[0].text;
+});
+for (const target of [
+  { page: '分支', text: 'feature-fast' },
+  { page: '历史', text: 'fast-history' },
+  { page: 'Stash', text: 'fast-stash' },
+]) test(`${target.page} data paints without awaiting slow status and controls stay fenced`, async ({ page }) => {
+  await page.setContent('<div id="app"></div>');
+  await page.evaluate(() => {
+    const realm = window as any;
+    const status = { root: 'project', branch: 'main', head: 'a'.repeat(40), entries: [] };
+    let count = 0;
+    realm.performanceInvoke = async (args: any) => {
+      if (args.operation === 'status') {
+        if (++count > 1) await new Promise<void>(resolve => realm.releaseStatus = resolve);
+        return status;
+      }
+      if (args.operation === 'branches') return { branches: [{ name: 'feature-fast', oid: 'b'.repeat(40), current: false }], truncated: false };
+      if (args.operation === 'history') return { commits: [{ oid: 'b'.repeat(40), subject: 'fast-history', author: 'test', date: 'today' }], hasMore: false };
+      if (args.operation === 'stashList') return { stashes: [{ ref: 'stash@{0}', oid: 'b'.repeat(40), subject: 'fast-stash' }] };
+      throw new Error('Unexpected operation');
+    };
+  });
+  await page.addScriptTag({ content: code });
+  await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: target.page, exact: true }).click();
+  await expect(page.locator('.gm-list')).toContainText(target.text);
+  await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeDisabled();
+  await page.evaluate(() => (window as any).releaseStatus());
+  await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+});
+test('typing and selection do not reparse an unchanged expanded patch', async ({ page }) => {
+  await page.setContent('<div id="app"></div>');
+  await page.evaluate(() => {
+    const realm = window as any;
+    const patch = 'diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+    realm.patchSplits = 0;
+    const split = String.prototype.split;
+    String.prototype.split = function (this: string, ...args: any[]) {
+      if (String(this) === patch) realm.patchSplits++;
+      return (split as any).apply(this, args);
+    } as any;
+    realm.performanceInvoke = async (args: any) => args.operation === 'status'
+      ? { root: 'project', branch: 'main', head: 'a'.repeat(40), entries: [{ path: 'a.txt', index: ' ', working: 'M' }] }
+      : args.operation === 'stats' ? { entries: [{ path: 'a.txt', additions: 1, deletions: 1 }] }
+      : args.operation === 'diff' ? { text: patch, truncated: false } : (() => { throw new Error('Unexpected operation'); })();
+  });
+  await page.addScriptTag({ content: code });
+  await page.getByRole('button', { name: 'a.txt', exact: true }).click();
+  await expect(page.locator('.gm-patch')).toContainText('+new');
+  const before = await page.evaluate(() => (window as any).patchSplits);
+  await page.getByRole('checkbox', { name: '选择 a.txt', exact: true }).check();
+  await page.getByLabel('提交摘要').pressSequentially('responsive input');
+  await page.getByLabel('提交摘要').fill('updated');
+  expect(await page.evaluate(() => (window as any).patchSplits)).toBe(before);
+  await expect(page.locator('.gm-patch-add')).toHaveText('+new\n');
+  await expect(page.getByRole('button', { name: 'Commit', exact: true })).toBeEnabled();
+});
+test('failed parallel status keeps page actions disabled and refresh can recover', async ({ page }) => {
+  await page.setContent('<div id="app"></div>');
+  await page.evaluate(() => {
+    let count = 0;
+    (window as any).performanceInvoke = async (args: any) => {
+      if (args.operation === 'status') {
+        if (++count === 2) throw new Error('Status unavailable');
+        return { root: 'project', branch: 'main', head: 'a'.repeat(40), entries: [] };
+      }
+      if (args.operation === 'branches') return { branches: [{ name: 'feature-fast', oid: 'b'.repeat(40), current: false }], truncated: false };
+      throw new Error('Unexpected operation');
+    };
+  });
+  await page.addScriptTag({ content: code });
+  await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '分支', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Status unavailable');
+  await expect(page.getByRole('button', { name: '切换', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(page.getByRole('button', { name: '切换', exact: true })).toBeEnabled();
+});

@@ -17,6 +17,7 @@
   ];
   const external = makeFile('external', 'D:/notes/review-summary.md', { origin: 'external', absolutePath: 'D:/notes/review-summary.md', actions: [], additions: 2, deletions: 1 });
   if (scenario === 'renderer') files.push(external);
+  if (scenario === 'system-executable') files[0].path = 'scripts/run.CMD';
   const turnFiles = [files[0], files[1], files[3], external];
   const line = (kind, text, oldLine, newLine) => ({ kind, text, oldLine, newLine });
   const hunk = (id, oldStart, newStart, lines) => ({ id, oldStart, newStart, oldLines: lines.filter(l => l.oldLine != null).length, newLines: lines.filter(l => l.newLine != null).length, header: `@@ -${oldStart},3 +${newStart},4 @@`, lines });
@@ -86,6 +87,12 @@
       if (method === 'diff.batchAction') return { results: args.targets.map((target, i) => ({ path: files.find(file => file.id === target.fileId).path, ok: i !== 1, message: i === 1 ? 'Demo FILE_CONFLICT: changed file' : 'Demo operation completed' })) };
       if (method === 'diff.copyPatch') return { ok: true };
       if (method === 'diff.copyPath') return { ok: true };
+      if (method === 'diff.openSystemFile') {
+        if (state.deferSystemOpen) await new Promise(resolve => { state.finishSystemOpen = resolve; });
+        if (state.systemOpenError) throw new Error(state.systemOpenError);
+        state.systemOpenedFile = state.review.files.find(file => file.id === args.fileId)?.path;
+        return { ok: true };
+      }
       if (method === 'diff.openFile') {
         if (args.listen) return new Promise(resolve => setTimeout(() => resolve([]), 1500));
         if (args.cancelListen || args.complete) return { ok: true };

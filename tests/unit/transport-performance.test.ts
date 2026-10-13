@@ -66,3 +66,58 @@ it('target selection start and polls bypass a slow ordinary response while retai
   expect(invoke.mock.calls.map(([method]) => method)).toEqual(['file', 'jobStart', 'jobPoll']);
   finishSlow({ ok: true }); await slow;
 });
+it('independent ordinary reads and copying start before a slow detail completes', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(20000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn((method: string) => method === 'file' ? new Promise(resolve => finish = resolve) : Promise.resolve({ ok: true }));
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const slow = transport.invoke('file'); await vi.advanceTimersByTimeAsync(0);
+  const reads = [transport.invoke('reviewFiles'), transport.invoke('comments'), transport.invoke('copyPath')];
+  await vi.advanceTimersByTimeAsync(0);
+  const methods = invoke.mock.calls.map(([method]) => method);
+  finish({ ok: true }); await vi.advanceTimersByTimeAsync(0); await Promise.all([slow, ...reads]);
+  expect(methods).toEqual(['file', 'reviewFiles', 'comments', 'copyPath']);
+});
+it('settings writes remain ordered', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(30000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn((_method: string, args: any) => args?.layout === 'split' ? new Promise(resolve => finish = resolve) : Promise.resolve({ ok: true }));
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const first = transport.invoke('settings', { layout: 'split' }); await vi.advanceTimersByTimeAsync(0);
+  const second = transport.invoke('settings', { layout: 'unified' }); await vi.advanceTimersByTimeAsync(0);
+  expect(invoke).toHaveBeenCalledTimes(1);
+  finish({ ok: true }); await first; await second;
+  expect(invoke.mock.calls.map(([, args]) => args.layout)).toEqual(['split', 'unified']);
+});
+it('long Git jobs do not block comments but fence subsequent repository writes and reads', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(40000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  let done = false;
+  const invoke = vi.fn(async (method: string, args: any) => method === 'jobStart'
+    ? args.args?.operation === 'commit' ? { jobId: 'commit', state: 'pending' } : { jobId: 'other', state: 'done', result: { ok: true } }
+    : method === 'jobPoll' ? { state: done ? 'done' : 'pending', result: { ok: true } } : { ok: true });
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const commit = transport.invoke('gitManage', { operation: 'commit' }); await vi.advanceTimersByTimeAsync(0);
+  const next = transport.invoke('gitManage', { operation: 'stage' });
+  const status = transport.invoke('gitManage', { operation: 'status' });
+  await expect(transport.invoke('comments')).resolves.toEqual({ ok: true });
+  expect(invoke.mock.calls.map(([method]) => method)).toEqual(['jobStart', 'comments']);
+  done = true; await vi.advanceTimersByTimeAsync(1100); await Promise.all([commit, next, status]);
+  expect(invoke.mock.calls.filter(([method]) => method === 'jobStart').map(([, args]) => args.args.operation)).toEqual(['commit', 'stage', 'status']);
+});
+it('system-open uses one background start, does not fence copying and never retries launch errors', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(50000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; queue.navigationTail = Promise.resolve(); await queue.tail;
+  let done = false;
+  const invoke = vi.fn(async (method: string) => method === 'jobStart' ? { jobId: 'open' } : method === 'jobPoll'
+    ? done ? { state: 'error', error: { code: 'SYSTEM_OPEN_FAILED', message: 'No association' } } : { state: 'pending' } : { ok: true });
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const opening = transport.invoke('openSystemFile', { reviewId: 'r', fileId: 'f', sessionId: 's' });
+  const check = expect(opening).rejects.toMatchObject({ code: 'SYSTEM_OPEN_FAILED' });
+  await vi.advanceTimersByTimeAsync(0);
+  await expect(transport.invoke('copyPath')).resolves.toEqual({ ok: true });
+  done = true; await vi.advanceTimersByTimeAsync(100); await check;
+  expect(invoke.mock.calls.filter(([method]) => method === 'jobStart')).toHaveLength(1);
+});

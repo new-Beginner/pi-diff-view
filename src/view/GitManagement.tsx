@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { UiTransport } from '../core/contracts';
 import type { ManagementArgs, ManagementBranch, ManagementCommit, ManagementEntry, ManagementStash, ManagementStatus, ManagementText } from '../git/local-management';
 import FileIcon from './FileIcon';
@@ -70,19 +70,27 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     finally { if (id === detailTicket.current && current === generation.current) setDetailLoading(false); }
   };
   const refreshData = async (current: number, target: Page, skip: number, retainSelection = false) => {
-    const next = await invoke<ManagementStatus>({ operation: 'status' });
-    if (current !== generation.current || (retainSelection && running.current)) return;
-    setStatus(next); setSelected(previous => retainSelection ? previous.filter(value => next.entries.some(entry => entry.path === value)) : []);
-    if (target === 'branches') {
-      const result = await invoke<{ branches: ManagementBranch[]; truncated: boolean }>({ operation: 'branches' });
-      if (current === generation.current) { setBranches(result.branches); if (result.truncated) setNotice('仅显示前 200 个分支。'); }
-    } else if (target === 'history') {
-      const result = await invoke<{ commits: ManagementCommit[]; hasMore: boolean; notice?: string }>({ operation: 'history', skip, limit: 30 });
-      if (current === generation.current) { setCommits(result.commits); setHasMore(result.hasMore); if (result.notice) setNotice(result.notice); }
-    } else if (target === 'stash') {
-      const result = await invoke<{ stashes: ManagementStash[]; notice?: string }>({ operation: 'stashList' });
-      if (current === generation.current) { setStashes(result.stashes); if (result.notice) setNotice(result.notice); }
-    }
+    const statusTask = invoke<ManagementStatus>({ operation: 'status' }).then(next => {
+      if (current !== generation.current || (retainSelection && running.current)) return;
+      setStatus(next);
+      const paths = new Set(next.entries.map(entry => entry.path));
+      setSelected(previous => retainSelection ? previous.filter(value => paths.has(value)) : []);
+    });
+    const pageTask = target === 'branches'
+      ? invoke<{ branches: ManagementBranch[]; truncated: boolean }>({ operation: 'branches' }).then(result => {
+        if (current === generation.current) { setBranches(result.branches); if (result.truncated) setNotice('仅显示前 200 个分支。'); }
+      })
+      : target === 'history'
+        ? invoke<{ commits: ManagementCommit[]; hasMore: boolean; notice?: string }>({ operation: 'history', skip, limit: 30 }).then(result => {
+          if (current === generation.current) { setCommits(result.commits); setHasMore(result.hasMore); if (result.notice) setNotice(result.notice); }
+        })
+        : target === 'stash'
+          ? invoke<{ stashes: ManagementStash[]; notice?: string }>({ operation: 'stashList' }).then(result => {
+            if (current === generation.current) { setStashes(result.stashes); if (result.notice) setNotice(result.notice); }
+          }) : Promise.resolve();
+    // Wait for both even on failure: never re-enable mutations while a read is still pending.
+    const results = await Promise.allSettled([statusTask, pageTask]);
+    for (const result of results) if (result.status === 'rejected') throw result.reason;
   };
   useEffect(() => {
     const current = ++generation.current;
@@ -129,11 +137,14 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   };
   const ask = (args: ManagementArgs, description: string) => { openerRef.current = document.activeElement as HTMLElement | null; setConfirmation({ args, description }); };
   const changeFiles = (operation: 'stage' | 'unstage', paths: string[]) => void execute({ operation, paths }, true);
-  const visible = (status?.entries ?? []).filter(entry => page === 'staged' ? ![' ', '?'].includes(entry.index) : entry.working !== ' ');
-  const actionable = visible.filter(entry => !entry.blocked), protectedFiles = visible.filter(entry => !!entry.blocked);
-  const selectedPaths = selected.filter(path => actionable.some(entry => entry.path === path));
-  const blockedGroups = [...new Set(protectedFiles.map(entry => blockedReason(entry.blocked)))];
-  const toggle = (file: string) => { if (actionable.some(entry => entry.path === file)) setSelected(current => current.includes(file) ? current.filter(p => p !== file) : [...current, file]); };
+  const visible = useMemo(() => (status?.entries ?? []).filter(entry => page === 'staged' ? ![' ', '?'].includes(entry.index) : entry.working !== ' '), [status, page]);
+  const actionable = useMemo(() => visible.filter(entry => !entry.blocked), [visible]);
+  const protectedFiles = useMemo(() => visible.filter(entry => !!entry.blocked), [visible]);
+  const actionablePaths = useMemo(() => new Set(actionable.map(entry => entry.path)), [actionable]);
+  const selectedPaths = useMemo(() => selected.filter(path => actionablePaths.has(path)), [selected, actionablePaths]);
+  const selectedSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
+  const blockedGroups = useMemo(() => [...new Set(protectedFiles.map(entry => blockedReason(entry.blocked)))], [protectedFiles]);
+  const toggle = (file: string) => { if (actionablePaths.has(file)) setSelected(current => current.includes(file) ? current.filter(p => p !== file) : [...current, file]); };
   useEffect(() => { if (selectAllRef.current) selectAllRef.current.indeterminate = selectedPaths.length > 0 && selectedPaths.length < actionable.length; }, [selectedPaths.length, actionable.length]);
   const showDiff = (entry: ManagementEntry) => { if (!entry.blocked && !running.current) { detailTicket.current++; setDetailLoading(false); setDetail(undefined); preview.toggle(entry.path); } };
   const askCommit = () => {
@@ -167,7 +178,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     {error && <pre className="gm-error" role="alert">{error}</pre>}
     {notice && <p className="gm-notice" role="status">{localizedNotice(notice)}{notice.startsWith('Commit 已创建') && <button className="gm-text-button" onClick={() => { setPage('history'); setOffset(0); }}>查看历史</button>}</p>}
     {status && !status.head && <p className="gm-hint">仓库尚无提交。勾选文件并填写摘要，即可创建首次 Commit。</p>}
-    <fieldset disabled={busy || !!confirmation} className="gm-controls">
+    <fieldset disabled={busy || !!confirmation || !status} className="gm-controls">
       {filePage && <>
         <div className="gm-selection-bar" role="group" aria-label="文件选择与批量操作">
           <input ref={selectAllRef} type="checkbox" aria-label="选择全部可操作文件" title="选择全部可操作文件" checked={actionable.length > 0 && selectedPaths.length === actionable.length} disabled={!actionable.length} onChange={event => setSelected(event.target.checked ? actionable.map(entry => entry.path) : [])} />
@@ -176,9 +187,9 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           <button className="gm-icon-button" aria-label={`${page === 'staged' ? '取消暂存' : '暂存'}所选 (${selectedPaths.length})`} title={page === 'staged' ? '取消暂存所选' : '暂存所选'} disabled={!selectedPaths.length} onClick={() => changeFiles(page === 'staged' ? 'unstage' : 'stage', selectedPaths)}><ReviewIcon name={page === 'staged' ? 'unstage' : 'stage'} /></button>
           <button className="gm-icon-button" aria-label="所选差异" title="所选差异" disabled={!selectedPaths.length} onClick={() => void execute({ operation: 'diff', scope: fileScope, paths: selectedPaths })}><ReviewIcon name="search" /></button></div>
         </div>
-        <ul className="gm-list gm-files" aria-label="可操作文件">{actionable.map(entry => <li key={entry.path} className={selectedPaths.includes(entry.path) ? 'gm-selected' : ''}>
+        <ul className="gm-list gm-files" aria-label="可操作文件">{actionable.map(entry => <li key={entry.path} className={selectedSet.has(entry.path) ? 'gm-selected' : ''}>
           <div className="gm-file-row">
-          <input type="checkbox" aria-label={`选择 ${entry.path}`} checked={selectedPaths.includes(entry.path)} onChange={() => toggle(entry.path)} />
+          <input type="checkbox" aria-label={`选择 ${entry.path}`} checked={selectedSet.has(entry.path)} onChange={() => toggle(entry.path)} />
           <button className="gm-path gm-file" aria-label={entry.path} aria-expanded={preview.preview.path === entry.path} onClick={() => showDiff(entry)} onPointerEnter={() => { if (!busy) preview.prefetch(entry.path); }} onPointerLeave={preview.cancelPrefetch} onFocus={() => { if (!busy) preview.prefetch(entry.path); }} onBlur={preview.cancelPrefetch} title={entry.path}>
             <FileIcon path={entry.path} /><span className="gm-file-name"><FilePath path={entry.path} /></span><span className="gm-file-chevron"><ReviewIcon name="chevron" /></span>
           </button>

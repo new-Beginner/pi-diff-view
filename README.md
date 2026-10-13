@@ -2,7 +2,9 @@
 
 面向 **PI-Desktop 0.17.0+** 的本地变更审查插件。按会话和用户轮次展示修改证据、文末卡片与运行浮窗；独立的本地 Git 页面用于人工审查和操作仓库。
 
-**Version: 1.4.22（本地修复版，未公开发布） · Plugin ID: `local.diff-view` · License: MIT**
+**Version: 1.4.25（本地更新版，未公开发布） · Plugin ID: `local.diff-view` · License: MIT**
+
+1.4.25 将文件三点菜单的“系统打开”更名为“外部打开”，功能保持不变：Windows 默认程序打开当前磁盘文件，可执行类型额外确认；文件不存在则提示，不导出历史副本、不自动重试。
 
 源码：[new-Beginner/pi-diff-view](https://github.com/new-Beginner/pi-diff-view) · 安装包：[GitHub Releases](https://github.com/new-Beginner/pi-diff-view/releases/latest)。官方插件中心审核通过后公开上架：[plugins.aiuo.net](https://plugins.aiuo.net)。
 
@@ -10,7 +12,7 @@
 
 ## 安装与使用
 
-1. 本地修复版安装 `plugin/dist/local.diff-view-1.4.22.piplug`；公开旧版可从 GitHub Releases 下载。在 PI-Desktop 插件页安装并手动批准所需权限。
+1. 本地更新版安装 `plugin/dist/local.diff-view-1.4.25.piplug`；公开旧版可从 GitHub Releases 下载。在 PI-Desktop 插件页安装并手动批准所需权限。
 2. 在会话右侧添加 **差异审查 / Diff view**，查看当前或历史轮次的文件修改。
 3. 点击文件查看统一或并排差异，支持上下文、搜索、逐行评论和复制反馈；不会自动发送聊天。
 4. **本地 Git** 是独立入口，支持工作区、暂存区、提交、分支、历史、blame 和 stash。不提供远程 Git 操作。
@@ -46,6 +48,8 @@ npm run test:e2e
 构建输出在 `plugin/`。在 PI-Desktop 中使用 **PluginCheck** 校验目录，然后使用 **PluginPack** 打包。不要手工 zip，安装器只接受 store-only `.piplug`。
 
 ## 本次版本
+
+1.4.23 优化整个加载与交互链路：独立桥接读取不再等待前一响应，Git 长任务与历史/评论分离；仓库读取有界并发，写入继续互斥有序；分支、历史与 Stash 和状态并行加载，状态失败时操作仍不可用；摘要按批核验并合并重复快照读取，历史扫描共用单次别名读取，快照配额检查有界并行；卡片增量计量，搜索、选择、布局与差异渲染复用未变数据。保留会话隔离、哈希/路径检查、确认、限流、冲突保护、实时更新和分页。未新增权限、未自动安装或公开发布。优化范围、对照与验证见 [1.4.23 性能验证](docs/verification-1.4.23.md)。
 
 1.4.22 移除“历史恢复”提示栏及其恢复操作引导，不再在侧栏启动时扫描历史租约生成恢复提示；保留正常的会话修改记录与历史轮次查看。运行浮窗点击后打开本会话“最近轮次”，不固定到旧轮次或旧项目；从历史模式再次点击也回到最近模式，并跟随后续有修改的轮次。浮窗仍仅在当前会话有运行任务与已验证变更时显示，任务结束或切至非运行会话立即隐藏；文末卡片继续定位对应历史轮次。未新增权限、未自动安装。
 

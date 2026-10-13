@@ -130,15 +130,32 @@ export class ReviewService {
     if (!cached || cached.key !== key || Date.now() - cached.createdAt > 30000) {
       const files: ReviewFile[] = []; let additions = 0, deletions = 0, unknownFileCount = 0, incomplete = run.incomplete || run.state !== 'completed' || run.version === 1 || run.boundary !== 'user';
       const started = Date.now();
-      for (const [value, change] of Object.entries(run.changes)) {
-        if (isImagePath(value)) continue;
+      const snapshots = new Map<string, Promise<FileSnapshot>>();
+      const hydrate = (snapshot: FileSnapshot): Promise<FileSnapshot> => {
+        if (!snapshot.exists || snapshot.kind !== 'text' || snapshot.text !== null) return this.hydrateSnapshot(snapshot);
+        const identity = `${snapshot.hash}:${snapshot.size}:${snapshot.mode}`;
+        let pending = snapshots.get(identity);
+        if (!pending) {
+          pending = this.hydrateSnapshot(snapshot); snapshots.set(identity, pending);
+          if (snapshots.size > 32) snapshots.delete(snapshots.keys().next().value!);
+        }
+        return pending;
+      };
+      const entries = Object.entries(run.changes).filter(([value]) => !isImagePath(value));
+      for (let offset = 0; offset < entries.length; offset += 16) {
         if (Date.now() - started > 4000) fail('DIFF_LIMIT', 'Turn summary exceeds computation budget');
-        const hydrated = { ...change, before: await this.hydrateSnapshot(change.before), after: await this.hydrateSnapshot(change.after) };
-        if (netOnly && !change.ambiguous && hydrated.before.kind !== 'unavailable' && hydrated.after.kind !== 'unavailable' && sameSnapshot(hydrated.before, hydrated.after)) continue;
-        const file = publicFile(this.turnFile(run, value, hydrated, states));
-        if (readOnly) file.actions = [];
-        if (file.statsKnown === false) { incomplete = true; unknownFileCount++; }
-        additions += file.additions; deletions += file.deletions; files.push(file);
+        const batch = await Promise.all(entries.slice(offset, offset + 16).map(async ([value, change]) => {
+          const [before, after] = await Promise.all([hydrate(change.before), hydrate(change.after)]);
+          const hydrated = { ...change, before, after };
+          if (netOnly && !change.ambiguous && before.kind !== 'unavailable' && after.kind !== 'unavailable' && sameSnapshot(before, after)) return null;
+          return publicFile(this.turnFile(run, value, hydrated, states));
+        }));
+        for (const file of batch) {
+          if (!file) continue;
+          if (readOnly) file.actions = [];
+          if (file.statsKnown === false) { incomplete = true; unknownFileCount++; }
+          additions += file.additions; deletions += file.deletions; files.push(file);
+        }
       }
       const notice = [turnNotice(run), unknownFileCount ? `${unknownFileCount} 个文件行数未知；汇总仅包含可验证文本差异。` : undefined].filter(Boolean).join(' ') || undefined;
       cached = { key, files, additions, deletions, unknownFileCount, incomplete, notice, createdAt: Date.now() }; this.summaries.set(run.id, cached);

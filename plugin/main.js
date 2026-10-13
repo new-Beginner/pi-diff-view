@@ -36,8 +36,45 @@ __export(main_exports, {
   onUnload: () => onUnload
 });
 module.exports = __toCommonJS(main_exports);
-var import_promises10 = __toESM(require("node:fs/promises"), 1);
-var import_node_path12 = __toESM(require("node:path"), 1);
+
+// src/core/read-write-queue.ts
+var ReadWriteQueue = class {
+  constructor(concurrency = 4) {
+    this.concurrency = concurrency;
+    if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Invalid read concurrency");
+  }
+  writer = Promise.resolve();
+  readers = /* @__PURE__ */ new Set();
+  active = 0;
+  waiting = [];
+  pending = 0;
+  run(work, write = false) {
+    this.pending++;
+    const result = write ? Promise.all([this.writer, ...this.readers].map((task) => task.catch(() => void 0))).then(work) : this.writer.catch(() => void 0).then(async () => {
+      if (this.active >= this.concurrency) await new Promise((resolve) => this.waiting.push(resolve));
+      else this.active++;
+      try {
+        return await work();
+      } finally {
+        const next = this.waiting.shift();
+        if (next) next();
+        else this.active--;
+      }
+    });
+    if (write) this.writer = result;
+    else this.readers.add(result);
+    const settle = () => {
+      this.pending--;
+      this.readers.delete(result);
+    };
+    void result.then(settle, settle);
+    return result;
+  }
+};
+
+// src/main.ts
+var import_promises11 = __toESM(require("node:fs/promises"), 1);
+var import_node_path13 = __toESM(require("node:path"), 1);
 var import_node_crypto10 = require("node:crypto");
 
 // src/core/storage.ts
@@ -315,16 +352,16 @@ var Diff = class {
       }
     }
   }
-  addToPath(path13, added, removed, oldPosInc, options) {
-    const last = path13.lastComponent;
+  addToPath(path14, added, removed, oldPosInc, options) {
+    const last = path14.lastComponent;
     if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
       return {
-        oldPos: path13.oldPos + oldPosInc,
+        oldPos: path14.oldPos + oldPosInc,
         lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
       };
     } else {
       return {
-        oldPos: path13.oldPos + oldPosInc,
+        oldPos: path14.oldPos + oldPosInc,
         lastComponent: { count: 1, added, removed, previousComponent: last }
       };
     }
@@ -843,7 +880,11 @@ var SnapshotStore = class {
           const entries = await import_promises2.default.readdir(import_node_path2.default.dirname(file));
           if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
           let size = 0;
-          for (const entry of entries) size += (await import_promises2.default.stat(import_node_path2.default.join(import_node_path2.default.dirname(file), entry))).size;
+          for (let offset = 0; offset < entries.length; offset += 16) {
+            const batch = entries.slice(offset, offset + 16);
+            const sizes = await Promise.all(batch.map((entry) => import_promises2.default.stat(import_node_path2.default.join(import_node_path2.default.dirname(file), entry)).then((stat) => stat.size)));
+            size += sizes.reduce((total, value) => total + value, 0);
+          }
           if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
           try {
             await import_promises2.default.writeFile(file, snapshot.text, { flag: "wx", mode: 384 });
@@ -915,14 +956,18 @@ var SnapshotStore = class {
     else await save();
   }
   async getRun(id2, inbox = false, hydrate = true) {
+    const aliases = inbox ? void 0 : await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
+    return this.readRun(id2, inbox, hydrate, aliases);
+  }
+  async readRun(id2, inbox, hydrate, aliases) {
     validId(id2);
     if (!inbox) {
-      const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
+      const resolved = aliases ?? await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
       const seen = /* @__PURE__ */ new Set();
-      while (aliases[id2]) {
+      while (resolved[id2]) {
         if (seen.has(id2) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
         seen.add(id2);
-        id2 = aliases[id2];
+        id2 = resolved[id2];
         validId(id2);
       }
     }
@@ -1019,12 +1064,15 @@ var SnapshotStore = class {
   }
   async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
+    if (!files.length) return [];
+    const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {}).catch(() => null);
+    if (!aliases) return [];
     const runs = [];
     const selected2 = files.slice(-MAX_RUNS * 2);
     for (let offset = 0; offset < selected2.length; offset += 16) {
       const page = await Promise.all(selected2.slice(offset, offset + 16).map(async (file) => {
         try {
-          return await this.getRun(file.slice(0, -5), false, hydrate);
+          return await this.readRun(file.slice(0, -5), false, hydrate, aliases);
         } catch {
           return null;
         }
@@ -2046,20 +2094,38 @@ var ReviewService = class {
       const files = [];
       let additions = 0, deletions = 0, unknownFileCount = 0, incomplete = run2.incomplete || run2.state !== "completed" || run2.version === 1 || run2.boundary !== "user";
       const started = Date.now();
-      for (const [value, change] of Object.entries(run2.changes)) {
-        if (isImagePath(value)) continue;
-        if (Date.now() - started > 4e3) fail("DIFF_LIMIT", "Turn summary exceeds computation budget");
-        const hydrated = { ...change, before: await this.hydrateSnapshot(change.before), after: await this.hydrateSnapshot(change.after) };
-        if (netOnly && !change.ambiguous && hydrated.before.kind !== "unavailable" && hydrated.after.kind !== "unavailable" && sameSnapshot(hydrated.before, hydrated.after)) continue;
-        const file = publicFile(this.turnFile(run2, value, hydrated, states2));
-        if (readOnly) file.actions = [];
-        if (file.statsKnown === false) {
-          incomplete = true;
-          unknownFileCount++;
+      const snapshots = /* @__PURE__ */ new Map();
+      const hydrate = (snapshot) => {
+        if (!snapshot.exists || snapshot.kind !== "text" || snapshot.text !== null) return this.hydrateSnapshot(snapshot);
+        const identity = `${snapshot.hash}:${snapshot.size}:${snapshot.mode}`;
+        let pending = snapshots.get(identity);
+        if (!pending) {
+          pending = this.hydrateSnapshot(snapshot);
+          snapshots.set(identity, pending);
+          if (snapshots.size > 32) snapshots.delete(snapshots.keys().next().value);
         }
-        additions += file.additions;
-        deletions += file.deletions;
-        files.push(file);
+        return pending;
+      };
+      const entries = Object.entries(run2.changes).filter(([value]) => !isImagePath(value));
+      for (let offset2 = 0; offset2 < entries.length; offset2 += 16) {
+        if (Date.now() - started > 4e3) fail("DIFF_LIMIT", "Turn summary exceeds computation budget");
+        const batch = await Promise.all(entries.slice(offset2, offset2 + 16).map(async ([value, change]) => {
+          const [before, after] = await Promise.all([hydrate(change.before), hydrate(change.after)]);
+          const hydrated = { ...change, before, after };
+          if (netOnly && !change.ambiguous && before.kind !== "unavailable" && after.kind !== "unavailable" && sameSnapshot(before, after)) return null;
+          return publicFile(this.turnFile(run2, value, hydrated, states2));
+        }));
+        for (const file of batch) {
+          if (!file) continue;
+          if (readOnly) file.actions = [];
+          if (file.statsKnown === false) {
+            incomplete = true;
+            unknownFileCount++;
+          }
+          additions += file.additions;
+          deletions += file.deletions;
+          files.push(file);
+        }
       }
       const notice = [turnNotice(run2), unknownFileCount ? `${unknownFileCount} \u4E2A\u6587\u4EF6\u884C\u6570\u672A\u77E5\uFF1B\u6C47\u603B\u4EC5\u5305\u542B\u53EF\u9A8C\u8BC1\u6587\u672C\u5DEE\u5F02\u3002` : void 0].filter(Boolean).join(" ") || void 0;
       cached = { key, files, additions, deletions, unknownFileCount, incomplete, notice, createdAt: Date.now() };
@@ -2478,11 +2544,11 @@ var JobQueue = class {
   closed = false;
   start(method, args) {
     if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
-    if (!["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
-    const navigation2 = method === "selectTurn";
-    if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2).length >= (navigation2 ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
+    if (!["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
+    const navigation2 = method === "selectTurn", systemOpen = method === "openSystemFile";
+    if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2 && !!j.systemOpen === systemOpen).length >= (navigation2 || systemOpen ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
     for (const [id3, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id3);
-    const id2 = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {} };
+    const id2 = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {}, ...systemOpen ? { systemOpen: true } : {} };
     this.jobs.set(id2, job);
     const work = async () => {
       await new Promise((r) => setTimeout(r, 0));
@@ -2502,7 +2568,7 @@ var JobQueue = class {
         }
       }
     };
-    if (navigation2) void work();
+    if (navigation2 || systemOpen) void work();
     else this.tail = this.tail.then(work);
     return { jobId: id2 };
   }
@@ -3618,14 +3684,17 @@ async function status(root) {
   const rows = records2(raw.stdout);
   if (rows.length > 500) fail("GIT_LIMIT", "More than 500 changed files. Use the Git CLI or narrow this repository.");
   const entries = [];
-  for (const row of rows) {
-    const entry = { path: row.slice(3), index: row[0], working: row[1] };
-    try {
-      await filePath(root, entry.path);
-    } catch (error) {
-      entry.blocked = error.message;
-    }
-    entries.push(entry);
+  for (let offset = 0; offset < rows.length; offset += 8) {
+    const batch = await Promise.all(rows.slice(offset, offset + 8).map(async (row) => {
+      const entry = { path: row.slice(3), index: row[0], working: row[1] };
+      try {
+        await filePath(root, entry.path);
+      } catch (error) {
+        entry.blocked = error.message;
+      }
+      return entry;
+    }));
+    entries.push(...batch);
   }
   const result = { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null, entries };
   if (Buffer.byteLength(JSON.stringify(result)) > 48e3) fail("GIT_LIMIT", "Status exceeds the panel budget. Use the Git CLI.");
@@ -3797,7 +3866,7 @@ async function discardTarget(root, values) {
 var LocalGitManagement = class {
   /** method MUST be gitManage. allowedRoots MUST come from the host, never the renderer.
    * root defaults only when exactly one root is authorized; enclosing repos are never adopted.
-   * Returns operation-specific JSON or throws Error with code/message. Serialize through one instance.
+   * Returns operation-specific JSON or throws Error with code/message. Writes are exclusive per root.
    */
   async dispatch(method, value, allowedRoots) {
     if (method !== "gitManage") fail("INVALID_METHOD", "Unsupported local Git method.");
@@ -3809,18 +3878,18 @@ var LocalGitManagement = class {
     const root = await import_promises9.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
     if (!roots.some((allowed) => canonical(allowed) === canonical(root))) fail("ROOT_DENIED", "Repository is not an authorized project root.");
     const key = canonical(root);
-    const previous = queues.get(key) ?? Promise.resolve();
-    const pending = previous.catch(() => void 0).then(async () => {
+    const queue = queues.get(key) ?? new ReadWriteQueue(4);
+    queues.set(key, queue);
+    const pending = queue.run(async () => {
       if (!(await discoverRepository(root, false)).git) fail("NO_REPOSITORY", "Selected project is not a Git root. Open the repository root; enclosing repositories are not authorized.");
       if (confirmation.has(args.operation) && args.confirmed !== true) fail("CONFIRM_REQUIRED", "Confirm this operation in the Git panel before continuing.");
       if (mutations.has(args.operation)) await requireIdle(root);
       return this.perform(root, args);
-    });
-    queues.set(key, pending);
+    }, mutations.has(args.operation));
     try {
       return await pending;
     } finally {
-      if (queues.get(key) === pending) queues.delete(key);
+      if (queue.pending === 0 && queues.get(key) === queue) queues.delete(key);
     }
   }
   async perform(root, args) {
@@ -4118,8 +4187,78 @@ var FileOpenRequests = class {
   }
 };
 
+// src/core/system-open.ts
+var import_node_child_process3 = require("node:child_process");
+var import_promises10 = __toESM(require("node:fs/promises"), 1);
+var import_node_path12 = __toESM(require("node:path"), 1);
+var script = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+  $info = New-Object System.Diagnostics.ProcessStartInfo
+  $info.FileName = $env:PI_DIFF_SYSTEM_OPEN_TARGET
+  [Environment]::SetEnvironmentVariable('PI_DIFF_SYSTEM_OPEN_TARGET', $null, 'Process')
+  $info.UseShellExecute = $true
+  [System.Diagnostics.Process]::Start($info) | Out-Null
+  exit 0
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}`;
+var encodedScript = Buffer.from(script, "utf16le").toString("base64");
+async function openSystemFile(target, options = {}) {
+  if (process.platform !== "win32") fail("SYSTEM_OPEN_UNSUPPORTED", "\u7CFB\u7EDF\u6253\u5F00\u76EE\u524D\u4EC5\u652F\u6301 Windows\u3002 / System open currently supports Windows only.");
+  assertPublicPath(target);
+  if (!import_node_path12.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
+  const stat = await import_promises10.default.lstat(target).catch((error) => {
+    if (error.code === "ENOENT") fail("FILE_NOT_FOUND", "\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u7CFB\u7EDF\u6253\u5F00\u3002 / The file no longer exists.");
+    throw error;
+  });
+  if (stat.isSymbolicLink() || !stat.isFile()) fail("NOT_FILE", "Only regular files can be opened");
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+  if (!/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) fail("SYSTEM_OPEN_FAILED", "Invalid Windows system directory");
+  const executable = import_node_path12.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  await options.validate?.();
+  if (options.signal?.aborted) fail("PLUGIN_UNLOADED", "Diff view unloaded; the file was not opened");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = (0, import_node_child_process3.spawn)(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedScript], {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "pipe"],
+      env: { ...process.env, PI_DIFF_SYSTEM_OPEN_TARGET: target }
+    });
+    let stderr = "";
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer2);
+      options.signal?.removeEventListener("abort", abort);
+      if (error) reject(error);
+      else resolve({ ok: true });
+    };
+    const abort = () => {
+      finish(Object.assign(new Error("\u63D2\u4EF6\u5DF2\u5378\u8F7D\uFF1B\u7CFB\u7EDF\u6253\u5F00\u7ED3\u679C\u672A\u786E\u8BA4\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\u3002 / Plugin unloaded; open result unknown. No automatic retry."), { code: "PLUGIN_UNLOADED" }));
+      child.kill();
+    };
+    const timer2 = setTimeout(() => {
+      finish(Object.assign(new Error("\u7CFB\u7EDF\u6253\u5F00\u8D85\u65F6\uFF0C\u7ED3\u679C\u672A\u786E\u8BA4\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\uFF0C\u8BF7\u68C0\u67E5\u9ED8\u8BA4\u7A0B\u5E8F\u3002 / System open timed out; result unknown. No automatic retry."), { code: "SYSTEM_OPEN_TIMEOUT" }));
+      child.kill();
+    }, 15e3);
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (value) => {
+      stderr = (stderr + value).slice(0, 4096);
+    });
+    child.once("error", (error) => finish(Object.assign(new Error(`\u65E0\u6CD5\u542F\u52A8\u7CFB\u7EDF\u6253\u5F00\u3002 / Could not start system open: ${error.message}`), { code: "SYSTEM_OPEN_FAILED" })));
+    child.once("exit", (code) => finish(code === 0 ? void 0 : Object.assign(new Error(`\u7CFB\u7EDF\u6253\u5F00\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6587\u4EF6\u5173\u8054\u3002 / System open failed; check the default app.${stderr.trim() ? ` ${stderr.trim()}` : ""}`), { code: "SYSTEM_OPEN_FAILED" })));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+  });
+}
+
 // src/main.ts
 var evidenceStore = null;
+var systemOpenController = new AbortController();
 var fileOpens = new FileOpenRequests();
 var evidence = new HostEvidenceBuffer();
 var history = null;
@@ -4128,6 +4267,9 @@ var sessionRoots = /* @__PURE__ */ new Map();
 var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 var service = null;
 var store = null;
+var repositoryQueue = new ReadWriteQueue(4);
+var repositoryTasks = /* @__PURE__ */ new Set();
+var managementReads = /* @__PURE__ */ new Set(["status", "branches", "history", "stashList", "diff", "stats", "commitDiff", "blame", "stashShow", "discardPreview"]);
 var jobs = null;
 var locatorFile = "";
 var generation = "";
@@ -4143,7 +4285,7 @@ var rendererStages = {};
 var runningDiagnostic;
 var rendererDiagnostic;
 async function saveRendererStatus() {
-  if (store && !disposed) await atomicJson(import_node_path12.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+  if (store && !disposed) await atomicJson(import_node_path13.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
 }
 var navigation = new ReviewNavigationStore();
 function serial(work) {
@@ -4152,6 +4294,32 @@ function serial(work) {
   });
   return result;
 }
+function schedule(s, method, args) {
+  const work = async () => {
+    if (disposed || service !== s) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+    return execute(s, method, args);
+  };
+  if (method === "openSystemFile") return work();
+  if (method === "gitManage") {
+    const result = repositoryQueue.run(work, !managementReads.has(args?.operation));
+    repositoryTasks.add(result);
+    void result.then(() => repositoryTasks.delete(result), () => repositoryTasks.delete(result));
+    return result;
+  }
+  if (method === "action" || method === "batchAction" || method === "review" && !["turn", "lastTurn"].includes(args?.scope)) {
+    let release;
+    const admitted = new Promise((resolve) => release = resolve);
+    const queued = serial(async () => {
+      await admitted;
+      return work();
+    });
+    return repositoryQueue.run(async () => {
+      release();
+      return queued;
+    }, method !== "review");
+  }
+  return serial(work);
+}
 async function heartbeat() {
   if (disposed || !store) return;
   await atomicJson(locatorFile, { version: 1, pluginRoot, dataPath: store.directory, generation, expiresAt: Date.now() + 6e4 });
@@ -4159,34 +4327,32 @@ async function heartbeat() {
 async function onLoad() {
   disposed = false;
   generation = (0, import_node_crypto10.randomUUID)();
-  pluginRoot = await import_promises10.default.realpath(__dirname);
+  pluginRoot = await import_promises11.default.realpath(__dirname);
+  systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
-  const parent = import_node_path12.default.dirname(dataPath), plugins = import_node_path12.default.dirname(parent);
-  history = import_node_path12.default.basename(parent) === "data" && import_node_path12.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path12.default.dirname(plugins)) : null;
+  const parent = import_node_path13.default.dirname(dataPath), plugins = import_node_path13.default.dirname(parent);
+  history = import_node_path13.default.basename(parent) === "data" && import_node_path13.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path13.default.dirname(plugins)) : null;
   contexts.clear();
   evidence.clear();
   sessionRoots.clear();
-  const savedRoots = await readJson(import_node_path12.default.join(store.directory, "session-roots.json"), {});
-  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path12.default.isAbsolute(root)) sessionRoots.set(id2, root);
+  const savedRoots = await readJson(import_node_path13.default.join(store.directory, "session-roots.json"), {});
+  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path13.default.isAbsolute(root)) sessionRoots.set(id2, root);
   fileOpens.clear();
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
   navigation.clear();
-  navigation.restore(await readJson(import_node_path12.default.join(store.directory, "selections.json"), []));
+  navigation.restore(await readJson(import_node_path13.default.join(store.directory, "selections.json"), []));
   await saveRendererStatus();
   await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot);
   await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: (v) => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: (text2) => pi.clipboard.writeText(text2), openPanel: () => pi.ui.openPanel({ title: "Diff view" }) }, generation);
   const currentService = service;
-  jobs = new JobQueue((method, args) => method === "selectTurn" ? dispatch2(method, args) : serial(async () => {
-    if (disposed) fail("PLUGIN_UNLOADED", "Plugin unloaded");
-    return execute(currentService, method, args ?? {});
-  }));
+  jobs = new JobQueue((method, args) => method === "selectTurn" ? dispatch2(method, args) : schedule(currentService, method, args ?? {}));
   await store.importInbox(generation);
   await store.prune();
   await pi.commands.register({ id: "diff-view.open", title: "Diff view: Open review", keywords: ["diff", "review", "\u5BA1\u67E5", "\u53D8\u66F4"], run: () => pi.ui.openPanel({ title: "Diff view" }) });
@@ -4203,14 +4369,19 @@ async function onLoad() {
     }).catch((error) => console.warn("Diff view turn import:", error.message));
   };
   pi.events.on("session:turnEnded", turnEnded);
+  let maintenancePending = false;
   timer = setInterval(() => {
+    if (disposed || maintenancePending) return;
+    maintenancePending = true;
     void serial(async () => {
       if (!disposed) {
         await heartbeat();
         await store?.importInbox(generation);
         await store?.prune();
       }
-    }).catch((error) => console.warn("Diff view capture import:", error.message));
+    }).catch((error) => console.warn("Diff view capture import:", error.message)).finally(() => {
+      maintenancePending = false;
+    });
   }, 2e3);
   timer.unref?.();
 }
@@ -4218,6 +4389,7 @@ async function onUnload() {
   disposed = true;
   if (timer) clearInterval(timer);
   timer = void 0;
+  systemOpenController.abort();
   if (turnEnded) pi.events.off("session:turnEnded", turnEnded);
   turnEnded = void 0;
   jobs?.close();
@@ -4226,10 +4398,11 @@ async function onUnload() {
   fileOpens.clear();
   await tail;
   await navigationTail;
+  await Promise.allSettled([...repositoryTasks]);
   evidence.clear();
   contexts.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises10.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises11.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -4245,17 +4418,17 @@ async function dispatch2(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
   if (method === "selectTurn") {
     if (navigationClearing) fail("SELECTION_MISSING", "History is being cleared");
-    const s2 = service;
+    const s = service;
     const result = navigationTail.catch(() => {
     }).then(async () => {
-      if (disposed || service !== s2) fail("PLUGIN_UNLOADED", "Diff view unloaded");
-      return execute(s2, method, args ?? {});
+      if (disposed || service !== s) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+      return execute(s, method, args ?? {});
     });
     navigationTail = result.catch(() => {
     });
     return result;
   }
-  if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openFile") return execute(service, method, args ?? {});
+  if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openFile" || method === "openSystemFile") return execute(service, method, args ?? {});
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
     const stage = args?.stage;
@@ -4276,11 +4449,7 @@ async function dispatch2(method, args) {
     return result.state === "pending" ? started : { ...started, ...result };
   }
   if (method === "jobPoll") return jobs.poll(args.jobId);
-  const s = service;
-  return serial(async () => {
-    if (disposed) fail("PLUGIN_UNLOADED", "Diff view unloaded");
-    return execute(s, method, args ?? {});
-  });
+  return schedule(service, method, args ?? {});
 }
 async function sessionRoot(args) {
   if (typeof args?.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId)) fail("SESSION_REQUIRED", "Invalid session identity");
@@ -4294,6 +4463,23 @@ async function sessionRoot(args) {
   return history?.scratchRoot(args.sessionId);
 }
 async function execute(s, method, args) {
+  if (method === "openSystemFile") {
+    const controller = systemOpenController;
+    const resolveTarget = async () => {
+      if (disposed || service !== s || controller.signal.aborted) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+      try {
+        return await s.fileOpenTarget(args);
+      } catch (error) {
+        if (error.code === "ENOENT") fail("FILE_NOT_FOUND", "\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u7CFB\u7EDF\u6253\u5F00\u3002 / The file no longer exists.");
+        throw error;
+      }
+    };
+    const target = await resolveTarget();
+    return openSystemFile(target.path, { signal: controller.signal, validate: async () => {
+      const current = await resolveTarget();
+      if (canonical(current.path) !== canonical(target.path)) fail("FILE_CHANGED", "File identity changed; refresh before opening");
+    } });
+  }
   if (method === "openFile") {
     if (args.listen === true) return fileOpens.listen(args.sessionId, args.listenerId);
     if (typeof args.cancelListen === "string") return fileOpens.cancelListen(args.sessionId, args.cancelListen);
@@ -4328,7 +4514,7 @@ async function execute(s, method, args) {
     }
     sessionRoots.set(args.sessionId, root);
     while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
-    await atomicJson(import_node_path12.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
+    await atomicJson(import_node_path13.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
     const now = Date.now();
     const taskId = typeof args.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : void 0;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : void 0;
@@ -4381,7 +4567,7 @@ async function execute(s, method, args) {
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
     if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
     const selection = args.scope === "lastTurn" ? navigation.set({ scope: "lastTurn", sessionId: run2.sessionId }) : navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
-    await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), navigation.export());
+    await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
   }
   if (method === "readTurnSelection") {
@@ -4393,7 +4579,7 @@ async function execute(s, method, args) {
     const target = await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
     if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
       const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store.resolveFileId(selection.request.runId, selection.fileId));
-      await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), navigation.export());
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
       return repaired;
     }
     return selection;
@@ -4407,7 +4593,7 @@ async function execute(s, method, args) {
       evidence.clear();
       navigation.clear();
       fileOpens.clear();
-      await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), []);
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {
       navigationClearing = false;

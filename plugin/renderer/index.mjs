@@ -204,9 +204,12 @@ import React5, { useEffect as useEffect3, useState as useState3 } from "react";
 // src/view/transport.ts
 var realm = globalThis;
 var queue = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
-var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "card", "replyCards"]);
+var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"]);
+var reads = /* @__PURE__ */ new Set(["bootstrap", "review", "reviewFiles", "turnSummary", "runningChanges", "file", "comments", "feedback", "replyCards", "rendererReport", "nativeProbeInfo"]);
+var gitReads = /* @__PURE__ */ new Set(["status", "branches", "history", "stashList", "diff", "stats", "commitDiff", "blame", "stashShow", "discardPreview"]);
+var navigationMethods = /* @__PURE__ */ new Set(["openFile", "openSystemFile", "activeReviewSession", "readTurnSelection", "selectTurn"]);
 function boundedTransport(invoke) {
-  const wire = (method, args, navigation = ["openFile", "activeReviewSession", "readTurnSelection", "selectTurn"].includes(method)) => {
+  const wire = (method, args, navigation = navigationMethods.has(method)) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error("Request exceeds the bridge payload limit (48 KiB)."));
     if (method === "saveComment" && bytes > 24e3) return Promise.reject(new Error("Comment payload too large; shorten the comment or excerpt."));
@@ -236,12 +239,12 @@ function boundedTransport(invoke) {
         if (timer) clearTimeout(timer);
       }
     });
-    if (!navigation) queue.tail = request;
+    if (!navigation) queue.tail = admission;
     return request;
   };
-  return { async invoke(method, args) {
+  const call = async (method, args) => {
     if (!background.has(method)) return wire(method, args);
-    const navigation = method === "selectTurn";
+    const navigation = method === "selectTurn" || method === "openSystemFile";
     const started = await wire("jobStart", { method, args, waitMs: 40 }, navigation);
     if (started.state === "done") return started.result;
     if (started.state === "error") throw Object.assign(new Error(started.error?.message ?? "Review failed"), { code: started.error?.code });
@@ -255,6 +258,17 @@ function boundedTransport(invoke) {
       delay = Math.min(300, delay * 2);
     }
     throw new Error("Background operation is still running. Refresh to check the result; it was not retried.");
+  };
+  return { invoke(method, args) {
+    if (navigationMethods.has(method)) return call(method, args);
+    const read = reads.has(method) || method === "gitManage" && gitReads.has(args?.operation ?? "");
+    const repository = method === "gitManage" || method === "action" || method === "batchAction";
+    const lane = repository ? "gitTail" : "mutationTail";
+    const dependencies = [queue[lane] ?? Promise.resolve()];
+    if (method === "clearHistory" || method === "review" && !["turn", "lastTurn"].includes(args?.scope ?? "")) dependencies.push(queue.gitTail ?? Promise.resolve());
+    const result = Promise.all(dependencies.map((task) => task.catch(() => void 0))).then(() => call(method, args));
+    if (!read) queue[lane] = result.then(() => void 0, () => void 0);
+    return result;
   } };
 }
 var known = /* @__PURE__ */ new WeakMap();
@@ -953,6 +967,32 @@ function startFileOpenChannel(transport, sessionId, open, isCurrent) {
   };
 }
 
+// src/renderer/json-cache.ts
+var JsonCache = class extends Map {
+  encoded = /* @__PURE__ */ new Map();
+  byteSize = 0;
+  set(key, value) {
+    const json = JSON.stringify(value), previous = this.encoded.get(key);
+    const stable = previous?.json === json ? this.get(key) : value;
+    const bytes = previous?.json === json ? previous.bytes : new TextEncoder().encode(json).length;
+    this.byteSize += bytes - (previous?.bytes ?? 0);
+    super.delete(key);
+    super.set(key, stable);
+    this.encoded.set(key, { json, bytes });
+    return this;
+  }
+  delete(key) {
+    this.byteSize -= this.encoded.get(key)?.bytes ?? 0;
+    this.encoded.delete(key);
+    return super.delete(key);
+  }
+  clear() {
+    super.clear();
+    this.encoded.clear();
+    this.byteSize = 0;
+  }
+};
+
 // src/renderer/index.tsx
 var hub = null;
 var realm2 = globalThis;
@@ -1035,15 +1075,12 @@ function trackSession(current) {
   });
 }
 function remember(current, card) {
-  const key = cardKey(card.run.sessionId, card.messageId), previous = current.cache.get(key);
-  if (previous && JSON.stringify(previous) === JSON.stringify(card)) card = previous;
-  current.cache.delete(key);
+  const key = cardKey(card.run.sessionId, card.messageId);
   current.cache.set(key, card);
-  let bytes = [...current.cache.values()].reduce((n, value) => n + new TextEncoder().encode(JSON.stringify(value)).length, 0);
-  for (const [oldKey, value] of current.cache) {
-    if (current.cache.size <= 200 && bytes <= 4 * 1024 * 1024) break;
+  card = current.cache.get(key);
+  for (const oldKey of current.cache.keys()) {
+    if (current.cache.size <= 200 && current.cache.byteSize <= 4 * 1024 * 1024) break;
     if (current.cards.has(oldKey)) continue;
-    bytes -= new TextEncoder().encode(JSON.stringify(value)).length;
     current.cache.delete(oldKey);
   }
   current.cards.get(key)?.listeners.forEach((listener) => listener(card));
@@ -1207,7 +1244,7 @@ function onLoad(pi, options = {}) {
     if (!same(current)) return Promise.reject(new Error("Renderer unloaded / \u6E32\u67D3\u6269\u5C55\u5DF2\u5378\u8F7D\u3002"));
     return pi.dispatch("plugin.call", { method, args });
   } });
-  const current = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: /* @__PURE__ */ new Map(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
+  const current = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: new JsonCache(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
   hub = current;
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summary_style_default + runningPillStyle));
