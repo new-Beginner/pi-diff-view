@@ -3,6 +3,9 @@ import { transcriptEvidence, evidenceRevision } from '../core/host-transcript';
 import type { NativeBuildInfo } from '../core/native-build-contract';
 export const REVIEW_TAB_ID = 'plugin:local.diff-view/review';
 interface Tab { id: string; kind: string; resource: string; location?: string; }
+// Compatibility-only host state: the public SDK has no selected-session subscription
+// or exact work-panel/file-manager navigation. Do not substitute draft generation,
+// ownership-scoped imported sessions, or OS file opening for these contracts.
 interface State {
   activeSessionId?: string | null; selectingSessionId?: string | null;
   page?: string; isRunning?: boolean; runningSessions?: Record<string, boolean>;
@@ -23,6 +26,13 @@ export interface PluginReviewModules {
 export class PluginReviewError extends Error { constructor(readonly code: string, message: string) { super(message); } }
 export interface RunningActivity { sessionId: string; taskId: string; since: number; turnId?: string }
 export interface SessionContext { sessionId: string; root?: string; running: boolean; taskId?: string; since?: number; turnId?: string; evidence?: string; evidenceRevision?: string }
+export interface PluginReviewAdapter {
+  subscribeSession(listener: (sessionId: string | null, context?: SessionContext) => void): Promise<() => void>;
+  subscribeActivity(listener: (activity: RunningActivity | null) => void, diagnose?: (stage: string) => void): Promise<() => void>;
+  open(sessionId: string, location: string, guard?: () => void): Promise<void>;
+  openFile(sessionId: string, path: string, guard?: () => void): Promise<void>;
+  close(): void;
+}
 export function activityDiagnostic(state: State): 'running-idle' | 'running-identity-missing' | 'running-ready' {
   const id = state.activeSessionId;
   if (!id || state.selectingSessionId || state.page !== 'chat' || (state.runningSessions?.[id] ?? state.isRunning) !== true) return 'running-idle';
@@ -69,7 +79,7 @@ async function loadPinned(): Promise<PluginReviewModules> {
   const module = await import(/* @vite-ignore */ main);
   return resolvePluginReviewModules(module);
 }
-export function createPluginReviewAdapter(options: { info?: () => Promise<NativeBuildInfo>; load?: () => Promise<PluginReviewModules> } = {}) {
+export function createPluginReviewAdapter(options: { info?: () => Promise<NativeBuildInfo>; load?: () => Promise<PluginReviewModules> } = {}): PluginReviewAdapter {
   let closed = false, pending: Promise<PluginReviewModules> | undefined;
   const subscriptions = new Set<() => void>();
   const alive = () => { if (closed) denied('SIDEBAR_UNLOADED', '插件已卸载 / Plugin unloaded'); };
@@ -154,4 +164,3 @@ export function createPluginReviewAdapter(options: { info?: () => Promise<Native
     close() { closed = true; for (const dispose of [...subscriptions]) dispose(); }
   };
 }
-export type PluginReviewAdapter = ReturnType<typeof createPluginReviewAdapter>;

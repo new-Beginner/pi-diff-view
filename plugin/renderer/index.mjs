@@ -696,14 +696,27 @@ function createRunningChangesController(transport, adapter, publish, report2 = (
   };
 }
 
+// src/renderer/floating-layer.ts
+function openFloatingLayer(ui, document2) {
+  if (typeof ui.openLayer === "function") return ui.openLayer();
+  const element = document2.createElement("div");
+  element.dataset.piPlugin = "local.diff-view";
+  element.dataset.diffViewLayer = "compat";
+  Object.assign(element.style, { position: "fixed", top: "0", left: "0", width: "0", height: "0" });
+  document2.body.append(element);
+  return { element, close: () => element.remove() };
+}
+
 // src/renderer/RunningChangePill.tsx
 var anchors = /* @__PURE__ */ new Set();
 var hidden = { left: 0, top: 0, width: 0, visible: false };
-function RunningChangePill({ transport, adapter, report: report2 }) {
+function RunningChangePill({ transport, adapter, ui, report: report2 }) {
   const anchor = useRef2(null);
   const controller = useRef2();
   const [view, setView] = useState2({ summary: null, busy: false, error: "" });
   const [position, setPosition] = useState2(hidden);
+  const [layer, setLayer] = useState2(null);
+  const [layerError, setLayerError] = useState2("");
   useEffect2(() => {
     let live = true, unsubscribe, retry;
     const current = createRunningChangesController(transport, adapter, (next) => {
@@ -747,13 +760,13 @@ function RunningChangePill({ transport, adapter, report: report2 }) {
     const update = () => {
       const shell = owner.closest(".composer-shell"), rect = rectOf(owner);
       const first = [...anchors].find((node) => rectOf(node));
-      const visible = Boolean(rect && first === owner);
+      const visible2 = Boolean(rect && first === owner);
       const stage = !shell ? "composer-anchor-missing" : !rect ? "composer-anchor-offscreen" : "composer-positioned";
       if (stage !== lastStage) {
         lastStage = stage;
         report2(stage);
       }
-      const next = visible && rect ? { left: rect.left + rect.width / 2, top: rect.top - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible } : hidden;
+      const next = visible2 && rect ? { left: rect.left + rect.width / 2, top: rect.top - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible: visible2 } : hidden;
       setPosition((previous) => previous.visible === next.visible && previous.left === next.left && previous.top === next.top && previous.width === next.width ? previous : next);
       frame = requestAnimationFrame(update);
     };
@@ -763,9 +776,25 @@ function RunningChangePill({ transport, adapter, report: report2 }) {
       anchors.delete(owner);
     };
   }, [view.summary?.runId, report2]);
+  const visible = !!view.summary && position.visible;
+  useLayoutEffect2(() => {
+    setLayer(null);
+    setLayerError("");
+    if (!visible) return;
+    let current;
+    try {
+      current = openFloatingLayer(ui, document);
+    } catch (error) {
+      setLayerError(error instanceof Error ? error.message : String(error));
+      report2("composer-layer-error");
+      return;
+    }
+    setLayer(current);
+    return () => current.close();
+  }, [visible, ui, report2]);
   const summary = view.summary, zh = summary?.locale.startsWith("zh");
   const unknown = summary?.unknownFileCount ?? 0, allUnknown = !!summary && unknown >= summary.fileCount;
-  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { ref: anchor, className: "dv-running-anchor", "aria-hidden": "true" }), summary && position.visible && createPortal(/* @__PURE__ */ React4.createElement("div", { className: "dv-running-float", "data-base": summary.base, style: { left: position.left, top: position.top, maxWidth: position.width } }, /* @__PURE__ */ React4.createElement("button", { type: "button", className: "dv-running-pill", disabled: view.busy, "aria-busy": view.busy, title: zh ? "\u67E5\u770B\u672C\u8F6E\u5DF2\u6355\u83B7\u53D8\u66F4\uFF1B\u4EC5\u7EDF\u8BA1\u53EF\u9A8C\u8BC1\u6587\u672C" : "Review captured changes in this task; verified text counts only", onClick: () => void controller.current?.open() }, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-label" }, zh ? `${summary.fileCount} \u4E2A\u6587\u4EF6\u5DF2\u66F4\u6539` : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} changed`), !allUnknown && /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-add" }, "+", summary.additions), /* @__PURE__ */ React4.createElement("span", { className: "dv-running-del" }, "-", summary.deletions)), unknown > 0 && /* @__PURE__ */ React4.createElement("span", { className: "dv-running-unknown" }, zh ? allUnknown ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : allUnknown ? "Unknown lines" : "Partial totals")), view.error && /* @__PURE__ */ React4.createElement("p", { className: "dv-running-error", role: "alert" }, view.error)), document.body));
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { ref: anchor, className: "dv-running-anchor", "aria-hidden": "true" }), layerError && /* @__PURE__ */ React4.createElement("span", { className: "dv-running-error", role: "alert" }, layerError), summary && visible && layer && createPortal(/* @__PURE__ */ React4.createElement("div", { className: "dv-running-float", "data-base": summary.base, style: { left: position.left, top: position.top, maxWidth: position.width } }, /* @__PURE__ */ React4.createElement("button", { type: "button", className: "dv-running-pill", disabled: view.busy, "aria-busy": view.busy, title: zh ? "\u67E5\u770B\u672C\u8F6E\u5DF2\u6355\u83B7\u53D8\u66F4\uFF1B\u4EC5\u7EDF\u8BA1\u53EF\u9A8C\u8BC1\u6587\u672C" : "Review captured changes in this task; verified text counts only", onClick: () => void controller.current?.open() }, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-label" }, zh ? `${summary.fileCount} \u4E2A\u6587\u4EF6\u5DF2\u66F4\u6539` : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} changed`), !allUnknown && /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-add" }, "+", summary.additions), /* @__PURE__ */ React4.createElement("span", { className: "dv-running-del" }, "-", summary.deletions)), unknown > 0 && /* @__PURE__ */ React4.createElement("span", { className: "dv-running-unknown" }, zh ? allUnknown ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : allUnknown ? "Unknown lines" : "Partial totals")), view.error && /* @__PURE__ */ React4.createElement("p", { className: "dv-running-error", role: "alert" }, view.error)), layer.element));
 }
 var runningPillStyle = `
 .dv-running-anchor{display:none!important}
@@ -1063,7 +1092,7 @@ function composerReport(stage) {
 }
 function ComposerControl() {
   const current = hub;
-  return same(current) ? /* @__PURE__ */ React5.createElement(RunningChangePill, { transport: current.transport, adapter: current.adapter, report: composerReport }) : null;
+  return same(current) ? /* @__PURE__ */ React5.createElement(RunningChangePill, { transport: current.transport, adapter: current.adapter, ui: current.ui, report: composerReport }) : null;
 }
 function onLoad(pi, options = {}) {
   realm2.__piDiffRenderer?.dispose();
@@ -1072,7 +1101,7 @@ function onLoad(pi, options = {}) {
     if (!same(current)) return Promise.reject(new Error("Renderer unloaded / \u6E32\u67D3\u6269\u5C55\u5DF2\u5378\u8F7D\u3002"));
     return pi.dispatch("plugin.call", { method, args });
   } });
-  const current = { transport, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: /* @__PURE__ */ new Map(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
+  const current = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: /* @__PURE__ */ new Map(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
   hub = current;
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summary_style_default + runningPillStyle));

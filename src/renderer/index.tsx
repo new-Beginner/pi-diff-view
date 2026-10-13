@@ -9,19 +9,14 @@ import summaryStyle from './summary-style';
 import { createPluginReviewAdapter, type PluginReviewAdapter } from './plugin-review-adapter';
 import RunningChangePill, { runningPillStyle } from './RunningChangePill';
 import { startFileOpenChannel } from './file-open-channel';
+import type { RendererHost, RendererUi } from './host-contract';
+export type { RendererHost } from './host-contract';
 type Disposer = () => void;
-interface DraftSnapshot { text: string; marks: unknown[]; generation: number }
-export interface RendererHost {
-  dispatch<T = unknown>(action: string, payload?: unknown): Promise<T>;
-  ui: { injectStyle(css: string): Disposer };
-  slots: { register(options: { slot: 'entryExtra' | 'composerControl'; positions?: ('left' | 'right')[]; component: React.ComponentType<any> }): Disposer };
-  composer: { subscribeDraft(listener: (draft: DraftSnapshot | null) => void): Disposer };
-}
 export interface ReplyProps { sessionId: string; messageId: string; message: { content?: unknown; blocks?: { type: string; text?: string }[]; createdAt?: string | number; role?: string } }
 type CardItem = { props: ReplyProps; listeners: Set<(card: ReplyCard | null) => void>; checkedRevision?: string };
 type Feed = { revision?: string; pending: number[] };
 interface Hub {
-  transport: UiTransport; disposed: boolean; timer?: ReturnType<typeof setTimeout>; pumping: boolean; wakeAgain: boolean;
+  transport: UiTransport; ui: RendererUi; disposed: boolean; timer?: ReturnType<typeof setTimeout>; pumping: boolean; wakeAgain: boolean;
   appearance: { locale: string; base: 'light' | 'dark' }; listeners: Set<() => void>;
   cards: Map<string, CardItem>; cache: Map<string, ReplyCard>; feeds: Map<string, Feed>;
   activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; sessionRetry?: ReturnType<typeof setTimeout>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
@@ -201,12 +196,12 @@ function EntryExtra(props: ReplyProps) {
 function composerReport(stage: string) { if (hub) report(hub, stage); }
 function ComposerControl() {
   const current = hub;
-  return same(current) ? <RunningChangePill transport={current.transport} adapter={current.adapter} report={composerReport} /> : null;
+  return same(current) ? <RunningChangePill transport={current.transport} adapter={current.adapter} ui={current.ui} report={composerReport} /> : null;
 }
 export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapter } = {}) {
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
-  const current: Hub = { transport, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new Map(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
+  const current: Hub = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new Map(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
   hub = current; realm.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summaryStyle + runningPillStyle)); disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
   disposers.push(pi.slots.register({ slot: 'composerControl', positions: ['left'], component: ComposerControl }));

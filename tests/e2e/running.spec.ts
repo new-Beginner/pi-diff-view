@@ -29,7 +29,7 @@ async function change(text = Array.from({ length: 11 }, (_, i) => `line ${i + 1}
   run.changes = text ? { 'current.txt': { before: absentSnapshot(), after: snapshotOfText(text), capture: { id: digest(identity).slice(0, 24), identity, path: 'current.txt', absolutePath, origin: 'workspace' } } } : {};
   run.contentVersion = (run.contentVersion ?? 0) + 1; await store.writeRun(run);
 }
-async function setup(page: Page) {
+async function setup(page: Page, options: { layerApi?: 'public' | 'missing' | 'reject'; scopedStyles?: boolean } = {}) {
   const navigation = new ReviewNavigationStore();
   const execute = async (method: string, args: any) => {
     if (method === 'rendererReport') return { ok: true };
@@ -52,11 +52,12 @@ async function setup(page: Page) {
   });
   await page.route('**/live-production.mjs', route => route.fulfill({ contentType: 'text/javascript', body: entry }));
   await page.route('**/live-sidebar?*', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="zh-CN"><head><link rel="stylesheet" href="/index.css"><script>window.pluginBridge={invoke:async(channel,args)=>{const r=await fetch("/live-rpc",{method:"POST",body:JSON.stringify({method:channel.replace(/^diff\\./,""),args})});const data=await r.json();if(!r.ok)throw new Error(data.message);return data},on:()=>()=>{}};</script></head><body style="margin:0"><div id="root"></div><script type="module" src="/index.js"></script></body></html>' }));
-  await page.route('**/live-host', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{margin:0;background:${base === 'dark' ? '#171717' : '#fff'};color:${base === 'dark' ? '#ddd' : '#30343b'};font:14px/1.6 system-ui}#live-chat{width:min(800px,100%);padding:30px;box-sizing:border-box}.label{font-size:12px;opacity:.6}#live-reply{margin:20px 0 210px}.composer-shell{border:1px solid ${base === 'dark' ? '#444' : '#ececec'};border-radius:22px;padding:16px;box-sizing:border-box}.composer-input{min-height:46px;outline:none}.composer-controls{display:flex;justify-content:space-between;margin-top:12px}.composer-controls button{border:0;border-radius:50%;background:#3d83f6;color:white;width:30px;height:30px}#live-sidebar[hidden]{display:none}#live-sidebar{position:fixed;right:0;top:0;bottom:0;width:50%;background:#fff;border-left:1px solid #ccc}iframe{border:0;width:100%;height:100%}</style><script>window.__liveFixture=${JSON.stringify({ since, replyAt })};</script></head><body><main id="live-chat"><p class="label">模拟宿主 UI · 真实插件快照服务 · 非原生联调验收</p><p>正在修改本次任务的文件…</p><article id="live-reply"></article><div class="composer-shell"><div class="composer-input" role="textbox" contenteditable="true">已有草稿，请勿改变。</div><div class="composer-controls"><div class="composer-left">＋</div><button aria-label="停止当前任务">■</button></div></div></main><aside id="live-sidebar" hidden><iframe title="Diff view plugin"></iframe></aside></body></html>` }));
+  const layerApi = options.layerApi ?? 'public', scopedStyles = options.scopedStyles ?? true;
+  await page.route('**/live-host', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{margin:0;background:${base === 'dark' ? '#171717' : '#fff'};color:${base === 'dark' ? '#ddd' : '#30343b'};font:14px/1.6 system-ui}#live-chat{width:min(800px,100%);padding:30px;box-sizing:border-box}.label{font-size:12px;opacity:.6}#live-reply{margin:20px 0 210px}.composer-shell{border:1px solid ${base === 'dark' ? '#444' : '#ececec'};border-radius:22px;padding:16px;box-sizing:border-box}.composer-input{min-height:46px;outline:none}.composer-controls{display:flex;justify-content:space-between;margin-top:12px}.composer-controls button{border:0;border-radius:50%;background:#3d83f6;color:white;width:30px;height:30px}#live-sidebar[hidden]{display:none}#live-sidebar{position:fixed;right:0;top:0;bottom:0;width:50%;background:#fff;border-left:1px solid #ccc}iframe{border:0;width:100%;height:100%}</style><script>window.__liveFixture=${JSON.stringify({ since, replyAt, layerApi, scopedStyles })};</script></head><body><main id="live-chat"><p class="label">模拟宿主 UI · 真实插件快照服务 · 非原生联调验收</p><p>正在修改本次任务的文件…</p><article id="live-reply"></article><div class="composer-shell"><div class="composer-input" role="textbox" contenteditable="true">已有草稿，请勿改变。</div><div class="composer-controls"><div class="composer-left">＋</div><button aria-label="停止当前任务">■</button></div></div></main><aside id="live-sidebar" hidden><iframe title="Diff view plugin"></iframe></aside></body></html>` }));
   await page.goto('/live-host'); await page.addScriptTag({ content: hostScript });
   await expect.poll(() => page.evaluate(() => (window as any).__liveHost.error || (window as any).__liveHost.loaded)).toBe(true);
 }
-async function stop(page: Page) { await page.evaluate(() => (window as any).__liveHost.unload()); await expect(page.locator('.dv-running-float, [data-test-slot]')).toHaveCount(0); }
+async function stop(page: Page) { await page.evaluate(() => (window as any).__liveHost.unload()); await expect(page.locator('.dv-running-float, [data-test-slot], [data-pi-layer], [data-diff-view-layer], #live-plugin-layers')).toHaveCount(0); }
 for (const width of [360, 600, 1100]) for (const theme of ['light', 'dark'] as const) test(`running pill centered above its composer at ${width}px ${theme}`, async ({ page }, info) => {
   base = theme; await page.setViewportSize({ width, height: 820 }); await setup(page);
   const pill = page.locator('.dv-running-pill'); await expect(pill).toHaveCount(1); await expect(pill).toBeVisible(); await expect(pill).toHaveText('1 个文件已更改+11-0');
@@ -133,4 +134,34 @@ test('final renderer uploads native live tool evidence in bounded chunks without
   expect(evidence).not.toMatch(/private-user-prose|private-reply-prose/);
   expect(JSON.parse(evidence)[1].blocks[0]).toMatchObject({ callId: 'call_one|fc_one', name: 'write', args: { path: 'a.txt' } });
   await stop(page);
+});
+
+test('uses the official scoped layer and obeys host safety suspension without recreating it', async ({ page }) => {
+  await setup(page); const pill = page.locator('[data-pi-layer] .dv-running-pill');
+  await expect(pill).toBeVisible(); await expect(page.locator('[data-diff-view-layer]')).toHaveCount(0);
+  await expect(pill).toHaveCSS('position', 'static');
+  await expect(page.locator('.dv-running-float')).toHaveCSS('position', 'fixed');
+  const opens = await page.evaluate(() => (window as any).__liveHost.layerOpens);
+  await page.getByRole('textbox').click(); await expect(page.getByRole('textbox')).toBeFocused();
+  await page.evaluate(() => (window as any).__liveHost.suspendLayers(true)); await expect(pill).toBeHidden();
+  await expect(page.locator('#live-plugin-layers')).toHaveAttribute('inert', '');
+  await change('updated\n'); await expect(pill).toHaveText('1 个文件已更改+1-0');
+  await page.evaluate(() => (window as any).__liveHost.suspendLayers(false)); await expect(pill).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__liveHost.layerOpens)).toBe(opens);
+  await pill.click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt');
+  await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
+});
+test('older hosts keep the same floating review behavior with a scoped compatibility target', async ({ page }) => {
+  await setup(page, { layerApi: 'missing' });
+  await expect(page.locator('[data-diff-view-layer="compat"] .dv-running-pill')).toBeVisible();
+  await expect(page.locator('.dv-running-float')).toHaveCSS('position', 'fixed');
+  await expect(page.locator('[data-pi-layer]')).toHaveCount(0);
+  await page.locator('.dv-running-pill').click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt');
+  await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
+});
+test('an official layer refusal is visible and diagnosed, never bypassed with a DOM fallback', async ({ page }) => {
+  await setup(page, { layerApi: 'reject' }); await expect(page.getByRole('alert')).toHaveText('Host refused layer');
+  await expect(page.locator('[data-diff-view-layer], [data-pi-layer], .dv-running-pill')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__liveHost.calls.some((call: any) => call.method === 'rendererReport' && call.args.stage === 'composer-layer-error'))).toBe(true);
+  await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });

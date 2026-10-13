@@ -3,14 +3,18 @@ import { createPortal } from 'react-dom';
 import type { UiTransport } from '../core/contracts';
 import type { PluginReviewAdapter } from './plugin-review-adapter';
 import { createRunningChangesController, type RunningView } from './running-changes';
+import type { RendererLayer, RendererUi } from './host-contract';
+import { openFloatingLayer } from './floating-layer';
 const anchors = new Set<HTMLElement>();
 interface Position { left: number; top: number; width: number; visible: boolean }
 const hidden: Position = { left: 0, top: 0, width: 0, visible: false };
-export default function RunningChangePill({ transport, adapter, report }: { transport: UiTransport; adapter: PluginReviewAdapter; report(stage: string): void }) {
+export default function RunningChangePill({ transport, adapter, ui, report }: { transport: UiTransport; adapter: PluginReviewAdapter; ui: RendererUi; report(stage: string): void }) {
   const anchor = useRef<HTMLSpanElement>(null);
   const controller = useRef<ReturnType<typeof createRunningChangesController>>();
   const [view, setView] = useState<RunningView>({ summary: null, busy: false, error: '' });
   const [position, setPosition] = useState<Position>(hidden);
+  const [layer, setLayer] = useState<RendererLayer | null>(null);
+  const [layerError, setLayerError] = useState('');
   useEffect(() => {
     let live = true, unsubscribe: (() => void) | undefined, retry: ReturnType<typeof setTimeout> | undefined;
     const current = createRunningChangesController(transport, adapter, next => { if (live) setView(next); }, report); controller.current = current;
@@ -43,13 +47,27 @@ export default function RunningChangePill({ transport, adapter, report }: { tran
     };
     update(); return () => { cancelAnimationFrame(frame); anchors.delete(owner); };
   }, [view.summary?.runId, report]);
+  const visible = !!view.summary && position.visible;
+  useLayoutEffect(() => {
+    setLayer(null); setLayerError('');
+    if (!visible) return;
+    let current: RendererLayer;
+    try { current = openFloatingLayer(ui, document); }
+    catch (error) {
+      setLayerError(error instanceof Error ? error.message : String(error));
+      report('composer-layer-error');
+      return;
+    }
+    setLayer(current);
+    return () => current.close();
+  }, [visible, ui, report]);
   const summary = view.summary, zh = summary?.locale.startsWith('zh');
   const unknown = summary?.unknownFileCount ?? 0, allUnknown = !!summary && unknown >= summary.fileCount;
-  return <><span ref={anchor} className="dv-running-anchor" aria-hidden="true" />{summary && position.visible && createPortal(<div className="dv-running-float" data-base={summary.base} style={{ left: position.left, top: position.top, maxWidth: position.width }}>
+  return <><span ref={anchor} className="dv-running-anchor" aria-hidden="true" />{layerError && <span className="dv-running-error" role="alert">{layerError}</span>}{summary && visible && layer && createPortal(<div className="dv-running-float" data-base={summary.base} style={{ left: position.left, top: position.top, maxWidth: position.width }}>
     <button type="button" className="dv-running-pill" disabled={view.busy} aria-busy={view.busy} title={zh ? '查看本轮已捕获变更；仅统计可验证文本' : 'Review captured changes in this task; verified text counts only'} onClick={() => void controller.current?.open()}>
       <span className="dv-running-label">{zh ? `${summary.fileCount} 个文件已更改` : `${summary.fileCount} ${summary.fileCount === 1 ? 'file' : 'files'} changed`}</span>{!allUnknown && <><span className="dv-running-add">+{summary.additions}</span><span className="dv-running-del">-{summary.deletions}</span></>}{unknown > 0 && <span className="dv-running-unknown">{zh ? allUnknown ? '行数未知' : '部分统计' : allUnknown ? 'Unknown lines' : 'Partial totals'}</span>}
     </button>{view.error && <p className="dv-running-error" role="alert">{view.error}</p>}
-  </div>, document.body)}</>;
+  </div>, layer.element)}</>;
 }
 export const runningPillStyle = `
 .dv-running-anchor{display:none!important}

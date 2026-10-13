@@ -2,9 +2,11 @@
 
 面向 **PI-Desktop 0.17.0+** 的本地变更审查插件。按会话和用户轮次展示修改证据、文末卡片与运行浮窗；独立的本地 Git 页面用于人工审查和操作仓库。
 
-**Version: 1.4.16 · Plugin ID: `local.diff-view` · License: MIT**
+**Version: 1.4.17（本地开发，未发布） · Plugin ID: `local.diff-view` · License: MIT**
 
 源码：[new-Beginner/pi-diff-view](https://github.com/new-Beginner/pi-diff-view) · 安装包：[GitHub Releases](https://github.com/new-Beginner/pi-diff-view/releases/latest)。官方插件中心审核通过后公开上架：[plugins.aiuo.net](https://plugins.aiuo.net)。
+
+当前仅做本地官方接口适配，不提交市场。会话与页签导航仍保留内部兼容接口和动态导入；尚未解决市场的动态模块加载拦截。已发布安装包仍为 1.4.16。
 
 ## 安装与使用
 
@@ -45,7 +47,23 @@ npm run test:e2e
 
 ## 本次版本
 
-1.4.16 将 diff 升级到 8.0.4，消除 GHSA-73rr-hh4g-fpgx 已知依赖告警；包含 1.4.15 的中英文市场元数据与兼容宿主的双语命令标题，保留 1.4.14 的跨轮次归属修复。没有新增权限或运行功能。公开仓库仅包含源码、合成测试、构建配置、运行文件、说明与许可证；不包含本地开发历史、会话数据、历史报告、截图或认证令牌。
+1.4.17 的运行浮窗优先使用官方 `pi.ui.openLayer()`，继承插件样式作用域和宿主安全暂停规则。只有旧宿主缺少此接口时才使用插件自己的兼容容器；公开接口拒绝会显示错误，不通过 DOM 回退绕过。会话跟随、任务身份、文末卡片、精确侧栏定位、PI 内置文件页签和 Git 功能保留。未新增权限；未发布、未提交市场、未自动安装。
+
+### 官方接口适配边界
+
+依据官方 [开发文档](https://github.com/vastsa/PI-Desktop/blob/a7a98ee051b1b35eb959830eabe0cebca3e39215/docs/plugin-development.md)、[API 规范](https://github.com/vastsa/PI-Desktop/blob/a7a98ee051b1b35eb959830eabe0cebca3e39215/docs/spec/07-plugins/03-plugin-api.md)和 [Renderer SDK](https://github.com/vastsa/PI-Desktop/blob/a7a98ee051b1b35eb959830eabe0cebca3e39215/packages/plugin-sdk/src/renderer.ts)核对，替换以保持原有行为为前提。
+
+| 功能 | 本次处理 | 不强行替换的原因 |
+| --- | --- | --- |
+| 文末卡片、独立审查视图、桥接 | 保留已有官方 `entryExtra`、`contributes.views`、`plugin.call` / Panel bridge | 已使用公开接口，无需重复改造 |
+| 运行浮窗挂载 | 改用官方 `ui.openLayer`，缺接口时使用带样式作用域的兼容节点 | 不覆盖宿主提供的接口拒绝或安全暂停 |
+| 会话跟随和精确任务身份 | 保留现有兼容适配器及会话切换保护 | `session:activated` 尚属计划；草稿 `generation` 不是会话 ID |
+| 会话证据恢复 | 保留有界、去正文证据链 | `getLlmContext` 仅限插件工具执行；`session.get/listMessages` 是插件自有导入会话读取，不等价于当前原生会话 |
+| 实时运行状态 | 保留即时订阅 | `desktop.invoke(agent/getStatus)` 需要宽泛的 `desktop.control`，且不等价于精确用户消息与实时切换订阅 |
+| 指定侧栏和 PI 内置文件页签 | 保留原定位、复用和跨会话保护 | 公开接口未提供同等导航；`fs.openDefault/reveal` 打开的是系统应用/文件管理器 |
+| 原生审查适配器 | 保留源码但不启用 | 未找到公开组件接口；该未引用模块不进入当前 renderer 构建 |
+
+输入框位置仍只读测量；没有公开矩形接口，不改宿主输入框 DOM，也不读取或修改草稿来猜会话。动态导入仍明确保留在兼容适配器中，未隐藏或混淆；本地功能适配不代表市场审核通过。
 
 ## English summary
 

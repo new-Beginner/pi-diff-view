@@ -24,15 +24,16 @@ const nativeState = { page: 'chat', activeSessionId: 's', selectingSessionId: nu
 let entry: any;
 let composerComponent: React.ComponentType<any>;
 const duplicates: { root: ReactDomClient.Root; container: HTMLElement }[] = [];
-const state = { loaded: false, error: '', styles: 0, slots: [] as any[], calls: [] as any[], opens: [] as any[],
+const state = { loaded: false, error: '', styles: 0, layers: 0, layerOpens: 0, slots: [] as any[], calls: [] as any[], opens: [] as any[],
   notify() { subscribers.forEach(listener => listener(nativeState)); },
   updateEvidence(messages: any[]) { (nativeState as any).messages = messages; state.notify(); },
   setRunning(running: boolean) { nativeState.runningSessions[nativeState.activeSessionId] = running; state.notify(); },
   switchSession(sessionId: string) { nativeState.activeSessionId = sessionId; state.notify(); },
   task(id: string, since: number) { nativeState.messages = [{ id, role: 'user', createdAt: since }]; nativeState.runningSessions[nativeState.activeSessionId] = true; state.notify(); },
-  duplicateComposer() { const container = document.createElement('span'); document.querySelector('.composer-left')!.append(container); const root = ReactDomClient.createRoot(container); root.render(React.createElement(composerComponent)); duplicates.push({ root, container }); },
+  duplicateComposer() { const container = document.createElement('span'); container.dataset.piPlugin = 'local.diff-view'; document.querySelector('.composer-left')!.append(container); const root = ReactDomClient.createRoot(container); root.render(React.createElement(composerComponent)); duplicates.push({ root, container }); },
   windowTranscript() { (nativeState as any).retainedTranscripts = { s: nativeState.messages }; nativeState.messages = []; state.notify(); },
   unload() { entry.onUnload(); }, reload() { entry.onLoad(host, { adapter: adapter() }); },
+  suspendLayers(suspended: boolean) { const root = document.getElementById('live-plugin-layers'); if (root) { root.hidden = suspended; root.inert = suspended; } },
   get subscriptions() { return subscribers.size; }
 };
 (window as any).__liveHost = state;
@@ -43,10 +44,23 @@ const host = {
     const response = await fetch('/live-rpc', { method: 'POST', body: JSON.stringify(payload) }); const data = await response.json();
     if (!response.ok) throw Object.assign(new Error(data.message), { code: data.code }); return data;
   },
-  ui: { injectStyle(css: string) { const style = document.createElement('style'); style.textContent = css; document.head.append(style); state.styles++; return () => { style.remove(); state.styles--; }; } },
+  ui: {
+    injectStyle(css: string) { const style = document.createElement('style'); style.textContent = config.scopedStyles ? `@scope ([data-pi-plugin="local.diff-view"]) { ${css} }` : css; document.head.append(style); state.styles++; return () => { style.remove(); state.styles--; }; },
+    ...(config.layerApi === 'missing' ? {} : { openLayer() {
+      if (config.layerApi === 'reject') throw new Error('Host refused layer');
+      let root = document.getElementById('live-plugin-layers');
+      if (!root) { root = document.createElement('div'); root.id = 'live-plugin-layers'; document.body.append(root); }
+      const element = document.createElement('div'); element.dataset.piPlugin = 'local.diff-view'; element.dataset.piLayer = '';
+      Object.assign(element.style, { position: 'fixed', top: '0', left: '0', width: '0', height: '0', zIndex: '600' });
+      root.append(element); state.layers++; state.layerOpens++;
+      let closed = false;
+      return { element, close() { if (closed) return; closed = true; element.remove(); if (--state.layers === 0) root!.remove(); } };
+    } })
+  },
   slots: { register(options: any) {
     if (options.slot === 'composerControl') composerComponent = options.component;
     state.slots.push({ slot: options.slot, positions: options.positions }); const container = document.createElement('span'); container.dataset.testSlot = options.slot;
+    container.dataset.piPlugin = 'local.diff-view';
     document.querySelector(options.slot === 'entryExtra' ? '#live-reply' : '.composer-left')!.append(container);
     const root = ReactDomClient.createRoot(container); root.render(React.createElement(options.component, { sessionId: 's', messageId: 'final-reply', message: { content: 'Done live task', createdAt: config.replyAt } }));
     return () => { if (options.slot === 'composerControl') for (const item of duplicates.splice(0)) { item.root.unmount(); item.container.remove(); } root.unmount(); container.remove(); state.slots = state.slots.filter(slot => slot.slot !== options.slot); };

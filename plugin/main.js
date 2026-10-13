@@ -3931,7 +3931,7 @@ async function dispatch2(method, args) {
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
     const stage = args?.stage;
-    if (typeof stage !== "string" || !/^(entry-loaded|reply-slot-mounted|card-bound|session-ready|session-source-error|sidebar-opened|view-targeted|bootstrap-ok|bootstrap-error|card-query-error|composer-mounted|composer-source-error|composer-anchor-missing|composer-anchor-offscreen|composer-positioned|running-idle|running-identity-missing|running-ready|running-query-empty|running-query-error|running-visible|running-click-error)$/.test(stage)) fail("INVALID_STAGE", "Unknown renderer diagnostic stage");
+    if (typeof stage !== "string" || !/^(entry-loaded|reply-slot-mounted|card-bound|session-ready|session-source-error|sidebar-opened|view-targeted|bootstrap-ok|bootstrap-error|card-query-error|composer-mounted|composer-source-error|composer-layer-error|composer-anchor-missing|composer-anchor-offscreen|composer-positioned|running-idle|running-identity-missing|running-ready|running-query-empty|running-query-error|running-visible|running-click-error)$/.test(stage)) fail("INVALID_STAGE", "Unknown renderer diagnostic stage");
     return serial(async () => {
       if (disposed || !store) fail("PLUGIN_UNLOADED", "Diff view unloaded");
       rendererStages[stage] = Date.now();
