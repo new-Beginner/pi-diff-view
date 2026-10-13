@@ -80,6 +80,17 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const reviewPending = useRef(false), loadedScope = useRef('');
   const historyRevision = useRef('');
   const workspaceRef = useRef<HTMLDivElement>(null), continuationRef = useRef<HTMLDivElement>(null);
+  const fileCollapseAnchor = useRef<{ selected: string; top: number }>();
+  useLayoutEffect(() => {
+    const anchor = fileCollapseAnchor.current;
+    fileCollapseAnchor.current = undefined;
+    const viewport = workspaceRef.current, row = appRef.current?.querySelector<HTMLElement>('.dv-file[aria-current="true"]')?.closest<HTMLElement>('.dv-file-row');
+    if (anchor && fileCollapsed && anchor.selected === selected && viewport && row) {
+      // Removing a long body can clamp/anchor the browser to an unrelated trailing file.
+      // Restore the current title's viewport position after the new file height is committed.
+      viewport.scrollTop += row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.top;
+    }
+  }, [fileCollapsed, selected]);
   const matchingReview = review && review.scope === request.scope && (!request.root || review.root === request.root) && review.sessionId === request.sessionId && (request.scope !== 'turn' || review.runId === request.runId) ? review : null;
   const validReview = matchingReview?.files.some(file => file.id === selected) ? matchingReview : null;
   const selectedFile = matchingReview?.files.find(file => file.id === selected);
@@ -287,6 +298,11 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     if (live.current) showStatus(locale.startsWith('zh') ? '路径已复制' : 'Path copied');
   });
   const openFile = (file: ReviewFile) => { resetPage(); setSelected(file.id); setFileCollapsed(false); };
+  const collapseFile = () => {
+    const viewport = workspaceRef.current, row = appRef.current?.querySelector<HTMLElement>('.dv-file[aria-current="true"]')?.closest<HTMLElement>('.dv-file-row');
+    if (viewport && row) fileCollapseAnchor.current = { selected, top: Math.max(0, Math.min(row.getBoundingClientRect().top - viewport.getBoundingClientRect().top, viewport.clientHeight - row.offsetHeight)) };
+    setFileCollapsed(true);
+  };
   const openInFileManager = async (file: ReviewFile) => {
     if (!matchingReview || fileOpenPending.current) return;
     fileOpenPending.current = true; setOpeningFile(true); setError('');
@@ -317,9 +333,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const actionButtons = (file: ReviewFile, hunk?: DiffHunk) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || loadingDetail} onClick={() => { setError(''); if (review) setConfirmation({ kind: 'action', action, file, hunk, review }); }}>{t[action]}</button>);
   const selectedIndex = visibleFiles.findIndex(file => file.id === selected);
   const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id} data-expanded={file.id === selected && !fileCollapsed}>
-    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) setFileCollapsed(value => !value); else openFile(file); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
+    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) { if (fileCollapsed) setFileCollapsed(false); else collapseFile(); } else openFile(file); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
       <FileIcon path={file.path} /><span className="dv-file-label"><span className="dv-file-name"><FilePath path={file.path} /></span><span className="dv-file-chevron"><ReviewIcon name="chevron" /></span></span>{file.statsKnown === false || file.kind !== 'text' ? <span className="dv-counts dv-muted" aria-label={locale.startsWith('zh') ? '行数未知' : 'Unknown totals'}>{locale.startsWith('zh') ? '行数未知' : 'Unknown'}</span> : <span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">-{file.deletions}</span></span>}
     </button>
+    {file.id === selected && <button className="dv-icon-button dv-file-collapse" disabled={busy} aria-expanded={!fileCollapsed} aria-label={`${fileCollapsed ? locale.startsWith('zh') ? '展开文件' : 'Expand file' : locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} ${file.path}`} title={fileCollapsed ? locale.startsWith('zh') ? '展开文件' : 'Expand file' : locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} onClick={() => { if (fileCollapsed) setFileCollapsed(false); else collapseFile(); }}><ReviewIcon name={fileCollapsed ? 'chevron' : 'collapse'} /></button>}
     <button className="dv-icon-button dv-file-open" disabled={busy || openingFile} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '在 PI-Desktop 文件管理器中打开' : 'Open in PI-Desktop File Manager'} onClick={() => void openInFileManager(file)}><ReviewIcon name="open" /></button>
     <details className="dv-menu dv-file-menu" onToggle={event => placeFileMenu(event.currentTarget)}><summary aria-label={`${t.action} ${file.path}`} title={t.action}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
       <button disabled={busy || !matchingReview} onClick={event => { closeFileMenu(event); void copyPath(file); }}>{locale.startsWith('zh') ? '复制路径' : 'Copy path'}</button>
@@ -355,7 +372,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
             {review?.notice && <p className="dv-muted">{review.notice}</p>}
             {context !== 3 && <p className="dv-muted">{t.expandedHint}</p>}
           </div></details>
-          <button className="dv-icon-button" aria-label={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} title={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} disabled={busy || !selected || fileCollapsed} onClick={() => setFileCollapsed(true)}><ReviewIcon name="collapse" /></button>
+          <button className="dv-icon-button" aria-label={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} title={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} disabled={busy || !selected || fileCollapsed} onClick={collapseFile}><ReviewIcon name="collapse" /></button>
           {onClose && <button className="dv-icon-button" aria-label={t.close} onClick={onClose} disabled={busy}><ReviewIcon name="close" /></button>}
         </div>
       </div>
@@ -373,8 +390,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     {status && <div className="dv-toast" role="status">{status}</div>}
     {batchResults.length > 0 && <details className="dv-message" open><summary>{t.batch}</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{batchResults.map(result => `${result.ok ? '✓' : '✗'} ${result.path}: ${result.message}`).join('\n')}</pre></details>}
     {bootError ? <div className="dv-empty dv-error" role="alert">{bootError}<button onClick={() => setBootTick(value => value + 1)}>{t.retry}</button></div> : !boot && !review ? <div className="dv-empty" role="status">{t.loading}</div> : <div className="dv-workspace" ref={workspaceRef}>
-      <nav className="dv-file-list" aria-label={t.files}>{(selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex + 1)).map(fileRow)}</nav>
+      <nav className="dv-file-list" aria-label={t.files}>{(selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex)).map(fileRow)}</nav>
       {!visibleFiles.length && !loadingReview && !reviewError && !bootError && <p className="dv-rail-empty">{query ? t.noMatches : matchingReview?.run?.state === 'running' ? locale.startsWith('zh') ? '本轮正在运行，尚未记录文件修改。' : 'This turn is running; no file changes recorded yet.' : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
+      <section className="dv-file-section">
+      {selectedIndex >= 0 && fileRow(visibleFiles[selectedIndex])}
       <main className="dv-review" hidden={fileCollapsed || Boolean(query && selectedIndex < 0) || (!currentFile && review?.nextFileOffset == null && !loadingReview && !reviewError && !bootError && Boolean(review))} aria-busy={loadingReview || loadingDetail}>
         {loadingReview && !matchingReview ? <div className="dv-empty" role="status">{t.loading}</div> : reviewError && !matchingReview ? <div className="dv-empty dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div> : !review ? <div className="dv-empty">{t.noRoots}</div> : !currentFile ? review.files.length || review.nextFileOffset != null ? <div className="dv-empty">{review.nextFileOffset != null ? t.loading : t.chooseFile}</div> : null : <>
           <h2 className="dv-sr-only">{currentFile.path}</h2>
@@ -387,6 +406,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
           {detail?.nextOffset != null && <div className="dv-continuation" ref={continuationRef} aria-label={t.loadMore}>{loadingMore && <span role="status">{t.loading}</span>}{detailError && <span className="dv-error" role="alert">{detailError}<button onClick={loadMore}>{t.retry}</button></span>}</div>}
         </>}
       </main>
+      </section>
       {selectedIndex >= 0 && <nav className="dv-file-list" aria-label={t.files}>{visibleFiles.slice(selectedIndex + 1).map(fileRow)}</nav>}
     </div>}
     {confirmation && <Modal title={confirmation.kind === 'action' || confirmation.kind === 'batch' ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory} busy={busy} onClose={() => setConfirmation(null)}>

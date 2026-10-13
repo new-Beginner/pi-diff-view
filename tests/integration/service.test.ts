@@ -7,6 +7,7 @@ beforeEach(async () => {
  root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'diff-service-')); store = new SnapshotStore(path.join(root, 'data')); await store.init();
  await fs.writeFile(path.join(root, 'a.txt'), 'after\n'); const after = await readSnapshot(root, 'a.txt');
  run = { version: 2, boundary: 'user', contentVersion: 1, id: randomUUID(), generation: 'test-generation-123456789', sessionId: 's', root, startedAt: Date.now()-5000, endedAt: Date.now(), state: 'completed', fileCount: 1, incomplete: false, changes: { 'a.txt': { capture: capture('a.txt'), before: snapshotOfText('before\n', after.mode), after } }, replies: [{ hash: digest('reply'), timestamp: Date.now() }], bindings: {} }; run.finalReply = run.replies[0]; await store.writeRun(run);
+ run.execution = { id: 'service-runner', revision: 1, state: 'settled' }; await store.writeRun(run);
  service = new ReviewService(store, { workspace: async () => ({ path: root }), settings: async () => ({}), setSettings: async () => {}, appearance: async () => ({ locale: 'zh-CN', base: 'light' }), clipboard: async () => {}, openPanel: async () => {} }, run.generation);
 });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
@@ -84,7 +85,7 @@ describe('review service', () => {
   expect(summary).toMatchObject({ fileCount: 1, additions: 1, deletions: 1 }); expect(summary.files.map(file => file.path)).toEqual(['a.txt']);
   expect((await turn()).files.map(file => file.path)).toEqual(['a.txt']);
   expect((await service.bootstrap('s')).runs[0].fileCount).toBe(1);
-  run.state = 'running'; run.incomplete = true; delete run.endedAt; delete run.finalReply; await store.writeRun(run, true);
+  run.state = 'running'; run.incomplete = true; run.execution = { id: 'service-runner', revision: 2, state: 'running' }; delete run.endedAt; delete run.finalReply; await store.writeRun(run, true);
   expect(await service.runningChanges({ sessionId: 's', since: run.startedAt })).toMatchObject({ fileCount: 1, additions: 1, deletions: 1 });
  });
 });

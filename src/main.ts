@@ -12,13 +12,15 @@ import { HostEvidenceStore } from './core/host-evidence-store';
 let evidenceStore: HostEvidenceStore | null = null;
 import { dispatch as gitManageDispatch } from './git/local-management';
 import { canonical } from './core/path-policy';
-import { writeCaptureContexts, type CaptureContext } from './core/capture-context';
+import { CAPTURE_CONTEXT_TTL, writeCaptureContexts, type CaptureContext } from './core/capture-context';
 import { HostEvidenceBuffer } from './core/host-evidence-buffer';
 import { FileOpenRequests } from './core/file-open';
 const fileOpens = new FileOpenRequests();
 const evidence = new HostEvidenceBuffer();
 let history: HostHistoryImporter | null = null;
 const contexts = new Map<string, CaptureContext & { syncedAt: number }>();
+const sessionRoots = new Map<string, string>();
+const freshHistoryContext = (context: CaptureContext) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 declare const pi: any;
 let service: ReviewService | null = null, store: SnapshotStore | null = null;
 let jobs: JobQueue | null = null;
@@ -50,6 +52,9 @@ export async function onLoad(): Promise<void> {
   const parent = path.dirname(dataPath), plugins = path.dirname(parent);
   history = path.basename(parent) === 'data' && path.basename(plugins) === 'plugins' ? new HostHistoryImporter(store, path.dirname(plugins)) : null;
   contexts.clear(); evidence.clear();
+  sessionRoots.clear();
+  const savedRoots = await readJson<Record<string, string>>(path.join(store.directory, 'session-roots.json'), {});
+  for (const [id, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id) && typeof root === 'string' && path.isAbsolute(root)) sessionRoots.set(id, root);
   fileOpens.clear();
   rendererStages = {}; runningDiagnostic = undefined; rendererDiagnostic = undefined; navigation.clear();
   navigation.restore(await readJson(path.join(store.directory, 'selections.json'), []));
@@ -67,7 +72,7 @@ export async function onLoad(): Promise<void> {
     const context = contexts.get(event.sessionId);
     if (history && context && service) {
       // Re-read actual final message evidence; do not bind the event's internal turnId.
-      const result = await history.syncSession(event.sessionId, context.root, { ...context, messages: evidence.messages(event.sessionId, canonical(context.root)) });
+      const result = await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
       service.setRecoveryNotice(event.sessionId, result.warnings.join(' '));
       context.syncedAt = 0; // The renderer's settled state may arrive immediately afterwards.
     }
@@ -126,8 +131,12 @@ async function sessionRoot(args: any): Promise<string | undefined> {
   if (typeof args?.sessionId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId)) fail('SESSION_REQUIRED', 'Invalid session identity');
   const workspace = await pi.workspace.get();
   const roots: string[] = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r: any) => typeof r === 'string' ? r : r.path)] : [];
-  if (roots.length) return typeof args.root === 'string' && roots.some(r => canonical(r) === canonical(args.root)) ? args.root : undefined;
-  // Native host owns this exact session leaf. Never grant an arbitrary renderer-supplied root.
+  if (roots.length && typeof args.root === 'string' && roots.some(r => canonical(r) === canonical(args.root))) return args.root;
+  const retained = sessionRoots.get(args.sessionId) ?? contexts.get(args.sessionId)?.root;
+  if (retained && (canonical(retained) === canonical(history?.scratchRoot(args.sessionId) ?? '') || !args.root || canonical(args.root) === canonical(retained))) return retained;
+  if (roots.length || (typeof args.root === 'string' && history && canonical(args.root) !== canonical(history.scratchRoot(args.sessionId)))) return undefined;
+  if (history && store && (await store.listRuns(false, true)).some(r => r.sessionId === args.sessionId && canonical(r.root) !== canonical(history!.scratchRoot(args.sessionId)))) return undefined;
+  // Only genuinely rootless sessions may use the host-owned scratch leaf.
   return history?.scratchRoot(args.sessionId);
 }
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
@@ -158,31 +167,34 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   if (method === 'sessionContext') {
     const root = await sessionRoot(args);
     if (!root) { const warning = '会话项目路径缺失或未授权，未导入历史。'; contexts.delete(args.sessionId); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]); s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
+    sessionRoots.set(args.sessionId, root);
+    while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value!);
+    await atomicJson(path.join(store!.directory, 'session-roots.json'), Object.fromEntries(sessionRoots));
     const now = Date.now();
     const taskId = typeof args.taskId === 'string' && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : undefined;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : undefined;
     contexts.delete(args.sessionId);
-    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, taskId, since, syncedAt: now, updatedAt: now });
+    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === 'boolean' ? args.mainRunning : undefined, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: now, updatedAt: now });
     while (contexts.size > 200) contexts.delete(contexts.keys().next().value!);
     await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
     await evidenceStore!.restore(evidence, args.sessionId, root);
     if (!history) { const warning = '宿主历史路径契约不匹配，未导入历史。'; s.setRecoveryNotice(args.sessionId, warning); return { ok: false, warning }; }
-    const result = await history.syncSession(args.sessionId, root, { ...contexts.get(args.sessionId)!, messages: evidence.messages(args.sessionId, canonical(root)) });
+    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)!));
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' ')); return result;
   }
   const context = typeof args?.sessionId === 'string' ? contexts.get(args.sessionId) : undefined;
+  if (method === 'runningChanges' && context?.running && context.taskId === args.taskId && context.since === args.since) {
+    context.updatedAt = Date.now(); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
+  }
   const preparedReview = method === 'review' && history && context && (args.scope === 'turn' || args.scope === 'lastTurn');
   if (preparedReview) await store!.importInbox(generation);
   if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) {
-    const result = await history.syncSession(args.sessionId, context.root, { ...context, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
     context.syncedAt = Date.now(); store!.acknowledgeRecovery(args.sessionId);
     s.setRecoveryNotice(args.sessionId, result.warnings.join(' '));
   }
   if (method === 'review' && (args.scope === 'turn' || args.scope === 'lastTurn')) return s.review(args, Boolean(preparedReview), context);
   if (method === 'runningChanges') {
-    if (context?.running && context.taskId === args.taskId && context.since === args.since) {
-      context.updatedAt = Date.now(); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
-    }
     const result = await s.runningChanges(args);
     let reason = 'summary-available';
     if (!result) {
@@ -205,7 +217,7 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     const run = await s.selectTarget(args);
     if (!run) fail('RUN_MISSING', 'Recorded task not found in this session');
     if (disposed || service !== s || version !== navigationVersion) fail('SELECTION_MISSING', 'Selection cleared or plugin unloaded');
-    const selection = navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, args.fileId);
+    const selection = navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, await store!.resolveFileId(args.runId, args.fileId));
     await atomicJson(path.join(store!.directory, 'selections.json'), navigation.export());
     return selection;
   }
@@ -214,7 +226,11 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     if (typeof args?.sessionId !== 'string' || !args.sessionId) fail('SESSION_REQUIRED', '当前视图缺少会话标识；请从本会话重新打开差异审查。');
     const selection = navigation.get(args.nonce, args.sessionId);
     if (!selection) fail('SELECTION_MISSING', '本会话的文件选择不存在或已清除；可返回本会话修改记录重新选择。');
-    await s.selectTarget({ runId: selection.request.runId!, sessionId: args.sessionId });
+    const target = await s.selectTarget({ runId: selection.request.runId!, sessionId: args.sessionId });
+    if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
+      const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store!.resolveFileId(selection.request.runId!, selection.fileId));
+      await atomicJson(path.join(store!.directory, 'selections.json'), navigation.export()); return repaired;
+    }
     return selection;
   }
   if (method === 'clearHistory' && args?.confirmed === true) {

@@ -12,7 +12,7 @@ import { startFileOpenChannel } from './file-open-channel';
 import type { RendererHost, RendererUi } from './host-contract';
 export type { RendererHost } from './host-contract';
 type Disposer = () => void;
-export interface ReplyProps { sessionId: string; messageId: string; message: { content?: unknown; blocks?: { type: string; text?: string }[]; createdAt?: string | number; role?: string } }
+export interface ReplyProps { sessionId: string; messageId: string; message: { content?: unknown; blocks?: { type: string; text?: string }[]; createdAt?: string | number; role?: string; parentToolCallId?: string; meta?: { parentMessageId?: string } } }
 type CardItem = { props: ReplyProps; listeners: Set<(card: ReplyCard | null) => void>; checkedRevision?: string };
 type Feed = { revision?: string; pending: number[] };
 interface Hub {
@@ -171,7 +171,7 @@ function EntryExtra(props: ReplyProps) {
     return () => { current.listeners.delete(listener); };
   }, [current]);
   useEffect(() => {
-    if (!same(current) || !props.sessionId || !props.messageId || (props.message?.role && props.message.role !== 'assistant')) return;
+    if (!same(current) || !props.sessionId || !props.messageId || props.message?.parentToolCallId || props.message?.meta?.parentMessageId || (props.message?.role && props.message.role !== 'assistant')) return;
     report(current, 'reply-slot-mounted');
     let item = current.cards.get(key);
     if (!item) { item = { props, listeners: new Set() }; current.cards.set(key, item); }
@@ -184,9 +184,9 @@ function EntryExtra(props: ReplyProps) {
       // Only unmount the DOM: keep validated cached cards for session switches and transcript windowing.
       if (!current.activeSession && !current.cards.size && current.timer) { clearTimeout(current.timer); current.timer = undefined; }
     };
-  }, [current, key, contentKey, props.message?.createdAt]);
+  }, [current, key, contentKey, props.message?.createdAt, props.message?.parentToolCallId, props.message?.meta?.parentMessageId]);
   const card = value.key === key ? value.card : current?.cache.get(key);
-  if (!card || !same(current)) return null;
+  if (!card || !same(current) || props.message?.parentToolCallId || props.message?.meta?.parentMessageId) return null;
   const run = card.run;
   return <TurnChangeSummary run={run} initialSummary={card.summary} transport={current.transport} locale={current.appearance.locale} base={current.appearance.base} onOpen={async file => {
     await trackSession(current); const version = current.sessionVersion;

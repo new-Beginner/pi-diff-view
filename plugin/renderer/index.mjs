@@ -1,3 +1,72 @@
+// src/core/delegation-lifecycle.ts
+var name = (value) => String(value).split(".").pop().toLowerCase();
+var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
+function safeDelegation(value) {
+  if (!value || !id(value.delegationId) || !["running", "completed", "failed", "aborted", "stopped"].includes(value.status) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0) return void 0;
+  return { delegationId: value.delegationId, status: value.status, startedAt: value.startedAt, ...Number.isSafeInteger(value.completedAt) && value.completedAt >= value.startedAt ? { completedAt: value.completedAt } : {} };
+}
+function safeTaskDetails(tool, details) {
+  if (!details || typeof details !== "object") return void 0;
+  if (name(tool) === "task") return safeDelegation(details);
+  if (!["taskwait", "task_wait", "tasklist", "taskstop"].includes(name(tool))) return void 0;
+  const output = {};
+  for (const key of ["delegations", "stopped", "stopPending", "settled"]) if (Array.isArray(details[key])) output[key] = details[key].slice(0, 256).map(safeDelegation).filter(Boolean);
+  return Object.keys(output).length ? output : void 0;
+}
+function messageOwners(messages) {
+  const aliases = /* @__PURE__ */ new Map(), sequential = /* @__PURE__ */ new Map();
+  let current;
+  for (const message of messages) {
+    if (message.role === "user" && !message.meta.parentMessageId && !message.meta.steering) current = message.id;
+    if (current && !message.meta.parentMessageId) sequential.set(message.id, current);
+    aliases.set(message.id, message);
+    for (const block of message.blocks) if (block.type === "tool_call" && id(block.callId)) aliases.set(block.callId, message);
+  }
+  const owner = (message, seen = /* @__PURE__ */ new Set()) => {
+    if (seen.has(message.id)) return void 0;
+    seen.add(message.id);
+    if (message.meta.userMessageId !== void 0) {
+      const user = aliases.get(message.meta.userMessageId);
+      return user?.role === "user" && !user.meta.parentMessageId ? user.id : void 0;
+    }
+    if (message.meta.parentMessageId) {
+      const parent = aliases.get(message.meta.parentMessageId);
+      return parent ? owner(parent, seen) : void 0;
+    }
+    return sequential.get(message.id);
+  };
+  const owners = /* @__PURE__ */ new Map();
+  for (const message of messages) {
+    const user = owner(message);
+    if (user) owners.set(message.id, user);
+  }
+  return owners;
+}
+function collectDelegations(messages, ownerOf) {
+  const owners = ownerOf ? void 0 : messageOwners(messages);
+  const resolveOwner = ownerOf ?? ((message) => owners.get(message.id));
+  const launches = /* @__PURE__ */ new Map();
+  for (const message of messages) for (const block of message.blocks) {
+    if (block.type !== "tool_call" || name(block.name) !== "task" || !id(block.callId)) continue;
+    const owner = resolveOwner(message);
+    if (!owner) continue;
+    const summary = safeDelegation(block.result?.details);
+    launches.set(block.callId, { callId: block.callId, owner, status: block.status === "error" || block.result?.isError ? "failed" : "running", ...summary });
+  }
+  for (const message of messages) for (const block of message.blocks) {
+    const details = safeTaskDetails(block.name, block.result?.details);
+    if (!details || name(block.name) === "task" || block.result?.isError) continue;
+    for (const sample of Object.values(details).flat()) {
+      const targets = [...launches.values()].filter((launch) => launch.delegationId === sample.delegationId && launch.startedAt === sample.startedAt);
+      if (targets.length !== 1) continue;
+      const target = targets[0];
+      if (target.status !== "running") continue;
+      Object.assign(target, sample);
+    }
+  }
+  return [...launches.values()];
+}
+
 // src/core/review-file-policy.ts
 var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
   "png",
@@ -88,22 +157,24 @@ function hostEvidenceMessages(messages) {
     const candidates = value.toolCallId ? [{ type: "tool_call", callId: value.toolCallId, name: value.toolName, args: value.toolArgs, status: value.toolStatus, result: value.toolResult, isError: value.isError }] : value.blocks ?? [];
     for (const b of candidates) {
       if (b.type !== "tool_call" || typeof b.callId !== "string") continue;
-      const name = String(b.name).split(".").pop().toLowerCase();
+      const name2 = String(b.name).split(".").pop().toLowerCase();
       const args = b.args ?? {}, result = b.result ?? {}, review = result.details?.review;
       if (isImagePath(String(review?.path ?? args.path ?? args.file_path ?? ""))) continue;
       try {
         if (args.path !== void 0 || args.file_path !== void 0) assertPublicPath(args.path ?? args.file_path);
         if (review?.path !== void 0) assertPublicPath(review.path);
         if (review?.oldPath !== void 0) assertPublicPath(review.oldPath);
-        if (name === "edit" && typeof args.ops === "string") {
+        if (name2 === "edit" && typeof args.ops === "string") {
           for (const line of args.ops.split("\n")) if (line.startsWith("MV ")) assertPublicPath(line.slice(3).trim());
         }
       } catch {
         continue;
       }
       const safeReview = review && typeof review === "object" ? Object.fromEntries(["version", "sessionId", "messageId", "path", "oldPath", "operation", "status", "state", "beforeExists", "afterExists", "beforeHash", "afterHash", "hunks"].filter((key) => review[key] !== void 0).map((key) => [key, review[key]])) : void 0;
-      const editArgs = name === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
-      blocks.push({ type: "tool_call", callId: b.callId, name, status: b.status, args: ["write", "edit"].includes(name) ? { path: args.path ?? args.file_path, ...editArgs, ...name === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...safeReview ? { details: { review: safeReview } } : {} } });
+      const editArgs = name2 === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
+      const lifecycle = safeTaskDetails(name2, result.details);
+      const details = { ...safeReview ? { review: safeReview } : {}, ...lifecycle };
+      blocks.push({ type: "tool_call", callId: b.callId, name: name2, status: b.status, args: ["write", "edit"].includes(name2) ? { path: args.path ?? args.file_path, ...editArgs, ...name2 === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...Object.keys(details).length ? { details } : {} } });
     }
     return [{ type: "message", id: value.id, role: value.role, createdAt: value.createdAt, meta, blocks }];
   });
@@ -414,13 +485,29 @@ var PluginReviewError = class extends Error {
   }
 };
 function activityDiagnostic(state) {
-  const id = state.activeSessionId;
-  if (!id || state.selectingSessionId || state.page !== "chat" || (state.runningSessions?.[id] ?? state.isRunning) !== true) return "running-idle";
+  const id2 = state.activeSessionId;
+  if (!id2 || state.selectingSessionId || state.page !== "chat") return "running-idle";
+  if (runningActivity(state)) return "running-ready";
+  if (state.runningSessions?.[id2] !== true) return "running-idle";
   return (runningActivity(state)?.since ?? 0) > 0 ? "running-ready" : "running-identity-missing";
 }
 function runningActivity(state) {
   const sessionId = state.activeSessionId;
-  if (!sessionId || state.selectingSessionId || state.page !== "chat" || (state.runningSessions?.[sessionId] ?? state.isRunning) !== true) return null;
+  if (!sessionId || state.selectingSessionId || state.page !== "chat") return null;
+  if (state.runningSessions?.[sessionId] !== true) {
+    const rows = new Map((state.retainedTranscripts?.[sessionId] ?? []).map((message) => [message.id, message]));
+    for (const message of state.messages ?? []) rows.set(message.id, message);
+    const time2 = (value) => {
+      const n = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : 0;
+      return Number.isSafeInteger(n) && n > 0 ? n : 0;
+    };
+    const messageTime = (message) => time2(message.createdAt) || time2(message.blocks.find((block) => block.name === "task")?.result?.details?.startedAt);
+    const messages = hostEvidenceMessages([...rows.values()]).sort((a, b) => messageTime(a) - messageTime(b));
+    const owners = new Set(collectDelegations(messages).filter((child) => child.status === "running").map((child) => child.owner));
+    const user2 = messages.filter((message) => message.role === "user" && owners.has(message.id) && !message.meta.parentMessageId).at(-1);
+    const since2 = user2 ? time2(user2.createdAt) : 0;
+    return user2 && Number.isSafeInteger(since2) && since2 > 0 && since2 <= Date.now() ? { sessionId, taskId: user2.id, since: since2 } : null;
+  }
   const sources = [state.messages ?? [], state.retainedTranscripts?.[sessionId] ?? []].map((messages) => messages.filter((message) => message.role === "user" && !message.steering && !message.parentToolCallId));
   const users = sources.flat();
   const time = (message) => {
@@ -498,7 +585,7 @@ function createPluginReviewAdapter(options = {}) {
         const sessionId = state.selectingSessionId ? null : state.activeSessionId ?? null;
         if (sessionId !== null && typeof sessionId !== "string") denied("SIDEBAR_CONTRACT", "\u65E0\u6548\u7684\u5BBF\u4E3B\u4F1A\u8BDD\u72B6\u6001 / Invalid host session state");
         const activity = runningActivity(state);
-        const context = sessionId ? { sessionId, root: state.sessions?.find((s) => s.id === sessionId)?.projectPath, running: (state.runningSessions?.[sessionId] ?? state.isRunning) === true, taskId: activity?.taskId, since: activity?.since, turnId: activity?.turnId } : void 0;
+        const context = sessionId ? { sessionId, root: state.sessions?.find((s) => s.id === sessionId)?.projectPath, running: state.runningSessions?.[sessionId] === true || activity !== null, mainRunning: state.runningSessions?.[sessionId] === true, statusKnown: typeof state.runningSessions?.[sessionId] === "boolean", taskId: activity?.taskId, since: activity?.since, turnId: activity?.turnId } : void 0;
         if (context) {
           const rows = new Map((state.retainedTranscripts?.[sessionId] ?? []).map((m) => [m.id, m]));
           for (const m of state.messages ?? []) rows.set(m.id, m);
@@ -920,7 +1007,7 @@ function trackSession(current) {
       current.activeSession = sessionId;
       current.sessionVersion++;
       const version = current.sessionVersion;
-      current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id, path, guard) => current.adapter.openFile(id, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : void 0;
+      current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id2, path, guard) => current.adapter.openFile(id2, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : void 0;
       wake(current);
     }
     if (context) {
@@ -1003,7 +1090,7 @@ async function restoreFeed(current, sessionId) {
   feed.revision = first.revision;
   feed.pending = first.pending;
   while (current.feeds.size > 32) {
-    const removable = [...current.feeds.keys()].find((id) => ![...current.cards.values()].some((item) => item.props.sessionId === id));
+    const removable = [...current.feeds.keys()].find((id2) => ![...current.cards.values()].some((item) => item.props.sessionId === id2));
     if (!removable) break;
     current.feeds.delete(removable);
   }
@@ -1066,7 +1153,7 @@ function EntryExtra(props) {
     };
   }, [current]);
   useEffect3(() => {
-    if (!same(current) || !props.sessionId || !props.messageId || props.message?.role && props.message.role !== "assistant") return;
+    if (!same(current) || !props.sessionId || !props.messageId || props.message?.parentToolCallId || props.message?.meta?.parentMessageId || props.message?.role && props.message.role !== "assistant") return;
     report(current, "reply-slot-mounted");
     let item = current.cards.get(key);
     if (!item) {
@@ -1088,9 +1175,9 @@ function EntryExtra(props) {
         current.timer = void 0;
       }
     };
-  }, [current, key, contentKey, props.message?.createdAt]);
+  }, [current, key, contentKey, props.message?.createdAt, props.message?.parentToolCallId, props.message?.meta?.parentMessageId]);
   const card = value.key === key ? value.card : current?.cache.get(key);
-  if (!card || !same(current)) return null;
+  if (!card || !same(current) || props.message?.parentToolCallId || props.message?.meta?.parentMessageId) return null;
   const run = card.run;
   return /* @__PURE__ */ React5.createElement(TurnChangeSummary, { run, initialSummary: card.summary, transport: current.transport, locale: current.appearance.locale, base: current.appearance.base, onOpen: async (file) => {
     await trackSession(current);

@@ -41,8 +41,13 @@ export function reconcileHunkViews(previous: HunkView[], hunks: DiffHunk[], key:
 export interface ScrollAnchor { node?: HTMLElement; top: number; scrollTop: number; scrollLeft: number }
 export function captureScrollAnchor(viewport: HTMLElement): ScrollAnchor {
   const bounds = viewport.getBoundingClientRect();
+  const heading = viewport.querySelector<HTMLElement>('.dv-file-section > .dv-file-row[data-expanded="true"]');
+  const headingBounds = heading?.getBoundingClientRect();
+  const pinned = headingBounds && headingBounds.top <= bounds.top && headingBounds.bottom > bounds.top ? heading : undefined;
+  // A sticky title never moves when lines are inserted. Anchor visible code below it instead.
+  const contentTop = pinned ? headingBounds!.bottom : bounds.top;
   const node = Array.from(viewport.querySelectorAll<HTMLElement>('.dv-row, .dv-pair, .dv-hunk-heading, .dv-file-row')).find(node => {
-    const rect = node.getBoundingClientRect(); return rect.bottom > bounds.top && rect.top < bounds.bottom;
+    const rect = node.getBoundingClientRect(); return node !== pinned && rect.bottom > contentTop && rect.top < bounds.bottom;
   });
   return { node, top: node ? node.getBoundingClientRect().top - bounds.top : 0, scrollTop: viewport.scrollTop, scrollLeft: viewport.scrollLeft };
 }

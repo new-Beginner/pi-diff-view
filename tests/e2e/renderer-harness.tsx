@@ -38,7 +38,7 @@ const host: RendererHost = {
     const element = document.createElement('div'); element.dataset.testSlot = options.slot; element.dataset.piPlugin = 'local.diff-view'; (document.getElementById('mock-reply') ?? document.body).append(element);
     const root = createRoot(element); const Component = options.component;
     const historyCount = Number(params.get('historyCards') || 0);
-    renderReplies = (visible, sessionId = 'session-demo') => root.render(visible ? <>{Array.from({ length: historyCount || 12 }, (_, index) => <Component key={index} sessionId={sessionId} messageId={historyCount ? `history-${index}` : index === target ? 'reply-demo' : `unbound-${index}`} message={{ content: index === target && params.has('longReply') ? `${'进度😀\n\n'.repeat(12000)}Demo reply ${index}` : `Demo reply ${index}`, createdAt: new Date(Date.parse('2025-06-15T15:07:40.000Z') + (params.has('latestAtEnd') ? index * 1000 : 0)).toISOString() }} />)}</> : null);
+    renderReplies = (visible, sessionId = 'session-demo') => root.render(visible ? <>{Array.from({ length: historyCount || 12 }, (_, index) => <Component key={index} sessionId={sessionId} messageId={historyCount ? `history-${index}` : index === target ? 'reply-demo' : `unbound-${index}`} message={{ ...(params.has('childReply') && index === target ? { parentToolCallId: 'launch-parent' } : {}), content: index === target && params.has('longReply') ? `${'进度😀\n\n'.repeat(12000)}Demo reply ${index}` : `Demo reply ${index}`, createdAt: new Date(Date.parse('2025-06-15T15:07:40.000Z') + (params.has('latestAtEnd') ? index * 1000 : 0)).toISOString() }} />)}</> : null);
     renderReplies(true);
     return () => { root.unmount(); element.remove(); };
   } },

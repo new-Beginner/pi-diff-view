@@ -196,7 +196,7 @@ describe('USER-task final binding and bounded summaries', () => {
     await atomicJson(locator, { version: 1, pluginRoot: plugin, dataPath: store.directory, generation, expiresAt: Date.now() + 60000 });
     await h.emit('before_agent_start', { userMessageId: 'new-user' });
     await fs.writeFile(path.join(root, 'old.txt'), 'late'); vi.mocked(fs.open).mockClear();
-    await h.emit('tool_result', { toolCallId: 'old' }); expect(fs.open).not.toHaveBeenCalled();
+    await h.emit('tool_result', { toolCallId: 'old' }); expect(vi.mocked(fs.open).mock.calls.every(([p]) => !String(p).startsWith(virtualRoot))).toBe(true);
     expect(await importRuns()).toEqual([]); const [marker] = await store.listRuns(false, true);
     expect(marker.userMessageId).toBe('new-user'); expect(marker.changes).toEqual({});
     await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old', input: { path: 'new.txt' } });
@@ -424,4 +424,51 @@ describe('fresh renderer identity bridge for native continuation capture', () =>
     const [after] = await importRuns(); expect(after.boundary).toBe('uncertain'); expect(after.userMessageId).toBeUndefined();
     expect(await service.runningChanges({ sessionId: 's', since: before.startedAt - 1, taskId: 'native-user' })).toBeNull();
   });
+});
+
+it('retires only the exact late standard tool lease after a new user boundary', async () => {
+  const h = harness(); await h.emit('before_agent_start', { userMessageId: 'old-user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old-write', input: { path: 'a.txt' } });
+  await h.emit('agent_end'); await h.emit('before_agent_start', { userMessageId: 'new-user' });
+  await h.emit('tool_result', { toolCallId: 'old-write' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'new-write', input: { path: 'a.txt' } });
+  await fs.writeFile(path.join(root, 'a.txt'), 'new\n'); await h.emit('tool_result', { toolCallId: 'new-write' });
+  const [run] = await importRuns(); expect(run.changes['a.txt'].ambiguous).toBeUndefined();
+  expect(run.userMessageId).toBe('new-user'); expect(run.changes['a.txt'].evidence).toEqual(['write:new-write']);
+});
+
+it('does not settle a new user task from an exact old final-message end event', async () => {
+  const h = harness(); await h.emit('before_agent_start');
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'old-first', input: { path: 'old.txt' } });
+  await fs.writeFile(path.join(root, 'old.txt'), 'old'); await h.emit('tool_result', { toolCallId: 'old-first' });
+  const final = message('old final'); await h.emit('message_end', { message: final }); await h.emit('agent_end', { messages: [final] });
+  await h.emit('before_agent_start', { userMessageId: 'new-user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'new-first', input: { path: 'new.txt' } });
+  await fs.writeFile(path.join(root, 'new.txt'), 'new'); await h.emit('tool_result', { toolCallId: 'new-first' });
+  await h.emit('agent_end', { messages: [final] });
+  const run = (await importRuns()).find(r => r.userMessageId === 'new-user')!; expect(run.state).toBe('running');
+});
+
+it.each([false, true])('aggregates Task lifecycles without settling pending children (main aborted: %s)', async aborted => {
+  const h = harness(); await h.emit('before_agent_start', { userMessageId: 'owner' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'file', input: { path: 'a.txt' } });
+  await fs.writeFile(path.join(root, 'a.txt'), 'only main evidence'); await h.emit('tool_result', { toolCallId: 'file' });
+  const startedAt = Date.now();
+  for (const id of ['a', 'b']) {
+    await h.emit('tool_call', { toolName: 'Task', toolCallId: id, input: {} });
+    await h.emit('tool_result', { toolName: 'Task', toolCallId: id, details: { delegationId: id, status: 'running', startedAt } });
+  }
+  await h.emit('tool_result', { toolName: 'TaskWait', toolCallId: 'wait-one', details: { status: 'completed', delegations: [{ delegationId: 'a', status: 'completed', startedAt }] } });
+  expect((await importRuns())[0].state).toBe('running');
+  const final = message('Done with main'); await h.emit('message_end', { message: final }); await h.emit('agent_end', { aborted, messages: [final] });
+  const initial = (await importRuns())[0]; expect(initial.state).toBe('running'); expect(initial.execution?.state).toBe('settled'); expect(initial.endedAt).toBeUndefined();
+  await h.emit('agent_end', { parentToolCallId: 'b' }); expect((await importRuns())[0].state).toBe('running');
+  await h.emit('tool_result', { toolName: 'TaskStop', toolCallId: 'stop', details: { stopPending: [{ delegationId: 'b', status: 'running', startedAt }] } });
+  expect((await importRuns())[0].state).toBe('running');
+  await h.emit('before_agent_start', { userMessageId: 'new-owner' });
+  await h.emit('message_end', { message: { role: 'tool', toolName: 'Task', toolCallId: 'b', toolResult: { details: { delegationId: 'b', status: aborted ? 'stopped' : 'failed', startedAt } } } });
+  const old = (await importRuns()).find(run => run.id === initial.id)!;
+  expect(old.state).toBe(aborted ? 'aborted' : 'incomplete'); expect(old.userMessageId).toBe('owner');
+  const newer = (await store.listRuns(false, true)).find(run => run.userMessageId === 'new-owner')!;
+  expect(newer.state).toBe('running'); expect(newer.delegations).toBeUndefined(); expect(Object.keys(newer.changes)).toEqual([]);
 });

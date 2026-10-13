@@ -3,7 +3,7 @@ import path from 'node:path';
 import { canonical } from './path-policy';
 import { hostScratchRoot } from './public-path';
 import { atomicJson } from './storage';
-export interface CaptureContext { sessionId: string; root: string; running: boolean; taskId?: string; since?: number; updatedAt: number }
+export interface CaptureContext { sessionId: string; root: string; running: boolean; mainRunning?: boolean; statusKnown?: boolean; taskId?: string; since?: number; updatedAt: number }
 export const CAPTURE_CONTEXT_TTL = 6000;
 const id = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z0-9-]{1,256}$/.test(v);
 export async function writeCaptureContexts(directory: string, generation: string, contexts: CaptureContext[]): Promise<void> {

@@ -1,0 +1,24 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { SnapshotStore } from '../src/core/storage';
+import { HostHistoryImporter } from '../src/core/host-history';
+import { ReviewService } from '../src/core/review-service';
+import { inside } from '../src/core/path-policy';
+import { inspectCaptureLeases } from '../src/agent/workspace-capture';
+/** Offline preview only. No command here can write the source store or retire its leases. */
+const config = JSON.parse(await fs.readFile(process.argv[2], 'utf8')) as { dataPath: string; hostDataRoot: string; sessionId: string; root: string; userMessageId: string; outputDirectory: string };
+for (const value of [config.dataPath, config.hostDataRoot, config.root, config.outputDirectory]) if (!path.isAbsolute(value)) throw new Error('All paths must be absolute');
+if (!/^[a-zA-Z0-9-]{1,80}$/.test(config.sessionId) || !/^[a-zA-Z0-9-]{1,256}$/.test(config.userMessageId)) throw new Error('Exact session/user identity required');
+if ([config.dataPath, path.join(config.hostDataRoot, 'sessions'), path.join(config.hostDataRoot, 'review-changes'), config.root].some(source => inside(source, config.outputDirectory))) throw new Error('Preview output must be outside source/evidence/workspace trees');
+await fs.mkdir(config.outputDirectory, { recursive: true });
+const copy = await fs.mkdtemp(path.join(config.outputDirectory, 'history-preview-'));
+await fs.cp(config.dataPath, copy, { recursive: true, dereference: false, filter: source => !['capture.lock', 'quota.lock'].includes(path.basename(source)) });
+const store = new SnapshotStore(copy); await store.init();
+const before = (await store.listRuns(false, true)).filter(r => r.sessionId === config.sessionId);
+const result = await new HostHistoryImporter(store, config.hostDataRoot).syncSession(config.sessionId, config.root, { running: false, repairRootConflicts: true, repairUserMessageId: config.userMessageId });
+const service = new ReviewService(store, { workspace: async () => ({ path: config.root }), settings: async () => ({}), setSettings: async () => {}, appearance: async () => ({}), clipboard: async () => {}, openPanel: async () => {} }, 'preview');
+const after = (await store.listRuns(false, true)).filter(r => r.sessionId === config.sessionId);
+const summary = await Promise.all(after.filter(r => r.userMessageId === config.userMessageId).map(r => service.turnSummary({ sessionId: r.sessionId, runId: r.id, limit: 100 })));
+const plan = { sourceWritten: false, isolatedStore: copy, sessionId: config.sessionId, userMessageId: config.userMessageId, before: before.map(r => ({ id: r.id, root: r.root, state: r.state, files: Object.keys(r.changes).length })), after: after.map(r => ({ id: r.id, root: r.root, state: r.state, files: Object.keys(r.changes).length })), result, summary, leaseDiagnostics: await inspectCaptureLeases(store) };
+await fs.writeFile(path.join(copy, 'preview.json'), JSON.stringify(plan, null, 2));
+console.log(JSON.stringify({ preview: path.join(copy, 'preview.json'), sourceWritten: false, result }, null, 2));

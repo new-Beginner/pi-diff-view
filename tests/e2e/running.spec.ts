@@ -207,3 +207,20 @@ test('a pill click does not submit a redundant running-summary query', async ({ 
   expect(methods.filter((method: string) => method === 'runningChanges')).toHaveLength(1);
   expect(methods).toContain('selectTurn'); await stop(page);
 });
+
+test('one parent entry retains all child changes while main is idle, then one parent summary', async ({ page }) => {
+  run.userMessageId = 'current-user';
+  run.delegations = [{ callId: 'task-a', owner: 'current-user', delegationId: 'a', startedAt: since + 50, status: 'running' }, { callId: 'task-b', owner: 'current-user', delegationId: 'b', startedAt: since + 60, status: 'completed' }];
+  const absolutePath = path.join(run.root, 'child.txt'), identity = canonical(absolutePath);
+  run.changes['child.txt'] = { before: absentSnapshot(), after: snapshotOfText('child one\nchild two\n'), capture: { id: digest(identity).slice(0, 24), identity, path: 'child.txt', absolutePath, origin: 'workspace' } };
+  await store.writeRun(run); await setup(page);
+  const messages = (status: string) => [{ id: 'current-user', role: 'user', createdAt: since }, ...['a', 'b'].map((id, i) => ({ id: `task-row-${id}`, role: 'tool', createdAt: since + 50 + i * 10, toolCallId: `task-${id}`, toolName: 'Task', toolStatus: 'success', toolResult: { details: { delegationId: id, startedAt: since + 50 + i * 10, status: id === 'a' ? status : 'completed' } } })), { id: 'child-reply', role: 'assistant', parentToolCallId: 'task-b', createdAt: replyAt, content: 'child done', status: 'complete' }];
+  await page.evaluate(rows => { const host = (window as any).__liveHost; host.updateEvidence(rows); host.setRunning(false); host.duplicateComposer(); }, messages('running'));
+  await expect(page.locator('.dv-running-pill')).toHaveCount(1); await expect(page.locator('.dv-running-pill')).toHaveText('2 个文件已更改+13-0'); await expect(page.locator('.dv-turn-card')).toHaveCount(0);
+  await page.locator('.dv-running-pill').click(); const frame = page.frameLocator('iframe');
+  await expect(frame.locator('.dv-file')).toHaveCount(2); await expect(frame.locator('.dv-file').filter({ hasText: 'child.txt' })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__liveHost.opens)).toHaveLength(1);
+  run.state = 'completed'; run.endedAt = Date.now(); run.delegations[0].status = 'completed'; run.finalReply = { hash: digest('Done live task'), timestamp: replyAt }; run.replies = [run.finalReply]; await store.writeRun(run);
+  await page.evaluate(rows => (window as any).__liveHost.updateEvidence(rows), messages('completed'));
+  await expect(page.locator('.dv-running-pill')).toHaveCount(0); await expect(page.locator('.dv-turn-card')).toHaveCount(1); await expect(page.locator('.dv-turn-card')).toContainText('已编辑 2 个文件'); await stop(page);
+});

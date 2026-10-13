@@ -84,13 +84,13 @@ test('successful operation refreshes; mocked patch copy and clear history use ba
   await fileActions(page);
   await fileMenu(page).getByRole('button', { name: 'Stage', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Confirm operation', exact: true }).click();
-  await expect(page.locator('.dv-message[role="status"]').filter({ hasText: 'Demo operation completed' })).toHaveText('Demo operation completed');
+  await expect(page.getByRole('status').filter({ hasText: 'Demo operation completed' })).toHaveText('Demo operation completed');
   await expect.poll(async () => (await calls(page, 'diff.review')).length).toBeGreaterThan(1);
   await settings(page);
   await page.getByRole('button', { name: 'Clear recorded history' }).click();
   await expect(page.getByRole('dialog')).toContainText('Git changes are not affected');
   await page.getByRole('dialog').getByRole('button', { name: 'Confirm operation', exact: true }).click();
-  await expect(page.locator('.dv-message[role="status"]').filter({ hasText: 'Recorded history cleared' })).toHaveText('Recorded history cleared');
+  await expect(page.getByRole('status').filter({ hasText: 'Recorded history cleared' })).toHaveText('Recorded history cleared');
   expect((await calls(page, 'diff.clearHistory'))[0].args.confirmed).toBe(true);
 });
 

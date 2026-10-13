@@ -55,7 +55,38 @@ export class SnapshotStore {
   needsRecovery(sessionId: string): boolean { return this.pendingRecovery.has(sessionId); }
   acknowledgeRecovery(sessionId: string): void { this.pendingRecovery.delete(sessionId); }
   constructor(readonly directory: string) {}
-  async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'backups', 'evidence']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
+  async init(): Promise<void> { for (const sub of ['blobs', 'inbox', 'runs', 'contributions', 'backups', 'evidence']) await fs.mkdir(path.join(this.directory, sub), { recursive: true, mode: 0o700 }); }
+  /** Called under captureLock after the destination has been durably written. */
+  async retireRun(from: string, to: string): Promise<void> {
+    validId(from); validId(to); if (from === to) return;
+    const target = await this.getRun(to, false, false);
+    const recorded = await this.getRun(from, false, false);
+    const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
+    const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
+    if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail('REPAIR_IDENTITY', 'Cannot retire unverified run identity');
+    const fileAliases = await readJson<Record<string, string>>(path.join(this.directory, 'file-aliases.json'), {});
+    const paths = new Map<string, string>();
+    for (const [value, change] of Object.entries(source.changes)) {
+      const match = target.changes[value] ? value : Object.keys(target.changes).find(p => target.changes[p].capture?.identity === change.capture?.identity);
+      if (!match) continue; paths.set(value, match);
+      if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture!.id;
+    }
+    await atomicJson(path.join(this.directory, 'file-aliases.json'), fileAliases);
+    const comments = await this.comments();
+    for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
+      comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path)! }; comment.stale = true;
+    }
+    await this.saveComments(comments);
+    const aliases = await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {});
+    aliases[from] = to; await atomicJson(path.join(this.directory, 'run-aliases.json'), aliases);
+    if (recorded) await atomicJson(path.join(this.directory, 'contributions', `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
+    for (const sub of ['runs', 'inbox']) await fs.rm(path.join(this.directory, sub, `${from}.json`), { force: true });
+  }
+  async resolveFileId(runId: string, fileId?: string): Promise<string | undefined> {
+    if (!fileId) return fileId;
+    const aliases = await readJson<Record<string, string>>(path.join(this.directory, 'file-aliases.json'), {});
+    return aliases[`${runId}:${fileId}`] ?? fileId;
+  }
   async captureLock<T>(work: () => Promise<T>): Promise<T> {
     const lock = path.join(this.directory, 'capture.lock'); let handle: fs.FileHandle | undefined;
     for (let attempt = 0; attempt < 80 && !handle; attempt++) {
@@ -145,6 +176,11 @@ export class SnapshotStore {
   }
   async getRun(id: string, inbox = false, hydrate = true): Promise<CaptureRun | null> {
     validId(id);
+    if (!inbox) {
+      const aliases = await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {});
+      const seen = new Set<string>();
+      while (aliases[id]) { if (seen.has(id) || seen.size >= MAX_RUNS) fail('REPAIR_IDENTITY', 'Invalid run alias chain'); seen.add(id); id = aliases[id]; validId(id); }
+    }
     const run = await readJson<CaptureRun | null>(path.join(this.directory, inbox ? 'inbox' : 'runs', `${id}.json`), null);
     if (!run || !validRun(run, id)) return null;
     if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
@@ -155,9 +191,30 @@ export class SnapshotStore {
     const entries = (await fs.readdir(path.join(this.directory, 'inbox'))).filter(e => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
     for (const entry of entries) {
       const id = entry.slice(0, -5);
+      const aliases = await readJson<Record<string, string>>(path.join(this.directory, 'run-aliases.json'), {});
+      if (aliases[id]) {
+        const source = await this.getRun(id, true, false), target = await this.getRun(id, false, false);
+        if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
+          const saved = await readJson<CaptureRun | null>(path.join(this.directory, 'contributions', entry), null);
+          if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
+            // Keep late source endpoints off-screen. The durable alias, not a selected
+            // session/newer USER, owns them; native tool IDs still verify each endpoint.
+            await atomicJson(path.join(this.directory, 'contributions', entry), { ...source, userMessageId: target.userMessageId });
+            this.pendingRecovery.add(target.sessionId);
+          }
+          await fs.rm(path.join(this.directory, 'inbox', entry), { force: true });
+        }
+        continue;
+      }
       try {
         const run = await this.getRun(id, true, false); if (!run) continue;
+        const inboxWasRunning = run.state === 'running';
         const current = await this.getRun(id, false, false);
+        if (current && (current.sessionId !== run.sessionId || canonical(current.root) !== canonical(run.root))) { await this.audit({ action: 'inbox-identity-root-conflict', runId: id, sessionId: run.sessionId }); continue; }
+        if (current && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
+          if ((run.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
+          if (current.execution && run.execution?.id === current.execution.id && run.execution.revision < current.execution.revision) continue;
+        }
         // A stale inbox must not undo hash-verified native recovery or host settlement.
         // A genuinely newer capture version is still imported normally.
         if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
@@ -166,13 +223,28 @@ export class SnapshotStore {
         if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
           const files: Record<string, string> = Object.create(null);
           for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
-            if (captureCheckpoint(run.changes[value]) !== checkpoint || !current.changes[value]) continue;
-            run.changes[value] = current.changes[value]; files[value] = checkpoint;
+            if (captureCheckpoint(run.changes[value]) !== checkpoint) continue;
+            if (current.changes[value]) run.changes[value] = current.changes[value]; else delete run.changes[value];
+            files[value] = checkpoint;
           }
           if (Object.keys(files).length) {
             run.hostRecovery = { captureVersion: run.contentVersion ?? 0, files };
             const order = [...Object.keys(current.changes).filter(value => run.changes[value]), ...Object.keys(run.changes).filter(value => !current.changes[value])];
             run.changes = Object.fromEntries(order.map(value => [value, run.changes[value]]));
+          }
+        }
+        // A content refresh is not proof of a new execution. Keep trusted settlement
+        // unless an exact runner lifecycle revision explicitly proves continuation.
+        if (current && current.state !== 'running' && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
+          const advanced = !!current.execution && run.execution?.id === current.execution.id && run.execution.revision > current.execution.revision;
+          if (!advanced) {
+            const evidenceChanged = Object.keys({ ...current.changes, ...run.changes }).some(p => captureCheckpoint(run.changes[p]) !== captureCheckpoint(current.changes[p]));
+            const damaged = Object.values(run.changes).some(c => c.ambiguous || c.before.kind === 'unavailable' || c.after.kind === 'unavailable');
+            run.state = current.state; run.endedAt = current.endedAt; run.execution = current.execution;
+            run.userMessageId = current.userMessageId; run.replyMessageId = current.replyMessageId;
+            run.finalReply = current.finalReply; run.replies = current.replies;
+            // Only native recovery can disprove an unchanged legacy damage flag.
+            run.incomplete = current.incomplete || damaged || (run.incomplete && (!current.hostRecovery || evidenceChanged));
           }
         }
         // Main owns bindings, but a steering continuation invalidates the previous final reply.
@@ -182,10 +254,21 @@ export class SnapshotStore {
         await this.writeRun(run);
         if (!current || current.contentVersion !== run.contentVersion || current.state !== run.state || JSON.stringify(current.changes) !== JSON.stringify(run.changes)) this.pendingRecovery.add(run.sessionId);
         // Open runs remain an inbox source; settled ones have no late writer once retired.
-        if (run.state !== 'running') await fs.rm(path.join(this.directory, 'inbox', entry), { force: true });
+        if (run.state !== 'running' && !inboxWasRunning) await fs.rm(path.join(this.directory, 'inbox', entry), { force: true });
       } catch { /* A corrupt capture is isolated, never imported as trusted history. */ }
     }
     });
+  }
+  async captureContributions(): Promise<CaptureRun[]> {
+    const files = (await fs.readdir(path.join(this.directory, 'contributions'))).filter(file => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
+    const sources: CaptureRun[] = [];
+    for (const file of files) {
+      const id = file.slice(0, -5), source = await readJson<CaptureRun | null>(path.join(this.directory, 'contributions', file), null);
+      if (!source || !validRun(source, id)) continue;
+      const target = await this.getRun(id, false, false);
+      if (target?.id !== id && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
+    }
+    return sources;
   }
   async listRuns(hydrate = true, includeUnchanged = false): Promise<CaptureRun[]> {
     const files = (await fs.readdir(path.join(this.directory, 'runs'))).filter(e => /^[\w-]+\.json$/.test(e));
@@ -196,7 +279,7 @@ export class SnapshotStore {
       const page = await Promise.all(selected.slice(offset, offset + 16).map(async file => {
         try { return await this.getRun(file.slice(0, -5), false, hydrate); } catch { return null; }
       }));
-      for (const run of page) if (run && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
+      for (const run of page) if (run && !runs.some(r => r.id === run.id) && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
     }
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
@@ -225,12 +308,14 @@ export class SnapshotStore {
         const run = await this.getRun(file.slice(0, -5), inbox, false);
         if (run?.state === 'running') fail('AGENT_BUSY', 'Stop active captures before clearing history');
       }
-      for (const sub of ['runs', 'inbox', 'blobs', 'backups', 'evidence']) {
+      for (const sub of ['runs', 'inbox', 'contributions', 'blobs', 'backups', 'evidence']) {
         const dir = path.join(this.directory, sub);
         if (!inside(this.directory, dir)) fail('STORE_ESCAPE', 'Invalid store path');
         for (const file of await fs.readdir(dir)) { const target = path.join(dir, file); const s = await fs.lstat(target); if (s.isFile() && !s.isSymbolicLink()) await fs.unlink(target); }
       }
       await this.saveComments([]); await fs.rm(path.join(this.directory, 'restores.json'), { force: true });
+      await fs.rm(path.join(this.directory, 'run-aliases.json'), { force: true });
+      await fs.rm(path.join(this.directory, 'file-aliases.json'), { force: true });
       this.pendingRecovery.clear();
     });
   }

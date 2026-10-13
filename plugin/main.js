@@ -6,8 +6,8 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
+  for (var name2 in all)
+    __defProp(target, name2, { get: all[name2], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -36,8 +36,8 @@ __export(main_exports, {
   onUnload: () => onUnload
 });
 module.exports = __toCommonJS(main_exports);
-var import_promises10 = __toESM(require("node:fs/promises"), 1);
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_promises11 = __toESM(require("node:fs/promises"), 1);
+var import_node_path13 = __toESM(require("node:path"), 1);
 var import_node_crypto10 = require("node:crypto");
 
 // src/core/storage.ts
@@ -315,16 +315,16 @@ var Diff = class {
       }
     }
   }
-  addToPath(path13, added, removed, oldPosInc, options) {
-    const last = path13.lastComponent;
+  addToPath(path14, added, removed, oldPosInc, options) {
+    const last = path14.lastComponent;
     if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
       return {
-        oldPos: path13.oldPos + oldPosInc,
+        oldPos: path14.oldPos + oldPosInc,
         lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
       };
     } else {
       return {
-        oldPos: path13.oldPos + oldPosInc,
+        oldPos: path14.oldPos + oldPosInc,
         lastComponent: { count: 1, added, removed, previousComponent: last }
       };
     }
@@ -719,11 +719,11 @@ async function readJson(file, fallback) {
 async function locatorPath(pluginRoot2) {
   return import_node_path2.default.join(import_node_os.default.homedir(), ".pi-diff-view", "locators", `${digest(canonical(await import_promises2.default.realpath(pluginRoot2)))}.json`);
 }
-function validId(id) {
-  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) fail("INVALID_ID", "Invalid record identifier");
+function validId(id2) {
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id2)) fail("INVALID_ID", "Invalid record identifier");
 }
-function validRun(run2, id) {
-  if (!run2 || ![1, 2].includes(run2.version) || run2.id !== id || typeof run2.sessionId !== "string" || !import_node_path2.default.isAbsolute(run2.root) || !run2.changes || Array.isArray(run2.changes) || Object.keys(run2.changes).length > 256 || !Array.isArray(run2.replies) || !run2.bindings) return false;
+function validRun(run2, id2) {
+  if (!run2 || ![1, 2].includes(run2.version) || run2.id !== id2 || typeof run2.sessionId !== "string" || !import_node_path2.default.isAbsolute(run2.root) || !run2.changes || Array.isArray(run2.changes) || Object.keys(run2.changes).length > 256 || !Array.isArray(run2.replies) || !run2.bindings) return false;
   try {
     for (const [value, change] of Object.entries(run2.changes)) {
       assertPublicPath(value);
@@ -755,7 +755,43 @@ var SnapshotStore = class {
     this.pendingRecovery.delete(sessionId);
   }
   async init() {
-    for (const sub of ["blobs", "inbox", "runs", "backups", "evidence"]) await import_promises2.default.mkdir(import_node_path2.default.join(this.directory, sub), { recursive: true, mode: 448 });
+    for (const sub of ["blobs", "inbox", "runs", "contributions", "backups", "evidence"]) await import_promises2.default.mkdir(import_node_path2.default.join(this.directory, sub), { recursive: true, mode: 448 });
+  }
+  /** Called under captureLock after the destination has been durably written. */
+  async retireRun(from, to) {
+    validId(from);
+    validId(to);
+    if (from === to) return;
+    const target = await this.getRun(to, false, false);
+    const recorded = await this.getRun(from, false, false);
+    const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
+    const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
+    if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail("REPAIR_IDENTITY", "Cannot retire unverified run identity");
+    const fileAliases = await readJson(import_node_path2.default.join(this.directory, "file-aliases.json"), {});
+    const paths = /* @__PURE__ */ new Map();
+    for (const [value, change] of Object.entries(source.changes)) {
+      const match = target.changes[value] ? value : Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === change.capture?.identity);
+      if (!match) continue;
+      paths.set(value, match);
+      if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture.id;
+    }
+    await atomicJson(import_node_path2.default.join(this.directory, "file-aliases.json"), fileAliases);
+    const comments = await this.comments();
+    for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
+      comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path) };
+      comment.stale = true;
+    }
+    await this.saveComments(comments);
+    const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
+    aliases[from] = to;
+    await atomicJson(import_node_path2.default.join(this.directory, "run-aliases.json"), aliases);
+    if (recorded) await atomicJson(import_node_path2.default.join(this.directory, "contributions", `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
+    for (const sub of ["runs", "inbox"]) await import_promises2.default.rm(import_node_path2.default.join(this.directory, sub, `${from}.json`), { force: true });
+  }
+  async resolveFileId(runId, fileId) {
+    if (!fileId) return fileId;
+    const aliases = await readJson(import_node_path2.default.join(this.directory, "file-aliases.json"), {});
+    return aliases[`${runId}:${fileId}`] ?? fileId;
   }
   async captureLock(work) {
     const lock = import_node_path2.default.join(this.directory, "capture.lock");
@@ -878,10 +914,20 @@ var SnapshotStore = class {
     if (inbox) await this.captureLock(save);
     else await save();
   }
-  async getRun(id, inbox = false, hydrate = true) {
-    validId(id);
-    const run2 = await readJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${id}.json`), null);
-    if (!run2 || !validRun(run2, id)) return null;
+  async getRun(id2, inbox = false, hydrate = true) {
+    validId(id2);
+    if (!inbox) {
+      const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
+      const seen = /* @__PURE__ */ new Set();
+      while (aliases[id2]) {
+        if (seen.has(id2) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
+        seen.add(id2);
+        id2 = aliases[id2];
+        validId(id2);
+      }
+    }
+    const run2 = await readJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${id2}.json`), null);
+    if (!run2 || !validRun(run2, id2)) return null;
     if (hydrate) for (const [p, c] of Object.entries(run2.changes)) run2.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
     return run2;
   }
@@ -889,23 +935,61 @@ var SnapshotStore = class {
     await this.captureLock(async () => {
       const entries = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
       for (const entry of entries) {
-        const id = entry.slice(0, -5);
+        const id2 = entry.slice(0, -5);
+        const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
+        if (aliases[id2]) {
+          const source = await this.getRun(id2, true, false), target = await this.getRun(id2, false, false);
+          if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
+            const saved = await readJson(import_node_path2.default.join(this.directory, "contributions", entry), null);
+            if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
+              await atomicJson(import_node_path2.default.join(this.directory, "contributions", entry), { ...source, userMessageId: target.userMessageId });
+              this.pendingRecovery.add(target.sessionId);
+            }
+            await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
+          }
+          continue;
+        }
         try {
-          const run2 = await this.getRun(id, true, false);
+          const run2 = await this.getRun(id2, true, false);
           if (!run2) continue;
-          const current = await this.getRun(id, false, false);
+          const inboxWasRunning = run2.state === "running";
+          const current = await this.getRun(id2, false, false);
+          if (current && (current.sessionId !== run2.sessionId || canonical(current.root) !== canonical(run2.root))) {
+            await this.audit({ action: "inbox-identity-root-conflict", runId: id2, sessionId: run2.sessionId });
+            continue;
+          }
+          if (current && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
+            if ((run2.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
+            if (current.execution && run2.execution?.id === current.execution.id && run2.execution.revision < current.execution.revision) continue;
+          }
           if (current?.hostRecovery && (run2.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
           if (current?.hostRecovery?.files && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root) && (!run2.userMessageId || run2.userMessageId === current.userMessageId)) {
             const files = /* @__PURE__ */ Object.create(null);
             for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
-              if (captureCheckpoint(run2.changes[value]) !== checkpoint || !current.changes[value]) continue;
-              run2.changes[value] = current.changes[value];
+              if (captureCheckpoint(run2.changes[value]) !== checkpoint) continue;
+              if (current.changes[value]) run2.changes[value] = current.changes[value];
+              else delete run2.changes[value];
               files[value] = checkpoint;
             }
             if (Object.keys(files).length) {
               run2.hostRecovery = { captureVersion: run2.contentVersion ?? 0, files };
               const order = [...Object.keys(current.changes).filter((value) => run2.changes[value]), ...Object.keys(run2.changes).filter((value) => !current.changes[value])];
               run2.changes = Object.fromEntries(order.map((value) => [value, run2.changes[value]]));
+            }
+          }
+          if (current && current.state !== "running" && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
+            const advanced = !!current.execution && run2.execution?.id === current.execution.id && run2.execution.revision > current.execution.revision;
+            if (!advanced) {
+              const evidenceChanged = Object.keys({ ...current.changes, ...run2.changes }).some((p) => captureCheckpoint(run2.changes[p]) !== captureCheckpoint(current.changes[p]));
+              const damaged = Object.values(run2.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
+              run2.state = current.state;
+              run2.endedAt = current.endedAt;
+              run2.execution = current.execution;
+              run2.userMessageId = current.userMessageId;
+              run2.replyMessageId = current.replyMessageId;
+              run2.finalReply = current.finalReply;
+              run2.replies = current.replies;
+              run2.incomplete = current.incomplete || damaged || run2.incomplete && (!current.hostRecovery || evidenceChanged);
             }
           }
           const sameReply = run2.finalReply?.hash === current?.finalReply?.hash && run2.finalReply?.timestamp === current?.finalReply?.timestamp;
@@ -916,11 +1000,22 @@ var SnapshotStore = class {
           }
           await this.writeRun(run2);
           if (!current || current.contentVersion !== run2.contentVersion || current.state !== run2.state || JSON.stringify(current.changes) !== JSON.stringify(run2.changes)) this.pendingRecovery.add(run2.sessionId);
-          if (run2.state !== "running") await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
+          if (run2.state !== "running" && !inboxWasRunning) await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
         } catch {
         }
       }
     });
+  }
+  async captureContributions() {
+    const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "contributions"))).filter((file) => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
+    const sources = [];
+    for (const file of files) {
+      const id2 = file.slice(0, -5), source = await readJson(import_node_path2.default.join(this.directory, "contributions", file), null);
+      if (!source || !validRun(source, id2)) continue;
+      const target = await this.getRun(id2, false, false);
+      if (target?.id !== id2 && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
+    }
+    return sources;
   }
   async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
@@ -934,7 +1029,7 @@ var SnapshotStore = class {
           return null;
         }
       }));
-      for (const run2 of page) if (run2 && (includeUnchanged || Object.keys(run2.changes).length > 0)) runs.push(run2);
+      for (const run2 of page) if (run2 && !runs.some((r) => r.id === run2.id) && (includeUnchanged || Object.keys(run2.changes).length > 0)) runs.push(run2);
     }
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
@@ -974,7 +1069,7 @@ var SnapshotStore = class {
         const run2 = await this.getRun(file.slice(0, -5), inbox, false);
         if (run2?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
       }
-      for (const sub of ["runs", "inbox", "blobs", "backups", "evidence"]) {
+      for (const sub of ["runs", "inbox", "contributions", "blobs", "backups", "evidence"]) {
         const dir = import_node_path2.default.join(this.directory, sub);
         if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
         for (const file of await import_promises2.default.readdir(dir)) {
@@ -985,6 +1080,8 @@ var SnapshotStore = class {
       }
       await this.saveComments([]);
       await import_promises2.default.rm(import_node_path2.default.join(this.directory, "restores.json"), { force: true });
+      await import_promises2.default.rm(import_node_path2.default.join(this.directory, "run-aliases.json"), { force: true });
+      await import_promises2.default.rm(import_node_path2.default.join(this.directory, "file-aliases.json"), { force: true });
       this.pendingRecovery.clear();
     });
   }
@@ -1050,6 +1147,31 @@ function isImagePath(filePath2) {
   return dot > 0 && dot < basename.length - 1 && IMAGE_EXTENSIONS.has(basename.slice(dot + 1).toLowerCase());
 }
 
+// src/agent/workspace-capture.ts
+var import_promises3 = __toESM(require("node:fs/promises"), 1);
+var import_node_path4 = __toESM(require("node:path"), 1);
+
+// src/core/capture-context.ts
+var import_node_path3 = __toESM(require("node:path"), 1);
+var CAPTURE_CONTEXT_TTL = 6e3;
+async function writeCaptureContexts(directory, generation2, contexts2) {
+  await atomicJson(import_node_path3.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
+}
+
+// src/agent/workspace-capture.ts
+async function inspectCaptureLeases(store2) {
+  const file = import_node_path4.default.join(store2.directory, "capture-leases.json");
+  const stat = await import_promises3.default.lstat(file).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!stat) return { fingerprint: digest("absent"), leases: [] };
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error("Unsafe lease journal");
+  const text2 = await import_promises3.default.readFile(file, "utf8"), data = JSON.parse(text2);
+  if (data.version !== 1 || !Array.isArray(data.leases)) throw new Error("Invalid lease journal");
+  return { fingerprint: digest(text2), leases: data.leases };
+}
+
 // src/core/reply-content.ts
 var MAX_REPLY_PAYLOAD = 24e3;
 var encoder = new TextEncoder();
@@ -1067,67 +1189,67 @@ function finalReplyCandidates(content) {
 }
 
 // src/core/review-service.ts
-var import_node_path6 = __toESM(require("node:path"), 1);
+var import_node_path8 = __toESM(require("node:path"), 1);
 var import_node_crypto5 = require("node:crypto");
 
 // src/core/rollback.ts
-var import_promises3 = __toESM(require("node:fs/promises"), 1);
+var import_promises4 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs2 = require("node:fs");
-var import_node_path3 = __toESM(require("node:path"), 1);
+var import_node_path5 = __toESM(require("node:path"), 1);
 var import_node_crypto3 = require("node:crypto");
 async function replaceSnapshot(root, value, expected, desired, backupDir) {
   if (expected.kind !== "text" || desired.kind !== "text" || desired.exists && (desired.text === null || digest(desired.text) !== desired.hash)) fail("RESTORE_UNAVAILABLE", "Complete validated text snapshots are required");
   const target = await safeResolve(root, value);
   if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed outside this review; refresh before retrying");
-  await import_promises3.default.mkdir(backupDir, { recursive: true, mode: 448 });
-  const backups = await import_promises3.default.readdir(backupDir);
+  await import_promises4.default.mkdir(backupDir, { recursive: true, mode: 448 });
+  const backups = await import_promises4.default.readdir(backupDir);
   let backupBytes = 0;
-  for (const file of backups) backupBytes += (await import_promises3.default.stat(import_node_path3.default.join(backupDir, file))).size;
+  for (const file of backups) backupBytes += (await import_promises4.default.stat(import_node_path5.default.join(backupDir, file))).size;
   if (backups.length >= 998 || backupBytes + 2 * expected.size + desired.size + 8192 > 64 * 1024 * 1024) fail("BACKUP_LIMIT", "Recovery backup limit reached; export needed backups before clearing plugin history");
-  const id = (0, import_node_crypto3.randomUUID)(), record = import_node_path3.default.join(backupDir, `${id}.json`);
+  const id2 = (0, import_node_crypto3.randomUUID)(), record = import_node_path5.default.join(backupDir, `${id2}.json`);
   await atomicJson(record, { version: 1, root, path: value, before: expected, after: desired });
   if (!expected.exists && !desired.exists) return;
-  await import_promises3.default.mkdir(import_node_path3.default.dirname(target), { recursive: true });
+  await import_promises4.default.mkdir(import_node_path5.default.dirname(target), { recursive: true });
   await safeResolve(root, value);
-  const temp = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id}.tmp`);
-  const original = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id}.original`);
-  const originalRel = import_node_path3.default.relative(root, original);
+  const temp = import_node_path5.default.join(import_node_path5.default.dirname(target), `.diff-view-${id2}.tmp`);
+  const original = import_node_path5.default.join(import_node_path5.default.dirname(target), `.diff-view-${id2}.original`);
+  const originalRel = import_node_path5.default.relative(root, original);
   let held = false;
   try {
     if (desired.exists) {
-      const handle = await import_promises3.default.open(temp, "wx", desired.mode & 511 || 420);
+      const handle = await import_promises4.default.open(temp, "wx", desired.mode & 511 || 420);
       try {
         await handle.writeFile(desired.text, "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
-      if (process.platform !== "win32") await import_promises3.default.chmod(temp, desired.mode & 511);
+      if (process.platform !== "win32") await import_promises4.default.chmod(temp, desired.mode & 511);
     }
     await safeResolve(root, value);
     if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed before restore");
     if (expected.exists) {
-      await import_promises3.default.rename(target, original);
+      await import_promises4.default.rename(target, original);
       held = true;
       const actual = await readSnapshot(root, originalRel);
       if (!sameSnapshot(actual, expected)) fail("FILE_CONFLICT", "Actual moved file changed; original content will be preserved");
-      const rawBackup = import_node_path3.default.join(backupDir, `${id}.original`);
-      await import_promises3.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
-      await import_promises3.default.chmod(rawBackup, 384);
+      const rawBackup = import_node_path5.default.join(backupDir, `${id2}.original`);
+      await import_promises4.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
+      await import_promises4.default.chmod(rawBackup, 384);
       if (!sameSnapshot(await readSnapshot(root, originalRel), expected)) fail("FILE_CONFLICT", "Moved file changed while backing up");
     }
-    if (desired.exists) await import_promises3.default.link(temp, target);
+    if (desired.exists) await import_promises4.default.link(temp, target);
     else if ((await readSnapshot(root, value)).exists) fail("FILE_CONFLICT", "Another file appeared before deletion completed");
     if (held) {
-      await import_promises3.default.unlink(original);
+      await import_promises4.default.unlink(original);
       held = false;
     }
   } catch (error) {
     if (held) {
       try {
         await safeResolve(root, value);
-        await import_promises3.default.link(original, target);
-        await import_promises3.default.unlink(original);
+        await import_promises4.default.link(original, target);
+        await import_promises4.default.unlink(original);
         held = false;
       } catch {
       }
@@ -1136,13 +1258,13 @@ async function replaceSnapshot(root, value, expected, desired, backupDir) {
     if (error.code === "EEXIST") fail("FILE_CONFLICT", "Another file appeared; it was not overwritten");
     throw error;
   } finally {
-    await import_promises3.default.rm(temp, { force: true });
+    await import_promises4.default.rm(temp, { force: true });
   }
 }
 
 // src/git/repository.ts
-var import_promises4 = __toESM(require("node:fs/promises"), 1);
-var import_node_path4 = __toESM(require("node:path"), 1);
+var import_promises5 = __toESM(require("node:fs/promises"), 1);
+var import_node_path6 = __toESM(require("node:path"), 1);
 var import_node_crypto4 = require("node:crypto");
 
 // src/git/runner.ts
@@ -1303,12 +1425,12 @@ function reviewState(review) {
   return state;
 }
 async function discoverRepository(authorizedRoot, includeBranch = true) {
-  const root = await import_promises4.default.realpath(authorizedRoot);
-  if (!(await import_promises4.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
-  const result = { root, name: import_node_path4.default.basename(root), git: false };
+  const root = await import_promises5.default.realpath(authorizedRoot);
+  if (!(await import_promises5.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
+  const result = { root, name: import_node_path6.default.basename(root), git: false };
   const top = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true, limit: 16384 });
   if (top.code !== 0) return result;
-  const gitRoot = await import_promises4.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
+  const gitRoot = await import_promises5.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
   if (canonical(gitRoot) !== canonical(root)) return result;
   result.git = true;
   if (!includeBranch) return result;
@@ -1330,10 +1452,10 @@ async function boundedRead(handle, size, code) {
 async function readIndex(indexPath) {
   let handle;
   try {
-    const stat = await import_promises4.default.lstat(indexPath);
+    const stat = await import_promises5.default.lstat(indexPath);
     if (!stat.isFile() || stat.isSymbolicLink()) fail("INDEX_DENIED", "Git index must be a regular file");
     if (stat.size > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
-    handle = await import_promises4.default.open(indexPath, "r");
+    handle = await import_promises5.default.open(indexPath, "r");
     const bytes = await boundedRead(handle, stat.size, "STALE_INDEX");
     if (bytes.length > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
     const after = await handle.stat();
@@ -1364,21 +1486,21 @@ async function captureWorking(root, rel, reserve, onBytes) {
     target = await safeResolve(root, rel);
   } catch (error) {
     if (error.code !== "SYMLINK_DENIED") throw error;
-    const parent = import_node_path4.default.posix.dirname(rel);
+    const parent = import_node_path6.default.posix.dirname(rel);
     if (parent !== ".") await safeResolve(root, parent);
-    const leaf = import_node_path4.default.resolve(root, rel);
-    const stat = await import_promises4.default.lstat(leaf);
+    const leaf = import_node_path6.default.resolve(root, rel);
+    const stat = await import_promises5.default.lstat(leaf);
     if (!stat.isSymbolicLink()) throw error;
-    return metadata("symlink", digest(await import_promises4.default.readlink(leaf)), 40960, stat.size);
+    return metadata("symlink", digest(await import_promises5.default.readlink(leaf)), 40960, stat.size);
   }
   let handle;
   try {
-    const stat = await import_promises4.default.lstat(target);
+    const stat = await import_promises5.default.lstat(target);
     if (stat.isDirectory()) return metadata("submodule", `directory:${stat.mtimeMs}`, 57344);
     if (!stat.isFile()) return metadata("unavailable", `special:${stat.mode}`, stat.mode);
     if (stat.size > MAX_TEXT_BYTES) return metadata("large", `large:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
     if (!await reserve(stat.size)) return metadata("unavailable", `budget:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
-    handle = await import_promises4.default.open(target, "r");
+    handle = await import_promises5.default.open(target, "r");
     const opened = await handle.stat();
     if (!opened.isFile() || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs)
       fail("FILE_CHANGED", "Working file changed during capture");
@@ -1658,12 +1780,12 @@ async function readGitReview(requestedRoot, scope, ref) {
       note = "Rename: only whole-file index unstage is supported; working rename/revert and hunks are read-only.";
     } else if (scope === "unstaged") actions = ["stage", "revert"];
     else if (scope === "staged") actions = ["unstage"];
-    const id = digest(`${root}\0${scope}\0${change.path}\0${change.oldPath ?? ""}`).slice(0, 32);
+    const id2 = digest(`${root}\0${scope}\0${change.path}\0${change.oldPath ?? ""}`).slice(0, 32);
     const fingerprint = digest(JSON.stringify({ scope, change, before, after, index: index.fingerprint, working, oldWorking }));
-    const file = { id, ...change, kind, ...counts, fingerprint, actions, before, after, indexFingerprint: index.fingerprint, ...note ? { note } : {} };
+    const file = { id: id2, ...change, kind, ...counts, fingerprint, actions, before, after, indexFingerprint: index.fingerprint, ...note ? { note } : {} };
     if (review.files.length >= 1e3) fail("GIT_LIMIT", "More than 1000 changed files; use a smaller repository");
     review.files.push(file);
-    state.files.set(id, structuredClone(file));
+    state.files.set(id2, structuredClone(file));
     state.working.set(change.path, working);
     if (change.oldPath && oldWorking) state.working.set(change.oldPath, oldWorking);
   }
@@ -1712,8 +1834,8 @@ async function readGitReview(requestedRoot, scope, ref) {
 }
 
 // src/git/actions.ts
-var import_promises5 = __toESM(require("node:fs/promises"), 1);
-var import_node_path5 = __toESM(require("node:path"), 1);
+var import_promises6 = __toESM(require("node:fs/promises"), 1);
+var import_node_path7 = __toESM(require("node:path"), 1);
 var import_node_os2 = __toESM(require("node:os"), 1);
 function reverseHunkText(before, after, hunkId) {
   const hunk = buildHunks(before, after).find((h) => h.id === hunkId);
@@ -1766,7 +1888,7 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
   const lockPath = `${state.indexPath}.lock`;
   let lock;
   try {
-    lock = await import_promises5.default.open(lockPath, "wx", 384);
+    lock = await import_promises6.default.open(lockPath, "wx", 384);
   } catch (error) {
     if (error.code === "EEXIST") fail("INDEX_LOCKED", "Git index is locked; retry after the other operation finishes");
     throw error;
@@ -1779,11 +1901,11 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
       await replaceSnapshot(state.root, file.path, state.working.get(file.path), desired, backupDir);
       return;
     }
-    tempDir = await import_promises5.default.mkdtemp(import_node_path5.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
-    const tempIndex = import_node_path5.default.join(tempDir, "index");
+    tempDir = await import_promises6.default.mkdtemp(import_node_path7.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
+    const tempIndex = import_node_path7.default.join(tempDir, "index");
     const current = await readIndex(state.indexPath);
     if (current.fingerprint !== state.indexFingerprint) fail("STALE_INDEX", "Index changed; refresh the review");
-    if (current.bytes) await import_promises5.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
+    if (current.bytes) await import_promises6.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
     else await git(state.root, ["read-tree", "--empty"], { index: tempIndex, limit: 4096 });
     await git(state.root, ["update-index", "--no-split-index"], { index: tempIndex, limit: 4096 });
     const changes2 = file.oldPath ? action === "stage" ? [{ path: file.oldPath, snapshot: absentSnapshot() }, { path: file.path, snapshot: desired }] : [{ path: file.path, snapshot: absentSnapshot() }, { path: file.oldPath, snapshot: file.before }] : [{ path: file.path, snapshot: desired }];
@@ -1809,14 +1931,14 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
     await lock.sync();
     await guard(state, file, action);
     await lock.close();
-    await import_promises5.default.rename(lockPath, state.indexPath);
+    await import_promises6.default.rename(lockPath, state.indexPath);
     installed = true;
   } finally {
     await lock.close().catch(() => {
     });
-    if (!installed) await import_promises5.default.unlink(lockPath).catch(() => {
+    if (!installed) await import_promises6.default.unlink(lockPath).catch(() => {
     });
-    if (tempDir) await import_promises5.default.rm(tempDir, { recursive: true, force: true });
+    if (tempDir) await import_promises6.default.rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -1859,8 +1981,9 @@ var ReviewService = class {
   async selectTarget(args) {
     this.validateTurn(args);
     const run2 = args.runningSince == null ? await this.store.getRun(args.runId, false, false) : await this.currentRunningRun({ sessionId: args.sessionId, since: args.runningSince, taskId: args.taskId });
-    if (!run2 || run2.id !== args.runId || run2.sessionId !== args.sessionId) fail("RUN_NOT_FOUND", args.runningSince == null ? "Recorded run not found in this session" : "Recorded run is no longer current in this session");
-    if (args.fileId && !Object.entries(run2.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === args.fileId)) fail("FILE_MISSING", "Recorded file no longer available; refresh");
+    if (!run2 || args.runningSince != null && run2.id !== args.runId || run2.sessionId !== args.sessionId) fail("RUN_NOT_FOUND", args.runningSince == null ? "Recorded run not found in this session" : "Recorded run is no longer current in this session");
+    const fileId = await this.store.resolveFileId(args.runId, args.fileId);
+    if (fileId && !Object.entries(run2.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === fileId)) fail("FILE_MISSING", "Recorded file no longer available; refresh");
     return run2;
   }
   async bootstrap(sessionId) {
@@ -1875,15 +1998,18 @@ var ReviewService = class {
         if (!repositories.some((r) => canonical(r.root) === canonical(repo.root))) repositories.push(repo);
         this.allowed.add(canonical(repo.root));
       } catch {
-        repositories.push({ root, name: import_node_path6.default.basename(root), git: false });
+        repositories.push({ root, name: import_node_path8.default.basename(root), git: false });
       }
     }
     this.mutableRoots = new Set(this.allowed);
     const runs = (await this.store.listRuns(false, true)).filter((r) => Object.keys(r.changes).length > 0 || r.version === 2 && r.boundary === "user" && r.state === "running");
     const filtered = sessionId ? runs.filter((r) => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
+    const leases = await inspectCaptureLeases(this.store).catch(() => null);
+    const unresolved = leases?.leases.filter((l) => !l.sessionId && filtered.some((r) => canonical(r.root) === canonical(l.root))).length ?? 0;
+    const recoveryNotice = [sessionId ? this.recoveryNotices.get(sessionId) : void 0, unresolved ? `${unresolved} \u9879\u5386\u53F2\u79DF\u7EA6\u7F3A\u5C11\u751F\u547D\u5468\u671F\u8BC1\u636E\uFF0C\u53EF\u80FD\u5F71\u54CD\u5F52\u5C5E\uFF1B\u8BF7\u5148\u9884\u89C8\u5E76\u786E\u8BA4\u65E7 runner/\u540E\u53F0\u5199\u5165\u5DF2\u505C\u6B62\uFF0C\u4E0D\u80FD\u76F4\u63A5\u6E05\u7A7A\u3002` : void 0].filter(Boolean).join(" ") || void 0;
     const appearance = await this.host.appearance().catch(() => ({})), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice: sessionId ? this.recoveryNotices.get(sessionId) : void 0, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   validateTurn(args, requireRun = true) {
     if (typeof args.sessionId !== "string" || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail("SESSION_REQUIRED", "A valid sessionId is required for recorded turns");
@@ -1926,7 +2052,8 @@ var ReviewService = class {
     const explicit = args.taskId ? runs.filter((run2) => run2.userMessageId === args.taskId && run2.state === "running") : [];
     if (explicit.length) {
       const run2 = explicit[0];
-      if (explicit.length !== 1 || !eligible(run2) || run2.generation !== this.generation && run2.source !== "host-history" && !run2.hostRecovery || runs.some((other) => other.startedAt > run2.startedAt && other.userMessageId && other.userMessageId !== run2.userMessageId)) return null;
+      const childRunning = run2.delegations?.some((child) => child.owner === run2.userMessageId && child.status === "running");
+      if (explicit.length !== 1 || !eligible(run2) || run2.generation !== this.generation && run2.source !== "host-history" && !run2.hostRecovery || !childRunning && runs.some((other) => other.startedAt > run2.startedAt && other.userMessageId && other.userMessageId !== run2.userMessageId)) return null;
       return run2;
     }
     if (!args.since) return null;
@@ -1944,7 +2071,7 @@ var ReviewService = class {
     return { runId: run2.id, sessionId: run2.sessionId, startedAt: run2.startedAt, fileCount: summary.fileCount, additions: summary.additions, deletions: summary.deletions, unknownFileCount: summary.unknownFileCount, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark" };
   }
   async summarizeRun(run2, args, readOnly = false, netOnly = false) {
-    const states2 = readOnly ? {} : await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+    const states2 = readOnly ? {} : await readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {});
     const { bindings: _bindings, cardPreview: _preview, ...content } = run2;
     const key = digest(JSON.stringify(["stats-known-v1", content, states2, readOnly ? [] : [...this.mutableRoots].sort(), readOnly, netOnly]));
     let cached = this.summaries.get(run2.id);
@@ -1993,8 +2120,10 @@ var ReviewService = class {
     if (request.scope === "lastTurn" || request.scope === "turn") {
       this.validateTurn(request, request.scope === "turn");
       if (!inboxImported) await this.store.importInbox(this.generation);
-      if (request.scope === "turn") run2 = await this.store.getRun(request.runId, false, false) ?? void 0;
-      else {
+      if (request.scope === "turn") {
+        run2 = await this.store.getRun(request.runId, false, false) ?? void 0;
+        if (run2 && run2.id !== request.runId) root = run2.root;
+      } else {
         const runs = (await this.store.listRuns(false, true)).filter((r) => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
         run2 = runs.find((r) => Object.keys(r.changes).some((value) => !isImagePath(value)));
       }
@@ -2006,7 +2135,7 @@ var ReviewService = class {
       } else {
         root = run2.root;
         if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
-        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {});
         const entries = Object.entries(run2.changes).filter(([value]) => !isImagePath(value));
         for (let offset = 0; offset < entries.length; offset += 16) {
           const currentRun = run2;
@@ -2072,8 +2201,8 @@ var ReviewService = class {
     if (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > review.files.length) fail("INVALID_OFFSET", "Invalid file-list offset");
     return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
   }
-  get(id) {
-    const r = this.reviews.get(id);
+  get(id2) {
+    const r = this.reviews.get(id2);
     if (!r || Date.now() - r.createdAt > 30 * 60 * 1e3) fail("REVIEW_EXPIRED", "Review expired; refresh");
     return r;
   }
@@ -2086,7 +2215,7 @@ var ReviewService = class {
   async hydrateFile(review, file) {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
-    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {})]);
+    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {})]);
     Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states2));
     review.hydratedFiles?.add(file.id);
   }
@@ -2140,7 +2269,7 @@ var ReviewService = class {
       if (file) await this.hydrateFile(review, file);
       if (!file || file.fingerprint !== args.fingerprint || !file.actions.includes(args.action)) fail("ACTION_DENIED", "Action is not available for this version");
       if (file.origin === "external" || !this.mutableRoots.has(canonical(review.summary.root))) fail("ACTION_DENIED", "External or historical project captures are read-only");
-      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path6.default.join(this.store.directory, "backups"));
+      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path8.default.join(this.store.directory, "backups"));
       else if (review.run) {
         if (args.hunkId) fail("ACTION_DENIED", "Turn restore requires a complete file snapshot");
         await this.store.importInbox(this.generation);
@@ -2149,12 +2278,12 @@ var ReviewService = class {
         const latestChange = latest.changes[file.path];
         if (latestChange?.capture?.origin !== "workspace") fail("ACTION_DENIED", "External captures cannot authorize mutations");
         if (!latestChange || !sameSnapshot(latestChange.before, file.before) || !sameSnapshot(latestChange.after, file.after)) fail("FILE_CONFLICT", "Captured file version changed; refresh");
-        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path8.default.join(this.store.directory, "restores.json"), {});
         const key = `${review.run.id}:${file.path}`;
         if (states2[key] === "reverted" !== (args.action === "reapply")) fail("FILE_CONFLICT", "Restore state changed; refresh");
-        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path6.default.join(this.store.directory, "backups"));
+        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path8.default.join(this.store.directory, "backups"));
         states2[key] = args.action === "reapply" ? "active" : "reverted";
-        await atomicJson(import_node_path6.default.join(this.store.directory, "restores.json"), states2);
+        await atomicJson(import_node_path8.default.join(this.store.directory, "restores.json"), states2);
       } else fail("ACTION_DENIED", "Read-only scope");
       await this.store.audit({ action: args.action, root: review.summary.root, path: file.path, runId: review.run?.id, hunkId: args.hunkId });
       this.reviews.delete(args.reviewId);
@@ -2287,7 +2416,7 @@ ${text2}`;
     const matches = runs.filter((r) => r.version === 2 && r.boundary === "user" && r.state !== "running" && r.state !== "aborted" && Number.isFinite(r.endedAt) && r.sessionId === args.sessionId && Object.keys(r.changes).some((value) => !isImagePath(value)) && r.finalReply && hashes.has(r.finalReply.hash) && Math.abs(r.finalReply.timestamp - timestamp) < 3e3 && r.replies.filter((p) => p.hash === r.finalReply.hash && Math.abs(p.timestamp - timestamp) < 3e3).length === 1);
     if (matches.length !== 1) return { run: null };
     const run2 = matches[0];
-    if (Object.values(run2.bindings).some((id) => id !== args.messageId)) return { run: null };
+    if (Object.values(run2.bindings).some((id2) => id2 !== args.messageId)) return { run: null };
     run2.bindings[run2.finalReply.hash] = args.messageId;
     const summary = await this.cardPreview(run2);
     await this.store.writeRun(run2);
@@ -2343,7 +2472,7 @@ ${text2}`;
       case "copyPath": {
         const review = this.get(args.reviewId), file = review.files.find((file2) => file2.id === args.fileId);
         if (!file) fail("FILE_NOT_FOUND", "No validated review file for this path");
-        const value = file.absolutePath ?? import_node_path6.default.resolve(review.summary.root, file.path);
+        const value = file.absolutePath ?? import_node_path8.default.resolve(review.summary.root, file.path);
         assertPublicPath(file.path);
         await this.host.clipboard(value);
         return { ok: true };
@@ -2385,9 +2514,9 @@ var JobQueue = class {
     if (!["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
     const navigation2 = method === "selectTurn";
     if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2).length >= (navigation2 ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
-    for (const [id2, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id2);
-    const id = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {} };
-    this.jobs.set(id, job);
+    for (const [id3, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id3);
+    const id2 = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {} };
+    this.jobs.set(id2, job);
     const work = async () => {
       await new Promise((r) => setTimeout(r, 0));
       if (this.closed) return;
@@ -2408,17 +2537,17 @@ var JobQueue = class {
     };
     if (navigation2) void work();
     else this.tail = this.tail.then(work);
-    return { jobId: id };
+    return { jobId: id2 };
   }
-  poll(id) {
-    const j = this.jobs.get(id);
+  poll(id2) {
+    const j = this.jobs.get(id2);
     if (!j || this.closed) fail("JOB_EXPIRED", "Review operation expired");
     return { ...j };
   }
-  async wait(id, milliseconds) {
+  async wait(id2, milliseconds) {
     const end = Date.now() + Math.max(0, Math.min(40, milliseconds));
-    while (this.poll(id).state === "pending" && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 2));
-    return this.poll(id);
+    while (this.poll(id2).state === "pending" && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 2));
+    return this.poll(id2);
   }
   close() {
     this.closed = true;
@@ -2427,8 +2556,8 @@ var JobQueue = class {
 };
 
 // src/core/native-host-build.ts
-var import_promises6 = __toESM(require("node:fs/promises"), 1);
-var import_node_path7 = __toESM(require("node:path"), 1);
+var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_node_path9 = __toESM(require("node:path"), 1);
 
 // src/core/native-build-contract.ts
 var NATIVE_BUILD = {
@@ -2449,12 +2578,12 @@ async function inspectNativeHostBuild(version, executable = process.execPath) {
   if (version !== NATIVE_BUILD.version) return { version, hashes, supported: false, reason: `Only the inspected PI-Desktop ${NATIVE_BUILD.version} build is supported` };
   let handle;
   try {
-    let archiveFs = import_promises6.default;
+    let archiveFs = import_promises7.default;
     try {
       archiveFs = require("original-fs").promises;
     } catch {
     }
-    const archive = import_node_path7.default.join(import_node_path7.default.dirname(executable), "resources", "app.asar");
+    const archive = import_node_path9.default.join(import_node_path9.default.dirname(executable), "resources", "app.asar");
     const stat = await archiveFs.lstat(archive);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Host archive is not a regular file");
     handle = await archiveFs.open(archive, "r");
@@ -2518,10 +2647,79 @@ var ReviewNavigationStore = class {
   }
 };
 
+// src/core/delegation-lifecycle.ts
+var name = (value) => String(value).split(".").pop().toLowerCase();
+var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
+function safeDelegation(value) {
+  if (!value || !id(value.delegationId) || !["running", "completed", "failed", "aborted", "stopped"].includes(value.status) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0) return void 0;
+  return { delegationId: value.delegationId, status: value.status, startedAt: value.startedAt, ...Number.isSafeInteger(value.completedAt) && value.completedAt >= value.startedAt ? { completedAt: value.completedAt } : {} };
+}
+function safeTaskDetails(tool, details) {
+  if (!details || typeof details !== "object") return void 0;
+  if (name(tool) === "task") return safeDelegation(details);
+  if (!["taskwait", "task_wait", "tasklist", "taskstop"].includes(name(tool))) return void 0;
+  const output2 = {};
+  for (const key of ["delegations", "stopped", "stopPending", "settled"]) if (Array.isArray(details[key])) output2[key] = details[key].slice(0, 256).map(safeDelegation).filter(Boolean);
+  return Object.keys(output2).length ? output2 : void 0;
+}
+function messageOwners(messages) {
+  const aliases = /* @__PURE__ */ new Map(), sequential = /* @__PURE__ */ new Map();
+  let current;
+  for (const message of messages) {
+    if (message.role === "user" && !message.meta.parentMessageId && !message.meta.steering) current = message.id;
+    if (current && !message.meta.parentMessageId) sequential.set(message.id, current);
+    aliases.set(message.id, message);
+    for (const block of message.blocks) if (block.type === "tool_call" && id(block.callId)) aliases.set(block.callId, message);
+  }
+  const owner = (message, seen = /* @__PURE__ */ new Set()) => {
+    if (seen.has(message.id)) return void 0;
+    seen.add(message.id);
+    if (message.meta.userMessageId !== void 0) {
+      const user = aliases.get(message.meta.userMessageId);
+      return user?.role === "user" && !user.meta.parentMessageId ? user.id : void 0;
+    }
+    if (message.meta.parentMessageId) {
+      const parent = aliases.get(message.meta.parentMessageId);
+      return parent ? owner(parent, seen) : void 0;
+    }
+    return sequential.get(message.id);
+  };
+  const owners = /* @__PURE__ */ new Map();
+  for (const message of messages) {
+    const user = owner(message);
+    if (user) owners.set(message.id, user);
+  }
+  return owners;
+}
+function collectDelegations(messages, ownerOf) {
+  const owners = ownerOf ? void 0 : messageOwners(messages);
+  const resolveOwner = ownerOf ?? ((message) => owners.get(message.id));
+  const launches = /* @__PURE__ */ new Map();
+  for (const message of messages) for (const block of message.blocks) {
+    if (block.type !== "tool_call" || name(block.name) !== "task" || !id(block.callId)) continue;
+    const owner = resolveOwner(message);
+    if (!owner) continue;
+    const summary = safeDelegation(block.result?.details);
+    launches.set(block.callId, { callId: block.callId, owner, status: block.status === "error" || block.result?.isError ? "failed" : "running", ...summary });
+  }
+  for (const message of messages) for (const block of message.blocks) {
+    const details = safeTaskDetails(block.name, block.result?.details);
+    if (!details || name(block.name) === "task" || block.result?.isError) continue;
+    for (const sample of Object.values(details).flat()) {
+      const targets = [...launches.values()].filter((launch) => launch.delegationId === sample.delegationId && launch.startedAt === sample.startedAt);
+      if (targets.length !== 1) continue;
+      const target = targets[0];
+      if (target.status !== "running") continue;
+      Object.assign(target, sample);
+    }
+  }
+  return [...launches.values()];
+}
+
 // src/core/host-history.ts
-var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_promises8 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs3 = require("node:fs");
-var import_node_path8 = __toESM(require("node:path"), 1);
+var import_node_path10 = __toESM(require("node:path"), 1);
 
 // src/core/edit-replay.ts
 function replayRecordedEdit(before, args, expectedHash) {
@@ -2601,32 +2799,32 @@ var unknownSnapshot = (exists, hash, label) => ({ exists, text: null, hash: type
 var HostHistoryImporter = class {
   constructor(store2, hostDataRoot) {
     this.store = store2;
-    if (!import_node_path8.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
-    this.hostDataRoot = import_node_path8.default.resolve(hostDataRoot);
+    if (!import_node_path10.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
+    this.hostDataRoot = import_node_path10.default.resolve(hostDataRoot);
   }
   hostDataRoot;
   /** Native session scratch contract; this root is for recording only, never disk actions. */
   scratchRoot(sessionId) {
     if (!ID.test(sessionId)) throw new Error("Invalid history session");
-    return import_node_path8.default.join(this.hostDataRoot, "scratch", sessionId);
+    return import_node_path10.default.join(this.hostDataRoot, "scratch", sessionId);
   }
   async checked(relative, directory = false) {
-    const target = import_node_path8.default.resolve(this.hostDataRoot, relative);
+    const target = import_node_path10.default.resolve(this.hostDataRoot, relative);
     if (!inside(this.hostDataRoot, target)) throw new Error("Host evidence escape");
-    let cursor = import_node_path8.default.parse(target).root;
-    for (const segment of target.slice(cursor.length).split(import_node_path8.default.sep)) {
-      cursor = import_node_path8.default.join(cursor, segment);
-      const stat2 = await import_promises7.default.lstat(cursor);
+    let cursor = import_node_path10.default.parse(target).root;
+    for (const segment of target.slice(cursor.length).split(import_node_path10.default.sep)) {
+      cursor = import_node_path10.default.join(cursor, segment);
+      const stat2 = await import_promises8.default.lstat(cursor);
       if (stat2.isSymbolicLink() || cursor !== target && !stat2.isDirectory()) throw new Error("Unsafe host evidence ancestry");
     }
-    const stat = await import_promises7.default.lstat(target);
+    const stat = await import_promises8.default.lstat(target);
     if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error("Invalid host evidence type");
     return target;
   }
   async read(relative, limit) {
     const file = await this.checked(relative);
-    const initial = await import_promises7.default.lstat(file);
-    const handle = await import_promises7.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
+    const initial = await import_promises8.default.lstat(file);
+    const handle = await import_promises8.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > limit || stat.ino !== initial.ino || stat.dev !== initial.dev) throw new Error("Host evidence limit/identity");
@@ -2639,7 +2837,7 @@ var HostHistoryImporter = class {
       }
       const after = await handle.stat();
       await this.checked(relative);
-      const live = await import_promises7.default.lstat(file);
+      const live = await import_promises8.default.lstat(file);
       if (length > limit || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || live.ino !== stat.ino || live.dev !== stat.dev) throw new Error("Host evidence changed; retry sync");
       return bytes.subarray(0, length);
     } finally {
@@ -2648,12 +2846,12 @@ var HostHistoryImporter = class {
   }
   capture(root, value, sessionId) {
     assertPublicPath(value);
-    const absolutePath = import_node_path8.default.resolve(root, value);
+    const absolutePath = import_node_path10.default.resolve(root, value);
     assertPublicPath(absolutePath);
     if (inside(this.hostDataRoot, absolutePath) && !inside(this.scratchRoot(sessionId), absolutePath) || inside(this.store.directory, absolutePath)) throw new Error("Private history path");
     const origin = inside(root, absolutePath) ? "workspace" : "external";
-    if (origin === "external" && !import_node_path8.default.isAbsolute(value)) throw new Error("Relative external history path");
-    const display = origin === "workspace" ? import_node_path8.default.relative(root, absolutePath).split(import_node_path8.default.sep).join("/") : absolutePath;
+    if (origin === "external" && !import_node_path10.default.isAbsolute(value)) throw new Error("Relative external history path");
+    const display = origin === "workspace" ? import_node_path10.default.relative(root, absolutePath).split(import_node_path10.default.sep).join("/") : absolutePath;
     assertPublicPath(display);
     const identity = canonical(absolutePath);
     return { id: digest(identity).slice(0, 24), identity, path: display, absolutePath, origin };
@@ -2671,17 +2869,19 @@ var HostHistoryImporter = class {
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
   async syncSession(sessionId, root, options = {}) {
-    if (!ID.test(sessionId) || !import_node_path8.default.isAbsolute(root)) throw new Error("Invalid history session/root");
-    root = import_node_path8.default.resolve(root);
+    if (!ID.test(sessionId) || !import_node_path10.default.isAbsolute(root)) throw new Error("Invalid history session/root");
+    root = import_node_path10.default.resolve(root);
     const capture = (value) => this.capture(root, value, sessionId);
     const running = typeof options === "boolean" ? options : options.running === true;
+    const mainRunning = typeof options === "boolean" ? options : options.mainRunning ?? running;
+    const statusKnown = typeof options === "boolean" || options.statusKnown !== false;
     const taskId = typeof options !== "boolean" && typeof options.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(options.taskId) ? options.taskId : void 0;
     const since = typeof options !== "boolean" && Number.isSafeInteger(options.since) && options.since > 0 && options.since <= Date.now() ? options.since : void 0;
     const d = { imported: 0, unchanged: 0, skipped: 0, events: 0, runIds: [], warnings: [] };
     const warn = (value) => {
       if (d.warnings.length < 100 && !d.warnings.includes(value)) d.warnings.push(value);
     };
-    if (!running || taskId) {
+    if (statusKnown && (!running || taskId)) {
       await this.store.init();
       await this.store.captureLock(async () => {
         for (const marker of await this.store.listRuns(false, true)) {
@@ -2755,6 +2955,7 @@ var HostHistoryImporter = class {
       }
       return owners.get(m.id);
     };
+    const delegations = collectDelegations(ordered, (message) => owner(message));
     const events = [], eventKeys = /* @__PURE__ */ new Set();
     const add = (meta, directory, toolOnly = false) => {
       if (meta.sessionId !== sessionId || meta.version !== 1 || typeof meta.path !== "string" || typeof meta.messageId !== "string") {
@@ -2793,7 +2994,7 @@ var HostHistoryImporter = class {
     const relative = `review-changes/${sessionId}`;
     try {
       const dir = await this.checked(relative, true);
-      const entries = await import_promises7.default.readdir(dir, { withFileTypes: true });
+      const entries = await import_promises8.default.readdir(dir, { withFileTypes: true });
       if (entries.length > 4096) {
         warn("Host modification directory limit exceeded");
         return d;
@@ -2820,10 +3021,10 @@ var HostHistoryImporter = class {
         }
         add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
       } else {
-        const name = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
-        if (!["write", "edit"].includes(name) || typeof target !== "string" || !import_node_path8.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
-        const text2 = name === "write" && typeof b.args.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
-        add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
+        const name2 = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
+        if (!["write", "edit"].includes(name2) || typeof target !== "string" || !import_node_path10.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
+        const text2 = name2 === "write" && typeof b.args.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
+        add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name2, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
       }
     }
     events.sort((a, b) => a.message.order - b.message.order);
@@ -2831,10 +3032,40 @@ var HostHistoryImporter = class {
       warn("Host event limit exceeded");
       return d;
     }
+    await this.store.init();
+    const capturedEndpoints = /* @__PURE__ */ new Map();
+    const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
+    for (const source2 of sources) {
+      if (source2.sessionId !== sessionId || canonical(source2.root) !== canonical(root) || !source2.userMessageId) continue;
+      for (const change of Object.values(source2.changes)) {
+        if (change.ambiguous || !change.capture || !change.evidence?.length) continue;
+        for (const side of ["before", "after"]) {
+          const ref = side === "before" ? change.evidence[0] : change.evidence.at(-1);
+          const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
+          if (!/^(native|write|edit):/.test(ref) || !message || owner(message) !== source2.userMessageId) continue;
+          const key = `${callId}\0${change.capture.identity}\0${side}`;
+          capturedEndpoints.set(key, [...capturedEndpoints.get(key) ?? [], change[side]]);
+        }
+      }
+    }
     let evidenceBytes = 0;
     for (const e of events) {
       e.before = await this.snapshot(e, "before");
       e.after = await this.snapshot(e, "after");
+      for (const side of ["before", "after"]) {
+        if (e[side].kind !== "unavailable") continue;
+        const endpoints = capturedEndpoints.get(`${e.meta.messageId}\0${capture(e.meta.path).identity}\0${side}`) ?? [];
+        const unique = new Map(endpoints.map((snapshot2) => [JSON.stringify([snapshot2.hash, snapshot2.exists]), snapshot2]));
+        if (unique.size !== 1) continue;
+        const snapshot = unique.values().next().value;
+        if (HASH.test(e.meta[`${side}Hash`] ?? "") && snapshot.hash !== e.meta[`${side}Hash`]) continue;
+        if (typeof e.meta[`${side}Exists`] === "boolean" && snapshot.exists !== e.meta[`${side}Exists`]) continue;
+        const verified = await this.store.hydrate(snapshot);
+        if (verified.kind === "text") {
+          e[side] = verified;
+          if (side === "before") e.capturedBefore = true;
+        }
+      }
       evidenceBytes += e.before.size + e.after.size;
       if (evidenceBytes > 64 * 1024 * 1024) {
         warn("Host snapshot byte limit exceeded");
@@ -2925,10 +3156,10 @@ var HostHistoryImporter = class {
       const standardEvidence = (ref) => {
         const separator = ref.indexOf(":");
         if (separator < 0) return false;
-        const source2 = ref.slice(0, separator).toLowerCase(), id = ref.slice(separator + 1);
+        const source2 = ref.slice(0, separator).toLowerCase(), id2 = ref.slice(separator + 1);
         if (source2 === "native") {
-          const message = aliases.get(id);
-          return !!message?.blocks.some((b) => b.type === "tool_call" && b.callId === id && ["write", "edit"].includes(String(b.name).split(".").pop().toLowerCase()));
+          const message = aliases.get(id2);
+          return !!message?.blocks.some((b) => b.type === "tool_call" && b.callId === id2 && ["write", "edit"].includes(String(b.name).split(".").pop().toLowerCase()));
         }
         return ["write", "edit"].includes(source2);
       };
@@ -2942,31 +3173,62 @@ var HostHistoryImporter = class {
       });
       for (const user of users) {
         const turnEvents = events.filter((e) => owner(e.message) === user.id);
-        const live = running && (taskId ? user.id === taskId : user === users.at(-1));
-        const id = hostHistoryRunId(sessionId, user.id);
+        const mainLive = statusKnown && mainRunning && (taskId ? user.id === taskId : user === users.at(-1));
+        const children = delegations.filter((child) => child.owner === user.id);
+        const live = mainLive || children.some((child) => child.status === "running");
+        const id2 = hostHistoryRunId(sessionId, user.id);
         const duplicates = existing.filter((r) => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === "host-history") return false;
           const attributable = Object.entries(r.changes).filter(([value, change]) => !foreignRecovery(r, value, change) && (change.evidence ?? []).every(standardEvidence));
           const linkedOwners = attributable.flatMap(([, c]) => c.evidence ?? []).map(refOwner);
           const rejectedOwners = Object.values(r.changes).flatMap((change) => (change.evidence ?? []).filter((ref) => !standardEvidence(ref)).map(refOwner));
-          if (rejectedOwners.length && rejectedOwners.every((id2) => id2 === user.id)) return true;
-          const verifiedOwner = linkedOwners[0] && attributable.every(([, c]) => !!c.evidence?.length) && linkedOwners.every((id2) => id2 === linkedOwners[0]) ? linkedOwners[0] : void 0;
+          if (rejectedOwners.length && rejectedOwners.every((id3) => id3 === user.id)) return true;
+          const verifiedOwner = linkedOwners[0] && attributable.every(([, c]) => !!c.evidence?.length) && linkedOwners.every((id3) => id3 === linkedOwners[0]) ? linkedOwners[0] : void 0;
           if (verifiedOwner) return verifiedOwner === user.id;
-          if (linkedOwners.some((id2) => id2 && id2 !== user.id)) return false;
+          if (linkedOwners.some((id3) => id3 && id3 !== user.id)) return false;
           const boundary = nextBoundary.get(user.id);
           return r.userMessageId === user.id && !(boundary && r.startedAt >= boundary);
-        });
+        }).sort((a, b) => a.startedAt - b.startedAt);
         const duplicate = duplicates[0];
-        const previous = await this.store.getRun(id);
-        if (previous && (previous.source !== "host-history" || canonical(previous.root) !== canonical(root))) {
-          d.skipped++;
-          warn("Existing run identity/root conflict");
-          continue;
-        }
-        if (!turnEvents.length && !live && !duplicate && !previous) continue;
+        const candidate = await this.store.getRun(id2);
+        const previous = candidate?.id === id2 ? candidate : null;
         const members = ordered.filter((m) => owner(m) === user.id && !m.parent);
         const last = members.filter((m) => m.role === "assistant" || m.role === "tool").at(-1);
-        const reply = !live && last?.role === "assistant" && last.meta.status === "complete" && last.blocks.some((b) => b.type === "text") ? last : void 0;
+        const reply = !mainLive && last?.role === "assistant" && last.meta.status === "complete" && last.blocks.some((b) => b.type === "text") ? last : void 0;
+        let migrating = false;
+        if (previous && (previous.source !== "host-history" || previous.sessionId !== sessionId || previous.userMessageId !== user.id)) {
+          d.skipped++;
+          warn("Existing run identity conflict; content preserved");
+          continue;
+        }
+        if (previous && canonical(previous.root) !== canonical(root)) {
+          const verified = canonical(previous.root) === canonical(this.scratchRoot(sessionId)) && Object.values(previous.changes).every((change) => {
+            const mapped = change.capture?.origin === "workspace" ? capture(change.capture.path).identity : change.capture?.identity;
+            const linked = turnEvents.filter((e) => capture(e.meta.path).identity === mapped);
+            return !!linked.length && !!change.evidence?.length && change.evidence.every((ref) => ref.startsWith("native:") && linked.some((e) => ref === `native:${e.meta.messageId}` && e.block?.status === "success")) && change.before.hash === linked[0].before.hash && linked.some((e) => e.after.hash === change.after.hash) && linked.every((e) => e.before.kind === "text" && e.after.kind === "text");
+          });
+          migrating = typeof options !== "boolean" && options.repairRootConflicts === true && (!options.repairUserMessageId || options.repairUserMessageId === user.id) && verified && duplicates.length === 1;
+          if (!migrating) {
+            if (reply && (previous.state !== "completed" || previous.endedAt !== reply.createdAt)) {
+              previous.state = "completed";
+              previous.endedAt = reply.createdAt;
+              previous.replyMessageId = reply.id;
+              previous.incomplete = true;
+              previous.notice = "\u6839\u76EE\u5F55\u51B2\u7A81\uFF1A\u5185\u5BB9\u88AB\u51BB\u7ED3\uFF0C\u5B8C\u6210\u72B6\u6001\u7531\u540C\u4F1A\u8BDD\u7528\u6237\u8F6E\u6B21\u7684\u6700\u7EC8\u56DE\u590D\u6838\u9A8C\uFF1B\u9700\u663E\u5F0F\u6388\u6743\u8FC1\u79FB\u3002";
+              previous.contentVersion = (previous.contentVersion ?? 0) + 1;
+              await this.store.writeRun(previous);
+            }
+            d.skipped++;
+            warn("Existing run root conflict; content frozen; verified repair requires explicit approval");
+            continue;
+          }
+          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises8.default.readFile(import_node_path10.default.join(this.store.directory, file), "utf8").catch((error) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          })])));
+          await atomicJson(import_node_path10.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
+        }
+        if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every((m) => m.createdAt <= saved.endedAt) ? saved.replyMessageId : void 0;
         const replyId = reply?.id ?? retainedReply;
@@ -2978,9 +3240,10 @@ var HostHistoryImporter = class {
             for (const side of ["before", "after"]) if (e[side].kind === "unavailable" && !HASH.test(e[side].hash)) e[side] = recorded[side];
           }
           const note = ["\u539F\u751F\u5386\u53F2\u4FEE\u6539\u4E8B\u4EF6\uFF1B\u672A\u8BFB\u53D6\u5F53\u524D\u6587\u4EF6\u3002", e.meta.state === "reverted" ? "\u4E3B\u7A0B\u5E8F\u5DF2\u6807\u8BB0\u64A4\u9500\uFF1B\u6B64\u5904\u4FDD\u7559\u539F\u4FEE\u6539\u8BC1\u636E\u3002" : "", e.meta.oldPath ? `\u91CD\u547D\u540D\u6765\u6E90\uFF1A${e.meta.oldPath}` : "", e.before.kind === "unavailable" || e.after.kind === "unavailable" ? "\u5386\u53F2\u5B8C\u6574\u5185\u5BB9\u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u53EF\u9760\u8BA1\u7B97\u5B8C\u6574\u5DEE\u5F02\u3002" : ""].filter(Boolean).join(" ");
-          changes2[c.path] = { capture: c, before: old?.before ?? e.before, after: e.after, note, evidence: [...old?.evidence ?? [], `native:${e.meta.messageId}`].slice(-32), ...e.meta.oldPath ? { oldPath: e.meta.oldPath } : {} };
+          const discontinuous = !!old && (old.ambiguous || (!e.toolOnly || e.capturedBefore) && old.after.kind === "text" && e.before.kind === "text" && (old.after.hash !== e.before.hash || old.after.exists !== e.before.exists));
+          changes2[c.path] = { capture: c, before: old?.before ?? e.before, after: e.after, note: discontinuous ? `${note} \u5E76\u53D1\u6216\u4E0D\u8FDE\u7EED\u7684\u6587\u4EF6\u5FEB\u7167\uFF0C\u4E0D\u80FD\u4F5C\u4E3A\u81EA\u52A8\u5408\u5E76\uFF1B\u884C\u6570\u672A\u77E5\u3002` : note, evidence: [...old?.evidence ?? [], `native:${e.meta.messageId}`].slice(-32), ...discontinuous ? { ambiguous: true } : {}, ...e.meta.oldPath ? { oldPath: e.meta.oldPath } : {} };
         }
-        if (previous) {
+        if (previous && !migrating) {
           for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes2[value] && (change.evidence ?? []).every(standardEvidence)) changes2[value] = change;
         }
         if (Object.keys(changes2).length > 256) {
@@ -2988,16 +3251,21 @@ var HostHistoryImporter = class {
           d.skipped++;
           continue;
         }
-        const incomplete = Object.values(changes2).some((c) => c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
-        const run2 = { version: 2, id, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live ? void 0 : retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, state: live ? "running" : replyId ? "completed" : "incomplete", fileCount: Object.keys(changes2).length, incomplete, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
+        const stopped = last?.meta.status === "aborted" || children.some((child) => ["aborted", "stopped"].includes(child.status));
+        const failed = last?.meta.status === "error" || children.some((child) => child.status === "failed");
+        const incomplete = stopped || failed || Object.values(changes2).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
+        const unresolved = !statusKnown && !replyId && !live;
+        const run2 = { version: 2, id: id2, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live || unresolved ? void 0 : Math.max(retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map((child) => child.completedAt ?? 0)), state: live ? "running" : stopped ? "aborted" : failed ? "incomplete" : replyId ? "completed" : unresolved ? "unknown" : "incomplete", fileCount: Object.keys(changes2).length, incomplete: incomplete || unresolved, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? "\u6267\u884C\u72B6\u6001\u8BC1\u636E\u7F3A\u5931\u6216\u8FC7\u671F\uFF0C\u5F85\u6838\u9A8C\uFF1B\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5DF2\u7ED3\u675F\u3002" : incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
+        run2.delegations = children.length ? children : void 0;
+        if (live) run2.bindings = {};
         if (duplicates.length) {
           for (const duplicate2 of duplicates) {
             const liveRun = await this.store.getRun(duplicate2.id);
             const recoveredFiles = { ...liveRun.hostRecovery?.files };
             let changed = false;
             for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change) || (change.evidence ?? []).some((ref) => !standardEvidence(ref))) {
+              recoveredFiles[value] ??= captureCheckpoint(change);
               delete liveRun.changes[value];
-              delete recoveredFiles[value];
               changed = true;
             }
             if (liveRun.userMessageId !== user.id || liveRun.boundary !== "user") {
@@ -3020,7 +3288,8 @@ var HostHistoryImporter = class {
             for (const [value, change] of Object.entries(changes2)) {
               const old = liveRun.changes[value];
               const complete = change.before.kind === "text" && change.after.kind === "text";
-              if (!old || complete && (old.ambiguous || old.before.kind === "unavailable" || old.after.kind === "unavailable") || old.evidence?.some((e) => e.startsWith("native:"))) {
+              const covered = !!old?.evidence?.length && old.evidence.every((ref) => refOwner(ref) === user.id);
+              if (!old || covered && complete || complete && (old.ambiguous || old.before.kind === "unavailable" || old.after.kind === "unavailable") || old.evidence?.some((e) => e.startsWith("native:"))) {
                 const signature2 = (c) => c && JSON.stringify({ ...c, diffStats: void 0 });
                 if (signature2(old) !== signature2(change)) {
                   recoveredFiles[value] ??= captureCheckpoint(old);
@@ -3029,9 +3298,21 @@ var HostHistoryImporter = class {
                 }
               }
             }
+            if (JSON.stringify(liveRun.delegations) !== JSON.stringify(run2.delegations)) {
+              liveRun.delegations = run2.delegations;
+              changed = true;
+            }
             if (liveRun.state !== run2.state || liveRun.endedAt !== run2.endedAt) {
               liveRun.state = run2.state;
               liveRun.endedAt = run2.endedAt;
+              changed = true;
+            }
+            if (statusKnown && !live && liveRun.execution?.state === "running") {
+              liveRun.execution = { ...liveRun.execution, state: "settled", revision: liveRun.execution.revision + 1 };
+              changed = true;
+            }
+            if (migrating && previous) {
+              liveRun.bindings = { ...previous.bindings, ...liveRun.bindings };
               changed = true;
             }
             const damaged = Object.values(liveRun.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
@@ -3051,11 +3332,12 @@ var HostHistoryImporter = class {
               d.imported++;
             } else d.unchanged++;
           }
-          if (previous?.source === "host-history") await import_promises7.default.rm(import_node_path8.default.join(this.store.directory, "runs", `${id}.json`), { force: true });
+          if (duplicates.length > 1) await this.coalesceCaptures(duplicates.map((duplicate2) => duplicate2.id), run2, refOwner);
+          if (await this.store.getRun(duplicates[0].id)) await this.store.retireRun(id2, duplicates[0].id);
           continue;
         }
         const signature = (r) => JSON.stringify({ ...r, contentVersion: void 0, cardPreview: void 0, changes: Object.fromEntries(Object.entries(r.changes).map(([p, c]) => [p, { ...c, diffStats: void 0, before: { ...c.before, text: null }, after: { ...c.after, text: null } }])) });
-        d.runIds.push(id);
+        d.runIds.push(id2);
         if (previous && signature(previous) === signature(run2)) {
           d.unchanged++;
           continue;
@@ -3066,6 +3348,43 @@ var HostHistoryImporter = class {
       }
     });
     return d;
+  }
+  /** Under captureLock: merge display records only after exact USER/tool ownership proof. */
+  async coalesceCaptures(ids, native, refOwner) {
+    const primary = await this.store.getRun(ids[0]);
+    for (const id2 of ids.slice(1)) {
+      const child = await this.store.getRun(id2);
+      if (!child) continue;
+      for (const [value, change] of Object.entries(child.changes)) {
+        if (change.evidence?.some((ref) => {
+          const owner = refOwner(ref);
+          return owner && owner !== native.userMessageId;
+        })) continue;
+        const prior = primary.changes[value];
+        if (!prior) {
+          primary.changes[value] = change;
+          continue;
+        }
+        const equal = (a, b) => a.hash === b.hash && a.exists === b.exists;
+        if (equal(prior.before, change.before) && equal(prior.after, change.after)) continue;
+        const refs = [.../* @__PURE__ */ new Set([...prior.evidence ?? [], ...change.evidence ?? []])];
+        if (!prior.ambiguous && !change.ambiguous && equal(prior.after, change.before)) primary.changes[value] = { ...prior, after: change.after, diffStats: void 0, evidence: refs };
+        else if (!prior.ambiguous && !change.ambiguous && equal(change.after, prior.before)) primary.changes[value] = { ...prior, before: change.before, diffStats: void 0, evidence: refs };
+        else primary.changes[value] = { ...prior, ambiguous: true, diffStats: void 0, evidence: refs, note: "\u540C\u8F6E\u6B21\u6267\u884C\u8005\u7684\u6587\u4EF6\u7AEF\u70B9\u65E0\u6CD5\u63A5\u7EED\uFF1B\u4E0D\u81EA\u52A8\u5408\u5E76\u5E76\u53D1\u8986\u76D6\uFF0C\u5DEE\u5F02\u4E0E\u884C\u6570\u672A\u77E5\u3002" };
+      }
+    }
+    for (const [value, change] of Object.entries(native.changes)) {
+      const prior = primary.changes[value];
+      const calls = new Set(prior?.evidence?.map((ref) => ref.slice(ref.indexOf(":") + 1)));
+      const covered = change.evidence?.every((ref) => calls.has(ref.slice(ref.indexOf(":") + 1)));
+      if (!prior || change.ambiguous || !covered || change.before.kind === "text" && change.after.kind === "text") primary.changes[value] = change;
+    }
+    primary.incomplete ||= Object.values(primary.changes).some((change) => change.ambiguous || change.before.kind === "unavailable" || change.after.kind === "unavailable");
+    primary.startedAt = native.startedAt;
+    primary.cardPreview = void 0;
+    primary.contentVersion = (primary.contentVersion ?? 0) + 1;
+    await this.store.writeRun(primary);
+    for (const id2 of ids.slice(1)) await this.store.retireRun(id2, primary.id);
   }
 };
 function applyReview(before, hunks, expected) {
@@ -3111,8 +3430,8 @@ function applyReview(before, hunks, expected) {
 }
 
 // src/core/host-evidence-store.ts
-var import_promises8 = __toESM(require("node:fs/promises"), 1);
-var import_node_path9 = __toESM(require("node:path"), 1);
+var import_promises9 = __toESM(require("node:fs/promises"), 1);
+var import_node_path11 = __toESM(require("node:path"), 1);
 
 // src/core/host-transcript.ts
 function hostEvidenceMessages(messages) {
@@ -3124,22 +3443,24 @@ function hostEvidenceMessages(messages) {
     const candidates = value.toolCallId ? [{ type: "tool_call", callId: value.toolCallId, name: value.toolName, args: value.toolArgs, status: value.toolStatus, result: value.toolResult, isError: value.isError }] : value.blocks ?? [];
     for (const b of candidates) {
       if (b.type !== "tool_call" || typeof b.callId !== "string") continue;
-      const name = String(b.name).split(".").pop().toLowerCase();
+      const name2 = String(b.name).split(".").pop().toLowerCase();
       const args = b.args ?? {}, result = b.result ?? {}, review = result.details?.review;
       if (isImagePath(String(review?.path ?? args.path ?? args.file_path ?? ""))) continue;
       try {
         if (args.path !== void 0 || args.file_path !== void 0) assertPublicPath(args.path ?? args.file_path);
         if (review?.path !== void 0) assertPublicPath(review.path);
         if (review?.oldPath !== void 0) assertPublicPath(review.oldPath);
-        if (name === "edit" && typeof args.ops === "string") {
+        if (name2 === "edit" && typeof args.ops === "string") {
           for (const line of args.ops.split("\n")) if (line.startsWith("MV ")) assertPublicPath(line.slice(3).trim());
         }
       } catch {
         continue;
       }
       const safeReview = review && typeof review === "object" ? Object.fromEntries(["version", "sessionId", "messageId", "path", "oldPath", "operation", "status", "state", "beforeExists", "afterExists", "beforeHash", "afterHash", "hunks"].filter((key) => review[key] !== void 0).map((key) => [key, review[key]])) : void 0;
-      const editArgs = name === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
-      blocks.push({ type: "tool_call", callId: b.callId, name, status: b.status, args: ["write", "edit"].includes(name) ? { path: args.path ?? args.file_path, ...editArgs, ...name === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...safeReview ? { details: { review: safeReview } } : {} } });
+      const editArgs = name2 === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
+      const lifecycle = safeTaskDetails(name2, result.details);
+      const details = { ...safeReview ? { review: safeReview } : {}, ...lifecycle };
+      blocks.push({ type: "tool_call", callId: b.callId, name: name2, status: b.status, args: ["write", "edit"].includes(name2) ? { path: args.path ?? args.file_path, ...editArgs, ...name2 === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...Object.keys(details).length ? { details } : {} } });
     }
     return [{ type: "message", id: value.id, role: value.role, createdAt: value.createdAt, meta, blocks }];
   });
@@ -3165,14 +3486,14 @@ var LIMIT = 8 * 1024 * 1024;
 var HostEvidenceStore = class {
   directory;
   constructor(dataPath) {
-    this.directory = import_node_path9.default.join(dataPath, "evidence");
+    this.directory = import_node_path11.default.join(dataPath, "evidence");
   }
   file(sessionId, root) {
-    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
-    return import_node_path9.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path11.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
+    return import_node_path11.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
   }
   async checkDirectory() {
-    const stat = await import_promises8.default.lstat(this.directory);
+    const stat = await import_promises9.default.lstat(this.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence directory");
   }
   async restore(buffer, sessionId, root) {
@@ -3181,7 +3502,7 @@ var HostEvidenceStore = class {
     await this.checkDirectory();
     let record;
     try {
-      const stat = await import_promises8.default.lstat(file);
+      const stat = await import_promises9.default.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LIMIT) throw new Error("Unsafe persisted evidence record");
       record = await readJson(file);
     } catch (error) {
@@ -3199,12 +3520,12 @@ var HostEvidenceStore = class {
     const record = { version: 1, sessionId, root: canonical(root), messages: hostEvidenceMessages(messages) };
     const bytes = Buffer.byteLength(JSON.stringify(record));
     if (bytes > LIMIT) throw new Error("Persisted evidence exceeds 8 MiB limit");
-    const entries = (await import_promises8.default.readdir(this.directory)).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
-    const present = entries.includes(import_node_path9.default.basename(file));
+    const entries = (await import_promises9.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
+    const present = entries.includes(import_node_path11.default.basename(file));
     if (!present && entries.length >= MAX_RUNS) throw new Error("Persisted evidence session limit reached");
     let size = bytes;
-    for (const name of entries) if (name !== import_node_path9.default.basename(file)) {
-      const stat = await import_promises8.default.lstat(import_node_path9.default.join(this.directory, name));
+    for (const name2 of entries) if (name2 !== import_node_path11.default.basename(file)) {
+      const stat = await import_promises9.default.lstat(import_node_path11.default.join(this.directory, name2));
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence record");
       size += stat.size;
     }
@@ -3214,8 +3535,8 @@ var HostEvidenceStore = class {
 };
 
 // src/git/local-management.ts
-var import_promises9 = __toESM(require("node:fs/promises"), 1);
-var import_node_path10 = __toESM(require("node:path"), 1);
+var import_promises10 = __toESM(require("node:fs/promises"), 1);
+var import_node_path12 = __toESM(require("node:path"), 1);
 var import_node_child_process2 = require("node:child_process");
 var import_node_crypto8 = require("node:crypto");
 var mutations = /* @__PURE__ */ new Set(["stage", "unstage", "discard", "commit", "branchCreate", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
@@ -3303,10 +3624,10 @@ async function run(root, args, hooks = false, index) {
 }
 async function filePath(root, value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
+  if (import_node_path12.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
   assertPublicPath(rel);
   const resolved = await safeResolve(root, rel);
-  const stat = await import_promises9.default.lstat(resolved).catch((error) => {
+  const stat = await import_promises10.default.lstat(resolved).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -3340,27 +3661,27 @@ async function status(root) {
   return result;
 }
 async function branchName(root, value) {
-  const name = text(value, "Local branch name", 240);
-  if (name.startsWith("-") || name === "HEAD" || name.includes("@{")) fail("INVALID_REF", "Use a literal local branch name.");
-  const check = await git(root, ["check-ref-format", "--branch", name], { allowFailure: true });
+  const name2 = text(value, "Local branch name", 240);
+  if (name2.startsWith("-") || name2 === "HEAD" || name2.includes("@{")) fail("INVALID_REF", "Use a literal local branch name.");
+  const check = await git(root, ["check-ref-format", "--branch", name2], { allowFailure: true });
   if (check.code !== 0) fail("INVALID_REF", "Invalid local branch name.");
-  return name;
+  return name2;
 }
 async function requireHead(root) {
   return await headCommit(root) ?? fail("NO_HEAD", "This repository has no commits. Stage files and create the first commit.");
 }
 async function requireIdle(root) {
-  for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
-    const result = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", name]);
-    if (await import_promises9.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
+  for (const name2 of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
+    const result = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", name2]);
+    if (await import_promises10.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
   }
 }
 async function checkedDiffPaths(root, args) {
   const names = records2((await git(root, [...args, "--name-only", "-z", ...diffFlags, "--"])).stdout);
   if (names.length > 500) fail("GIT_LIMIT", "Too many changed paths to show safely.");
-  for (const name of names) {
-    assertPublicPath(name);
-    await filePath(root, name);
+  for (const name2 of names) {
+    assertPublicPath(name2);
+    await filePath(root, name2);
   }
   return names;
 }
@@ -3372,9 +3693,9 @@ async function stats2(root, scope, paths) {
     const parts = record.split(String.fromCharCode(9));
     if (parts.length < 3) continue;
     const [adds, dels] = parts;
-    const name = parts.slice(2).join(String.fromCharCode(9));
-    await filePath(root, name);
-    entries.push(adds === "-" || dels === "-" ? { path: name, additions: null, deletions: null, kind: "binary" } : { path: name, additions: Number(adds), deletions: Number(dels) });
+    const name2 = parts.slice(2).join(String.fromCharCode(9));
+    await filePath(root, name2);
+    entries.push(adds === "-" || dels === "-" ? { path: name2, additions: null, deletions: null, kind: "binary" } : { path: name2, additions: Number(adds), deletions: Number(dels) });
   }
   if (scope === "workspace") {
     const indexed = new Set(records2((await git(root, ["ls-files", "-z", "--", ...paths])).stdout));
@@ -3412,7 +3733,7 @@ async function safeStashPaths(root, oid) {
   const third = await git(root, ["rev-parse", "--verify", "--quiet", `${oid}^3`], { allowFailure: true });
   if (third.code === 0) {
     const names = records2((await git(root, ["ls-tree", "-r", "--name-only", "-z", third.stdout.toString().trim(), "--"])).stdout);
-    for (const name of names) await filePath(root, name);
+    for (const name2 of names) await filePath(root, name2);
   }
 }
 function commitMessage(args) {
@@ -3426,7 +3747,7 @@ function commitMessage(args) {
 ${args.description.trim()}` : ""), "Commit message", 5e3);
 }
 async function indexBytes(index) {
-  return import_promises9.default.readFile(index).catch((error) => {
+  return import_promises10.default.readFile(index).catch((error) => {
     if (error.code === "ENOENT") return void 0;
     throw error;
   });
@@ -3444,7 +3765,7 @@ async function selectedCommit(root, args, message, state) {
   const previous = await headCommit(root);
   const realIndex = (await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).stdout.toString().trim();
   const original = await indexBytes(realIndex);
-  const token = `diff-view-commit-${(0, import_node_crypto8.randomUUID)()}`, isolated = import_node_path10.default.join(import_node_path10.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
+  const token = `diff-view-commit-${(0, import_node_crypto8.randomUUID)()}`, isolated = import_node_path12.default.join(import_node_path12.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
   let lock, ownsLock = false;
   try {
     await git(root, ["read-tree", ...previous ? [previous] : ["--empty"]], { index: isolated });
@@ -3464,17 +3785,17 @@ async function selectedCommit(root, args, message, state) {
     if (!oid || oid === previous) fail("COMMIT_NOT_CREATED", "Git did not create a new commit. Inspect hook output and refresh.");
     let notice;
     try {
-      if (original) await import_promises9.default.writeFile(nextIndex, original);
+      if (original) await import_promises10.default.writeFile(nextIndex, original);
       else await git(root, ["read-tree", "--empty"], { index: nextIndex });
       await git(root, ["reset", "-q", oid, "--", ...paths], { index: nextIndex });
-      lock = await import_promises9.default.open(`${realIndex}.lock`, "wx");
+      lock = await import_promises10.default.open(`${realIndex}.lock`, "wx");
       ownsLock = true;
       if (!sameIndex(original, await indexBytes(realIndex))) notice = "\u63D0\u4EA4\u5DF2\u6210\u529F\uFF0C\u4F46\u7D22\u5F15\u5728\u63D0\u4EA4\u671F\u95F4\u88AB\u5916\u90E8\u4FEE\u6539\uFF1B\u5DF2\u4FDD\u7559\u5916\u90E8\u6682\u5B58\uFF0C\u8BF7\u5237\u65B0\u6838\u5BF9\u3002";
       else {
-        await lock.writeFile(await import_promises9.default.readFile(nextIndex));
+        await lock.writeFile(await import_promises10.default.readFile(nextIndex));
         await lock.close();
         lock = void 0;
-        await import_promises9.default.rename(`${realIndex}.lock`, realIndex);
+        await import_promises10.default.rename(`${realIndex}.lock`, realIndex);
         ownsLock = false;
       }
     } catch {
@@ -3483,8 +3804,8 @@ async function selectedCommit(root, args, message, state) {
     return { ok: true, oid, ...output(result, notice) };
   } finally {
     await lock?.close().catch(() => void 0);
-    if (ownsLock) await import_promises9.default.unlink(`${realIndex}.lock`).catch(() => void 0);
-    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises9.default.unlink(file).catch(() => void 0);
+    if (ownsLock) await import_promises10.default.unlink(`${realIndex}.lock`).catch(() => void 0);
+    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises10.default.unlink(file).catch(() => void 0);
   }
 }
 async function discardTarget(root, values) {
@@ -3512,9 +3833,9 @@ var LocalGitManagement = class {
     if (!value || typeof value !== "object" || Array.isArray(value)) fail("INVALID_ARGUMENT", "Git management arguments are required.");
     const args = value;
     if (!operations.has(args.operation)) fail("INVALID_OPERATION", "Unsupported local-only Git operation.");
-    const roots = await Promise.all(allowedRoots.map((root2) => import_promises9.default.realpath(root2)));
+    const roots = await Promise.all(allowedRoots.map((root2) => import_promises10.default.realpath(root2)));
     const requested = args.root ?? (roots.length === 1 ? roots[0] : fail("ROOT_REQUIRED", "Select an authorized project root."));
-    const root = await import_promises9.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
+    const root = await import_promises10.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
     if (!roots.some((allowed) => canonical(allowed) === canonical(root))) fail("ROOT_DENIED", "Repository is not an authorized project root.");
     const key = canonical(root);
     const previous = queues.get(key) ?? Promise.resolve();
@@ -3538,7 +3859,7 @@ var LocalGitManagement = class {
       const target = await discardTarget(root, args.paths);
       if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };
       if (args.fingerprint !== target.fingerprint) fail("FILE_CHANGED", "File or index changed since confirmation. Refresh and review before discarding.");
-      if (target.untracked) await import_promises9.default.unlink(await safeResolve(root, target.rel));
+      if (target.untracked) await import_promises10.default.unlink(await safeResolve(root, target.rel));
       else await run(root, ["restore", "--worktree", "--", target.rel]);
       return { ok: true };
     }
@@ -3590,25 +3911,25 @@ ${rel}: binary or oversized untracked file (no text preview).
     if (op === "branches") {
       const raw = await run(root, ["for-each-ref", "--count=201", "--format=%(refname:strip=2)%00%(objectname)%00%(HEAD)", "refs/heads/"]);
       const branches = raw.trimEnd().split("\n").filter(Boolean).map((row) => {
-        const [name, oid, current] = row.split("\0");
-        return { name, oid, current: current === "*" };
+        const [name2, oid, current] = row.split("\0");
+        return { name: name2, oid, current: current === "*" };
       });
       return { branches: branches.slice(0, 200), truncated: branches.length > 200 };
     }
     if (op.startsWith("branch")) {
-      const name = await branchName(root, args.name);
+      const name2 = await branchName(root, args.name);
       await requireHead(root);
-      if (op === "branchCreate") await run(root, ["branch", "--", name, await resolveCommit(root, args.ref ?? "HEAD")]);
+      if (op === "branchCreate") await run(root, ["branch", "--", name2, await resolveCommit(root, args.ref ?? "HEAD")]);
       else {
-        await resolveCommit(root, `refs/heads/${name}`);
+        await resolveCommit(root, `refs/heads/${name2}`);
         if (op === "branchSwitch") {
           if ((await status(root)).entries.length) fail("DIRTY_WORKTREE", "Branch switching is blocked while staged, unstaged or untracked changes exist. Commit or stash them first.");
-          await run(root, ["switch", "--no-guess", "--", name]);
-        } else if (op === "branchRename") await run(root, ["branch", "-m", "--", name, await branchName(root, args.newName)]);
+          await run(root, ["switch", "--no-guess", "--", name2]);
+        } else if (op === "branchRename") await run(root, ["branch", "-m", "--", name2, await branchName(root, args.newName)]);
         else if (op === "branchDelete") {
-          const merged = await git(root, ["merge-base", "--is-ancestor", `refs/heads/${name}`, "HEAD"], { allowFailure: true });
+          const merged = await git(root, ["merge-base", "--is-ancestor", `refs/heads/${name2}`, "HEAD"], { allowFailure: true });
           if (merged.code !== 0) fail("UNMERGED_BRANCH", "Branch is not fully merged into HEAD. Safe deletion refused; no force deletion is available.");
-          await run(root, ["branch", "-d", "--", name]);
+          await run(root, ["branch", "-d", "--", name2]);
         }
       }
       return { ok: true };
@@ -3683,12 +4004,6 @@ Stash was not dropped. Inspect status and resolve any conflicts manually; do not
 var localManagement = new LocalGitManagement();
 var dispatch = (method, args, allowedRoots) => localManagement.dispatch(method, args, allowedRoots);
 
-// src/core/capture-context.ts
-var import_node_path11 = __toESM(require("node:path"), 1);
-async function writeCaptureContexts(directory, generation2, contexts2) {
-  await atomicJson(import_node_path11.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
-}
-
 // src/core/host-evidence-buffer.ts
 var HostEvidenceBuffer = class {
   pending = /* @__PURE__ */ new Map();
@@ -3750,7 +4065,7 @@ var FileOpenRequests = class {
   listeners = /* @__PURE__ */ new Map();
   acknowledgements = /* @__PURE__ */ new Map();
   add(target) {
-    for (const [id, request] of this.requests) if (this.now() - request.at > 15e3) this.requests.delete(id);
+    for (const [id2, request] of this.requests) if (this.now() - request.at > 15e3) this.requests.delete(id2);
     if (this.requests.size >= 16) fail("FILE_OPEN_BUSY", "\u6253\u5F00\u8BF7\u6C42\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
     const requestId = (0, import_node_crypto9.randomUUID)();
     this.requests.set(requestId, { target: { ...target, requestId }, at: this.now(), delivered: false, status: { state: "pending" } });
@@ -3831,6 +4146,8 @@ var fileOpens = new FileOpenRequests();
 var evidence = new HostEvidenceBuffer();
 var history = null;
 var contexts = /* @__PURE__ */ new Map();
+var sessionRoots = /* @__PURE__ */ new Map();
+var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 var service = null;
 var store = null;
 var jobs = null;
@@ -3848,7 +4165,7 @@ var rendererStages = {};
 var runningDiagnostic;
 var rendererDiagnostic;
 async function saveRendererStatus() {
-  if (store && !disposed) await atomicJson(import_node_path12.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+  if (store && !disposed) await atomicJson(import_node_path13.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
 }
 var navigation = new ReviewNavigationStore();
 function serial(work) {
@@ -3864,21 +4181,24 @@ async function heartbeat() {
 async function onLoad() {
   disposed = false;
   generation = (0, import_node_crypto10.randomUUID)();
-  pluginRoot = await import_promises10.default.realpath(__dirname);
+  pluginRoot = await import_promises11.default.realpath(__dirname);
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
-  const parent = import_node_path12.default.dirname(dataPath), plugins = import_node_path12.default.dirname(parent);
-  history = import_node_path12.default.basename(parent) === "data" && import_node_path12.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path12.default.dirname(plugins)) : null;
+  const parent = import_node_path13.default.dirname(dataPath), plugins = import_node_path13.default.dirname(parent);
+  history = import_node_path13.default.basename(parent) === "data" && import_node_path13.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path13.default.dirname(plugins)) : null;
   contexts.clear();
   evidence.clear();
+  sessionRoots.clear();
+  const savedRoots = await readJson(import_node_path13.default.join(store.directory, "session-roots.json"), {});
+  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path13.default.isAbsolute(root)) sessionRoots.set(id2, root);
   fileOpens.clear();
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
   navigation.clear();
-  navigation.restore(await readJson(import_node_path12.default.join(store.directory, "selections.json"), []));
+  navigation.restore(await readJson(import_node_path13.default.join(store.directory, "selections.json"), []));
   await saveRendererStatus();
   await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot);
@@ -3898,7 +4218,7 @@ async function onLoad() {
       await store.importInbox(generation);
       const context = contexts.get(event.sessionId);
       if (history && context && service) {
-        const result = await history.syncSession(event.sessionId, context.root, { ...context, messages: evidence.messages(event.sessionId, canonical(context.root)) });
+        const result = await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
         service.setRecoveryNotice(event.sessionId, result.warnings.join(" "));
         context.syncedAt = 0;
       }
@@ -3932,7 +4252,7 @@ async function onUnload() {
   evidence.clear();
   contexts.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises10.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises11.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -3989,7 +4309,11 @@ async function sessionRoot(args) {
   if (typeof args?.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId)) fail("SESSION_REQUIRED", "Invalid session identity");
   const workspace = await pi.workspace.get();
   const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
-  if (roots.length) return typeof args.root === "string" && roots.some((r) => canonical(r) === canonical(args.root)) ? args.root : void 0;
+  if (roots.length && typeof args.root === "string" && roots.some((r) => canonical(r) === canonical(args.root))) return args.root;
+  const retained = sessionRoots.get(args.sessionId) ?? contexts.get(args.sessionId)?.root;
+  if (retained && (canonical(retained) === canonical(history?.scratchRoot(args.sessionId) ?? "") || !args.root || canonical(args.root) === canonical(retained))) return retained;
+  if (roots.length || typeof args.root === "string" && history && canonical(args.root) !== canonical(history.scratchRoot(args.sessionId))) return void 0;
+  if (history && store && (await store.listRuns(false, true)).some((r) => r.sessionId === args.sessionId && canonical(r.root) !== canonical(history.scratchRoot(args.sessionId)))) return void 0;
   return history?.scratchRoot(args.sessionId);
 }
 async function execute(s, method, args) {
@@ -4026,11 +4350,14 @@ async function execute(s, method, args) {
       s.setRecoveryNotice(args.sessionId, warning);
       return { ok: false, warning };
     }
+    sessionRoots.set(args.sessionId, root);
+    while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
+    await atomicJson(import_node_path13.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
     const now = Date.now();
     const taskId = typeof args.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : void 0;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : void 0;
     contexts.delete(args.sessionId);
-    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, taskId, since, syncedAt: now, updatedAt: now });
+    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === "boolean" ? args.mainRunning : void 0, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: now, updatedAt: now });
     while (contexts.size > 200) contexts.delete(contexts.keys().next().value);
     await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
     await evidenceStore.restore(evidence, args.sessionId, root);
@@ -4039,25 +4366,25 @@ async function execute(s, method, args) {
       s.setRecoveryNotice(args.sessionId, warning);
       return { ok: false, warning };
     }
-    const result = await history.syncSession(args.sessionId, root, { ...contexts.get(args.sessionId), messages: evidence.messages(args.sessionId, canonical(root)) });
+    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)));
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
     return result;
   }
   const context = typeof args?.sessionId === "string" ? contexts.get(args.sessionId) : void 0;
+  if (method === "runningChanges" && context?.running && context.taskId === args.taskId && context.since === args.since) {
+    context.updatedAt = Date.now();
+    await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
+  }
   const preparedReview = method === "review" && history && context && (args.scope === "turn" || args.scope === "lastTurn");
   if (preparedReview) await store.importInbox(generation);
   if (history && context && ["runningChanges", "replyCards", "bootstrap", "review", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
-    const result = await history.syncSession(args.sessionId, context.root, { ...context, messages: evidence.messages(args.sessionId, canonical(context.root)) });
+    const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
     context.syncedAt = Date.now();
     store.acknowledgeRecovery(args.sessionId);
     s.setRecoveryNotice(args.sessionId, result.warnings.join(" "));
   }
   if (method === "review" && (args.scope === "turn" || args.scope === "lastTurn")) return s.review(args, Boolean(preparedReview), context);
   if (method === "runningChanges") {
-    if (context?.running && context.taskId === args.taskId && context.since === args.since) {
-      context.updatedAt = Date.now();
-      await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
-    }
     const result = await s.runningChanges(args);
     let reason = "summary-available";
     if (!result) {
@@ -4082,8 +4409,8 @@ async function execute(s, method, args) {
     const run2 = await s.selectTarget(args);
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
     if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
-    const selection = navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, args.fileId);
-    await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), navigation.export());
+    const selection = navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
+    await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
   }
   if (method === "readTurnSelection") {
@@ -4091,7 +4418,12 @@ async function execute(s, method, args) {
     if (typeof args?.sessionId !== "string" || !args.sessionId) fail("SESSION_REQUIRED", "\u5F53\u524D\u89C6\u56FE\u7F3A\u5C11\u4F1A\u8BDD\u6807\u8BC6\uFF1B\u8BF7\u4ECE\u672C\u4F1A\u8BDD\u91CD\u65B0\u6253\u5F00\u5DEE\u5F02\u5BA1\u67E5\u3002");
     const selection = navigation.get(args.nonce, args.sessionId);
     if (!selection) fail("SELECTION_MISSING", "\u672C\u4F1A\u8BDD\u7684\u6587\u4EF6\u9009\u62E9\u4E0D\u5B58\u5728\u6216\u5DF2\u6E05\u9664\uFF1B\u53EF\u8FD4\u56DE\u672C\u4F1A\u8BDD\u4FEE\u6539\u8BB0\u5F55\u91CD\u65B0\u9009\u62E9\u3002");
-    await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
+    const target = await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
+    if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
+      const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store.resolveFileId(selection.request.runId, selection.fileId));
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+      return repaired;
+    }
     return selection;
   }
   if (method === "clearHistory" && args?.confirmed === true) {
@@ -4103,7 +4435,7 @@ async function execute(s, method, args) {
       evidence.clear();
       navigation.clear();
       fileOpens.clear();
-      await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), []);
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {
       navigationClearing = false;

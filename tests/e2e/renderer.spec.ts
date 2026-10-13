@@ -429,3 +429,10 @@ test('A → B → A restores only A cards immediately while feed revalidation is
   await expect(page.locator('.dv-turn-head')).toContainText('4 files changed');
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
+
+test('does not show a separate child reply change card even if its message ID has cached card data', async ({ page }) => {
+  await setup(page, 'en', '&childReply=true', 4, 0);
+  await page.waitForTimeout(2400);
+  await expect(page.locator('.dv-turn-card, .dv-turn-file')).toHaveCount(0);
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});

@@ -131,3 +131,22 @@ it('rejects a stale file navigation generation after an asynchronous host load',
   current = false; release();
   await expect(pending).rejects.toThrow('Stale navigation generation'); expect(f.calls).toEqual([]); adapter.close();
 });
+
+it('never borrows global running state when this session has no scoped status', async () => {
+  const f = fixture(); Object.assign(f.state, { page: 'chat', isRunning: true, runningSessions: { other: true }, messages: [{ id: 'user-s', role: 'user', createdAt: Date.now() - 100 }] });
+  const adapter = createPluginReviewAdapter({ load: async () => f.modules });
+  const contexts: any[] = [], activities: any[] = [];
+  await adapter.subscribeSession((_id, context) => contexts.push(context));
+  await adapter.subscribeActivity(activity => activities.push(activity));
+  expect(contexts[0].running).toBe(false); expect(contexts[0].statusKnown).toBe(false); expect(activities).toEqual([null]);
+  adapter.close();
+});
+
+it('reports the unified running context with an idle main and uses Task launch time for missing tool timestamps', async () => {
+  const f = fixture(), since = Date.now() - 2000;
+  Object.assign(f.state, { page: 'chat', runningSessions: { s: false }, messages: [{ id: 'original', role: 'user', createdAt: since }, { id: 'launch-row', role: 'tool', toolCallId: 'launch', toolName: 'Task', toolStatus: 'success', toolResult: { details: { delegationId: 'd', status: 'running', startedAt: since + 100 } } }, { id: 'newer', role: 'user', createdAt: since + 500 }] });
+  const adapter = createPluginReviewAdapter({ load: async () => f.modules });
+  let context: unknown; await adapter.subscribeSession((_id, value) => { context = value; });
+  expect(context).toMatchObject({ sessionId: 's', running: true, mainRunning: false, taskId: 'original', since });
+  adapter.close();
+});

@@ -100,7 +100,7 @@ describe('native host evidence importer', () => {
     await session([user(), tool('one'), reply()]); await evidence('one'); await importer().syncSession(sid, root);
     const run = (await get())!; await store.writeRun({ ...run, id: 'agent-existing', source: undefined, replyMessageId: undefined } as HostHistoryRun);
     await fs.rm(path.join(store.directory, 'runs', `${run.id}.json`));
-    const d = await importer().syncSession(sid, root); expect(d.imported).toBe(1); expect(await get()).toBeNull();
+    const d = await importer().syncSession(sid, root); expect(d.imported).toBe(1); expect((await get())!.id).toBe('agent-existing');
     expect((await store.getRun('agent-existing'))?.replyMessageId).toBe('reply-one');
     expect((await importer().syncSession(sid, root)).unchanged).toBe(1);
     expect(await store.listRuns()).toHaveLength(1);
@@ -215,7 +215,7 @@ describe('native host evidence importer', () => {
     await store.importInbox('host-history'); fixed = (await store.getRun('live-agent'))!;
     expect(fixed.state).toBe('completed'); expect(fixed.changes['a.txt'].after.kind).toBe('text');
     await store.writeRun({ ...damaged, contentVersion: 6 }, true); await store.importInbox('host-history');
-    expect((await store.getRun('live-agent'))!.state).toBe('running');
+    expect((await store.getRun('live-agent'))!.state).toBe('completed'); // A newer content snapshot is not an execution-start event.
   });
   it('keeps verified historical blobs after native snapshot cleanup and incomplete transcript refresh', async () => {
     await session([user(), tool('one', 'Write'), reply()]);
@@ -323,4 +323,13 @@ it('retains recovered duplicate-capture bytes when native folders disappear and 
   await fs.rm(path.join(host, 'review-changes'), { recursive: true });
   await importer().syncSession(sid, root);
   expect((await store.getRun('duplicate-cleanup'))!.changes['example.ts']).toMatchObject({ before: { kind: 'text', text: 'old\n' }, after: { kind: 'text', text: 'new\n' } });
+});
+
+it('marks missing scoped activity unknown without inventing completion, then accepts exact fresh status', async () => {
+  await session([user(), tool('one')]); await evidence('one');
+  await importer().syncSession(sid, root, { running: true, taskId: 'user-one' });
+  await importer().syncSession(sid, root, { running: false, statusKnown: false });
+  expect((await get())!).toMatchObject({ state: 'unknown', incomplete: true }); expect((await get())!.endedAt).toBeUndefined();
+  await importer().syncSession(sid, root, { running: true, taskId: 'user-one', statusKnown: true });
+  expect((await get())!.state).toBe('running');
 });

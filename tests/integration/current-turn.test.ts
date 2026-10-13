@@ -71,7 +71,7 @@ it('uses exact tool ownership to repair a stale user binding and deduplicate nat
   const runs = await store.listRuns(false, true);
   expect(runs.filter(run => run.state === 'running')).toHaveLength(1);
   expect((await store.getRun(agent.id))!).toMatchObject({ userMessageId: 'new-user', state: 'running' });
-  expect(await store.getRun(hostHistoryRunId(sid, 'new-user'))).toBeNull();
+  expect((await store.getRun(hostHistoryRunId(sid, 'new-user')))!.id).toBe(agent.id);
   expect((await service.review({ scope: 'lastTurn', sessionId: sid, root }, false, context())).runId).toBe(agent.id);
 });
 
@@ -113,7 +113,7 @@ it('repairs old native recovery pollution using exact new tool ownership without
     expect(fixed.changes['native.txt'].evidence).toEqual(['native:new-tool']);
     expect(fixed.changes['old-only.txt']).toBeUndefined();
     expect((await store.getRun(old.id))!).toMatchObject({ state: 'completed', fileCount: 2 });
-    expect(await store.getRun(hostHistoryRunId(sid, 'new-user'))).toBeNull();
+    expect((await store.getRun(hostHistoryRunId(sid, 'new-user')))!.id).toBe(next.id);
   }
   await session([user('old-user', now), tool('old-tool', now + 1000), reply('old-reply', now + 2000), user('new-user', now + 4000), tool('new-tool', now + 5000), reply('new-reply', now + 6000)]);
   await importer.syncSession(sid, root, { running: false });

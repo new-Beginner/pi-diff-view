@@ -1,3 +1,19 @@
+// src/core/delegation-lifecycle.ts
+var name = (value) => String(value).split(".").pop().toLowerCase();
+var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
+function safeDelegation(value) {
+  if (!value || !id(value.delegationId) || !["running", "completed", "failed", "aborted", "stopped"].includes(value.status) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0) return void 0;
+  return { delegationId: value.delegationId, status: value.status, startedAt: value.startedAt, ...Number.isSafeInteger(value.completedAt) && value.completedAt >= value.startedAt ? { completedAt: value.completedAt } : {} };
+}
+function safeTaskDetails(tool, details) {
+  if (!details || typeof details !== "object") return void 0;
+  if (name(tool) === "task") return safeDelegation(details);
+  if (!["taskwait", "task_wait", "tasklist", "taskstop"].includes(name(tool))) return void 0;
+  const output = {};
+  for (const key of ["delegations", "stopped", "stopPending", "settled"]) if (Array.isArray(details[key])) output[key] = details[key].slice(0, 256).map(safeDelegation).filter(Boolean);
+  return Object.keys(output).length ? output : void 0;
+}
+
 // src/agent/capture.ts
 import fs5 from "node:fs/promises";
 import path5 from "node:path";
@@ -618,11 +634,11 @@ async function resolveLocator(file, pluginRoot2) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(await fs2.realpath(locator.dataPath)) !== canonical(locator.dataPath)) fail("BRIDGE_INVALID", "Unsafe plugin storage root");
   return locator;
 }
-function validId(id2) {
-  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id2)) fail("INVALID_ID", "Invalid record identifier");
+function validId(id3) {
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(id3)) fail("INVALID_ID", "Invalid record identifier");
 }
-function validRun(run, id2) {
-  if (!run || ![1, 2].includes(run.version) || run.id !== id2 || typeof run.sessionId !== "string" || !path2.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
+function validRun(run, id3) {
+  if (!run || ![1, 2].includes(run.version) || run.id !== id3 || typeof run.sessionId !== "string" || !path2.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
   try {
     for (const [value, change] of Object.entries(run.changes)) {
       assertPublicPath(value);
@@ -654,7 +670,43 @@ var SnapshotStore = class {
     this.pendingRecovery.delete(sessionId);
   }
   async init() {
-    for (const sub of ["blobs", "inbox", "runs", "backups", "evidence"]) await fs2.mkdir(path2.join(this.directory, sub), { recursive: true, mode: 448 });
+    for (const sub of ["blobs", "inbox", "runs", "contributions", "backups", "evidence"]) await fs2.mkdir(path2.join(this.directory, sub), { recursive: true, mode: 448 });
+  }
+  /** Called under captureLock after the destination has been durably written. */
+  async retireRun(from, to) {
+    validId(from);
+    validId(to);
+    if (from === to) return;
+    const target = await this.getRun(to, false, false);
+    const recorded = await this.getRun(from, false, false);
+    const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
+    const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
+    if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail("REPAIR_IDENTITY", "Cannot retire unverified run identity");
+    const fileAliases = await readJson(path2.join(this.directory, "file-aliases.json"), {});
+    const paths = /* @__PURE__ */ new Map();
+    for (const [value, change] of Object.entries(source.changes)) {
+      const match = target.changes[value] ? value : Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === change.capture?.identity);
+      if (!match) continue;
+      paths.set(value, match);
+      if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture.id;
+    }
+    await atomicJson(path2.join(this.directory, "file-aliases.json"), fileAliases);
+    const comments = await this.comments();
+    for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
+      comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path) };
+      comment.stale = true;
+    }
+    await this.saveComments(comments);
+    const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {});
+    aliases[from] = to;
+    await atomicJson(path2.join(this.directory, "run-aliases.json"), aliases);
+    if (recorded) await atomicJson(path2.join(this.directory, "contributions", `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
+    for (const sub of ["runs", "inbox"]) await fs2.rm(path2.join(this.directory, sub, `${from}.json`), { force: true });
+  }
+  async resolveFileId(runId, fileId) {
+    if (!fileId) return fileId;
+    const aliases = await readJson(path2.join(this.directory, "file-aliases.json"), {});
+    return aliases[`${runId}:${fileId}`] ?? fileId;
   }
   async captureLock(work) {
     const lock = path2.join(this.directory, "capture.lock");
@@ -777,10 +829,20 @@ var SnapshotStore = class {
     if (inbox) await this.captureLock(save);
     else await save();
   }
-  async getRun(id2, inbox = false, hydrate = true) {
-    validId(id2);
-    const run = await readJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${id2}.json`), null);
-    if (!run || !validRun(run, id2)) return null;
+  async getRun(id3, inbox = false, hydrate = true) {
+    validId(id3);
+    if (!inbox) {
+      const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {});
+      const seen = /* @__PURE__ */ new Set();
+      while (aliases[id3]) {
+        if (seen.has(id3) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
+        seen.add(id3);
+        id3 = aliases[id3];
+        validId(id3);
+      }
+    }
+    const run = await readJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${id3}.json`), null);
+    if (!run || !validRun(run, id3)) return null;
     if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
     return run;
   }
@@ -788,23 +850,61 @@ var SnapshotStore = class {
     await this.captureLock(async () => {
       const entries = (await fs2.readdir(path2.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
       for (const entry of entries) {
-        const id2 = entry.slice(0, -5);
+        const id3 = entry.slice(0, -5);
+        const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {});
+        if (aliases[id3]) {
+          const source = await this.getRun(id3, true, false), target = await this.getRun(id3, false, false);
+          if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
+            const saved = await readJson(path2.join(this.directory, "contributions", entry), null);
+            if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
+              await atomicJson(path2.join(this.directory, "contributions", entry), { ...source, userMessageId: target.userMessageId });
+              this.pendingRecovery.add(target.sessionId);
+            }
+            await fs2.rm(path2.join(this.directory, "inbox", entry), { force: true });
+          }
+          continue;
+        }
         try {
-          const run = await this.getRun(id2, true, false);
+          const run = await this.getRun(id3, true, false);
           if (!run) continue;
-          const current = await this.getRun(id2, false, false);
+          const inboxWasRunning = run.state === "running";
+          const current = await this.getRun(id3, false, false);
+          if (current && (current.sessionId !== run.sessionId || canonical(current.root) !== canonical(run.root))) {
+            await this.audit({ action: "inbox-identity-root-conflict", runId: id3, sessionId: run.sessionId });
+            continue;
+          }
+          if (current && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
+            if ((run.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
+            if (current.execution && run.execution?.id === current.execution.id && run.execution.revision < current.execution.revision) continue;
+          }
           if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
           if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
             const files = /* @__PURE__ */ Object.create(null);
             for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
-              if (captureCheckpoint(run.changes[value]) !== checkpoint || !current.changes[value]) continue;
-              run.changes[value] = current.changes[value];
+              if (captureCheckpoint(run.changes[value]) !== checkpoint) continue;
+              if (current.changes[value]) run.changes[value] = current.changes[value];
+              else delete run.changes[value];
               files[value] = checkpoint;
             }
             if (Object.keys(files).length) {
               run.hostRecovery = { captureVersion: run.contentVersion ?? 0, files };
               const order = [...Object.keys(current.changes).filter((value) => run.changes[value]), ...Object.keys(run.changes).filter((value) => !current.changes[value])];
               run.changes = Object.fromEntries(order.map((value) => [value, run.changes[value]]));
+            }
+          }
+          if (current && current.state !== "running" && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
+            const advanced = !!current.execution && run.execution?.id === current.execution.id && run.execution.revision > current.execution.revision;
+            if (!advanced) {
+              const evidenceChanged = Object.keys({ ...current.changes, ...run.changes }).some((p) => captureCheckpoint(run.changes[p]) !== captureCheckpoint(current.changes[p]));
+              const damaged = Object.values(run.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
+              run.state = current.state;
+              run.endedAt = current.endedAt;
+              run.execution = current.execution;
+              run.userMessageId = current.userMessageId;
+              run.replyMessageId = current.replyMessageId;
+              run.finalReply = current.finalReply;
+              run.replies = current.replies;
+              run.incomplete = current.incomplete || damaged || run.incomplete && (!current.hostRecovery || evidenceChanged);
             }
           }
           const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
@@ -815,11 +915,22 @@ var SnapshotStore = class {
           }
           await this.writeRun(run);
           if (!current || current.contentVersion !== run.contentVersion || current.state !== run.state || JSON.stringify(current.changes) !== JSON.stringify(run.changes)) this.pendingRecovery.add(run.sessionId);
-          if (run.state !== "running") await fs2.rm(path2.join(this.directory, "inbox", entry), { force: true });
+          if (run.state !== "running" && !inboxWasRunning) await fs2.rm(path2.join(this.directory, "inbox", entry), { force: true });
         } catch {
         }
       }
     });
+  }
+  async captureContributions() {
+    const files = (await fs2.readdir(path2.join(this.directory, "contributions"))).filter((file) => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
+    const sources = [];
+    for (const file of files) {
+      const id3 = file.slice(0, -5), source = await readJson(path2.join(this.directory, "contributions", file), null);
+      if (!source || !validRun(source, id3)) continue;
+      const target = await this.getRun(id3, false, false);
+      if (target?.id !== id3 && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
+    }
+    return sources;
   }
   async listRuns(hydrate = true, includeUnchanged = false) {
     const files = (await fs2.readdir(path2.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
@@ -833,7 +944,7 @@ var SnapshotStore = class {
           return null;
         }
       }));
-      for (const run of page) if (run && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
+      for (const run of page) if (run && !runs.some((r) => r.id === run.id) && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
     }
     return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
   }
@@ -873,7 +984,7 @@ var SnapshotStore = class {
         const run = await this.getRun(file.slice(0, -5), inbox, false);
         if (run?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
       }
-      for (const sub of ["runs", "inbox", "blobs", "backups", "evidence"]) {
+      for (const sub of ["runs", "inbox", "contributions", "blobs", "backups", "evidence"]) {
         const dir = path2.join(this.directory, sub);
         if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
         for (const file of await fs2.readdir(dir)) {
@@ -884,6 +995,8 @@ var SnapshotStore = class {
       }
       await this.saveComments([]);
       await fs2.rm(path2.join(this.directory, "restores.json"), { force: true });
+      await fs2.rm(path2.join(this.directory, "run-aliases.json"), { force: true });
+      await fs2.rm(path2.join(this.directory, "file-aliases.json"), { force: true });
       this.pendingRecovery.clear();
     });
   }
@@ -958,7 +1071,7 @@ import { randomUUID as randomUUID2 } from "node:crypto";
 import fs3 from "node:fs/promises";
 import path3 from "node:path";
 var CAPTURE_CONTEXT_TTL = 6e3;
-var id = (v) => typeof v === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(v);
+var id2 = (v) => typeof v === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(v);
 async function readCaptureContext(directory, generation, sessionId, root, now = Date.now()) {
   try {
     const file = path3.join(directory, "capture-contexts.json"), stat = await fs3.lstat(file);
@@ -966,7 +1079,7 @@ async function readCaptureContext(directory, generation, sessionId, root, now = 
     const document = JSON.parse(await fs3.readFile(file, "utf8"));
     if (document.version !== 1 || document.generation !== generation || !Array.isArray(document.contexts) || document.contexts.length > 200) return null;
     const context = document.contexts.find((v) => v?.sessionId === sessionId);
-    if (!context || context.running !== true || !id(context.taskId) || typeof context.root !== "string" || !path3.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
+    if (!context || context.running !== true || !id2(context.taskId) || typeof context.root !== "string" || !path3.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
     return context;
   } catch {
     return null;
@@ -1066,33 +1179,33 @@ async function journal(store, work) {
     return result;
   });
 }
-async function beginCaptureLease(store, root, owner, scopes = []) {
+async function beginCaptureLease(store, root, owner, scopes = [], lifecycle = {}) {
   return journal(store, (data) => {
-    if (data.leases.length >= 256) throw new Error("Capture lease limit reached; unresolved/background operations require a fresh store");
-    const lease = { id: randomUUID2(), root, scopes: scopes.length ? [...new Set(scopes)] : [root], owner, ambiguous: false };
+    if (data.leases.length >= 256) throw new Error("Capture lease limit reached; inspect unresolved leases and verify writers stopped before retiring exact legacy IDs");
+    const lease = { id: randomUUID2(), root, scopes: scopes.length ? [...new Set(scopes)] : [root], owner, ambiguous: false, ...lifecycle };
     for (const other of data.leases) if ((other.scopes ?? [other.root]).some((a) => lease.scopes.some((b) => inside(a, b) || inside(b, a)))) other.ambiguous = lease.ambiguous = true;
     data.leases.push(lease);
     return lease.id;
   });
 }
-async function endCaptureLease(store, id2) {
+async function endCaptureLease(store, id3) {
   return journal(store, (data) => {
-    const lease = data.leases.find((l) => l.id === id2);
-    data.leases = data.leases.filter((l) => l.id !== id2);
+    const lease = data.leases.find((l) => l.id === id3);
+    data.leases = data.leases.filter((l) => l.id !== id3);
     return !lease || lease.ambiguous;
   });
 }
 
 // src/agent/capture.ts
-var toolName = (name) => String(name).split(".").pop().toLowerCase();
+var toolName = (name2) => String(name2).split(".").pop().toLowerCase();
 var MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
 function textContent(message) {
   if (typeof message?.content === "string") return message.content;
   return Array.isArray(message?.content) ? message.content.filter((b) => b.type === "text").map((b) => b.text).join("") : "";
 }
-function toolPaths(name, input) {
+function toolPaths(name2, input) {
   const p = input?.path ?? input?.file_path;
-  if (typeof p !== "string" || !["write", "edit"].includes(name)) return { targets: [], hadTargets: false, truncated: false };
+  if (typeof p !== "string" || !["write", "edit"].includes(name2)) return { targets: [], hadTargets: false, truncated: false };
   const targets = /* @__PURE__ */ new Set();
   let hadTargets = false, truncated = false;
   const add = (target) => {
@@ -1100,7 +1213,7 @@ function toolPaths(name, input) {
     if (!isImagePath(target)) targets.add(target);
   };
   add(p);
-  if (/^edit$/i.test(name) && typeof input.ops === "string") {
+  if (/^edit$/i.test(name2) && typeof input.ops === "string") {
     let scanned = 0;
     for (const line of input.ops.split("\n")) if (line.startsWith("MV ")) {
       if (++scanned > 4096) {
@@ -1120,6 +1233,13 @@ function createCaptureExtension(options) {
   return (pi) => {
     let run = null, store = null;
     const pending = /* @__PURE__ */ new Map();
+    const taskCalls = /* @__PURE__ */ new Map();
+    const detached = /* @__PURE__ */ new Map();
+    const detachPending = () => {
+      for (const [id3, value] of pending) detached.set(id3, { store: value.store, lease: value.lease, sessionId: value.run.sessionId });
+      pending.clear();
+    };
+    const retiredReplies = /* @__PURE__ */ new Set();
     const waits = /* @__PURE__ */ new Set();
     let seen = /* @__PURE__ */ new Set(), retired = /* @__PURE__ */ new Set(), warned = false, disposed = false, tail = Promise.resolve();
     let lastReply, privatePaths = [], observed = /* @__PURE__ */ new Set(), settled = false;
@@ -1153,6 +1273,12 @@ function createCaptureExtension(options) {
     };
     const persist = async (target) => {
       await check(target);
+      if (target.mainState) {
+        const children = target.delegations ?? [];
+        target.state = target.mainState === "running" || children.some((child) => child.status === "running") ? "running" : target.mainState === "aborted" || children.some((child) => ["aborted", "stopped"].includes(child.status)) ? "aborted" : target.mainState === "incomplete" || children.some((child) => child.status === "failed") ? "incomplete" : target.mainState;
+        if (target.state === "running") delete target.endedAt;
+        else target.endedAt ??= Date.now();
+      }
       target.fileCount = Object.values(target.changes).filter((c) => !c.ambiguous && !sameSnapshot(c.before, c.after)).length;
       target.contentVersion = (target.contentVersion ?? 0) + 1;
       await store.writeRun(target, true);
@@ -1169,9 +1295,13 @@ function createCaptureExtension(options) {
     const begin = async (ctx, uncertain = false, event) => {
       if (disposed) return;
       const locator = await bridge();
-      if (run?.state === "running") {
+      for (const reply of run?.replies ?? []) retiredReplies.add(`${reply.timestamp}:${reply.hash}`);
+      while (retiredReplies.size > 200) retiredReplies.delete(retiredReplies.keys().next().value);
+      if (run?.execution?.state === "running") {
+        run.mainState = "incomplete";
         run.state = "incomplete";
         run.incomplete = true;
+        run.execution = { ...run.execution, revision: run.execution.revision + 1, state: "settled" };
         delete run.finalReply;
         run.endedAt = Date.now();
         await persist(run);
@@ -1183,12 +1313,14 @@ function createCaptureExtension(options) {
       const root = await fs5.realpath(ctx.cwd);
       const identity = await readCaptureContext(locator.dataPath, locator.generation, ctx.sessionManager.getSessionId(), root);
       run = { version: 2, contentVersion: 0, boundary: uncertain && !identity ? "uncertain" : "user", id: randomUUID3(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root, startedAt: Date.now(), state: "running", fileCount: 0, incomplete: uncertain, changes: /* @__PURE__ */ Object.create(null), replies: [], bindings: {} };
+      run.execution = { id: randomUUID3(), revision: 1, state: "running" };
+      run.mainState = "running";
       const userId = event?.userMessageId ?? (event?.message?.role === "user" ? event.message.id : void 0) ?? identity?.taskId;
       if (typeof userId === "string" && userId.length > 0 && userId.length <= 256) run.userMessageId = userId;
       if (uncertain && identity) run.notice = "\u8FD0\u884C\u8EAB\u4EFD\u5DF2\u7531\u540C\u4F1A\u8BDD\u3001\u540C\u9879\u76EE\u7684\u5BBF\u4E3B\u5143\u6570\u636E\u6838\u9A8C\uFF1B\u4EC5\u8BB0\u5F55\u91C7\u96C6\u5F00\u59CB\u540E\u7684\u6709\u754C\u53D8\u66F4\u3002";
-      for (const id2 of seen) retired.add(id2);
+      for (const id3 of seen) retired.add(id3);
       while (retired.size > 4096) retired.delete(retired.keys().next().value);
-      pending.clear();
+      detachPending();
       waits.clear();
       seen.clear();
       observed.clear();
@@ -1199,12 +1331,14 @@ function createCaptureExtension(options) {
     };
     pi.on("before_agent_start", (event, ctx) => serial(() => begin(ctx, false, event), ctx));
     pi.on("agent_start", (_event, ctx) => serial(async () => {
-      if (disposed || settled || !run || run.state === "running" || run.state === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs5.realpath(ctx.cwd)) return;
+      if (disposed || settled || !run || run.execution?.state === "running" || run.mainState === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs5.realpath(ctx.cwd)) return;
       await check(run);
       run.state = "running";
       delete run.endedAt;
       delete run.finalReply;
       delete run.cardPreview;
+      run.mainState = "running";
+      if (run.execution) run.execution = { ...run.execution, revision: run.execution.revision + 1, state: "running" };
       run.bindings = {};
       lastReply = void 0;
       await persist(run);
@@ -1228,23 +1362,35 @@ function createCaptureExtension(options) {
       }
       await check(run);
       seen.add(event.toolCallId);
-      const name = toolName(event.toolName), targetSet = toolPaths(name, event.input ?? event.args), targets = targetSet.targets;
-      if (["bash", "shell", "task", "taskwait", "task_wait"].includes(name)) return;
+      const name2 = toolName(event.toolName), targetSet = toolPaths(name2, event.input ?? event.args), targets = targetSet.targets;
+      if (name2 === "task") {
+        if ((run.delegations?.length ?? 0) >= 256) {
+          run.incomplete = true;
+          await persist(run);
+          return;
+        }
+        (run.delegations ??= []).push({ callId: event.toolCallId, owner: run.userMessageId ?? run.id, status: "running" });
+        taskCalls.set(event.toolCallId, run);
+        for (const [id3, target] of taskCalls) if (taskCalls.size > 4096 && target.delegations?.every((child) => child.status !== "running")) taskCalls.delete(id3);
+        await persist(run);
+        return;
+      }
+      if (["bash", "shell", "task", "taskwait", "task_wait"].includes(name2)) return;
       const workspace = false;
-      if (name === "taskwait" || name === "task_wait") {
+      if (name2 === "taskwait" || name2 === "task_wait") {
         waits.add(event.toolCallId);
         return;
       }
       if (targetSet.hadTargets && targets.length === 0 && !targetSet.truncated) return;
       if (!targets.length && !workspace) {
-        if (["write", "edit"].includes(name) || name.startsWith("plugin_")) {
+        if (["write", "edit"].includes(name2) || name2.startsWith("plugin_")) {
           run.incomplete = true;
           await persist(run);
         }
         return;
       }
-      const leaseStore = store, lease = await beginCaptureLease(leaseStore, run.root, run.id, targets.slice(0, 256).map((p) => path5.resolve(run.root, p)));
-      const captured = { run, paths: [], store: leaseStore, lease, name, workspace, complete: true, task: name === "task" };
+      const leaseStore = store, lease = await beginCaptureLease(leaseStore, run.root, run.id, targets.slice(0, 256).map((p) => path5.resolve(run.root, p)), { sessionId: run.sessionId, toolCallId: event.toolCallId, executionId: run.execution?.id });
+      const captured = { run, paths: [], store: leaseStore, lease, name: name2, workspace, complete: true, task: name2 === "task" };
       pending.set(event.toolCallId, captured);
       if (workspace) {
         const snapshot = await snapshotWorkspace(run.root, privatePaths);
@@ -1256,7 +1402,7 @@ function createCaptureExtension(options) {
         if (targetSet.truncated || targets.length > 256) run.incomplete = true;
         for (const [index, target] of targets.slice(0, 256).entries()) {
           try {
-            const capture = await resolveCapturePath(run.root, target, privatePaths, name === "write" || index > 0);
+            const capture = await resolveCapturePath(run.root, target, privatePaths, name2 === "write" || index > 0);
             if (!observed.has(capture.identity) && observed.size >= 256) throw new Error("Turn exceeds 256 explicitly captured files");
             observed.add(capture.identity);
             const before = bounded(await readCapturedSnapshot(run.root, capture, privatePaths), captured.paths.map((e) => e.before));
@@ -1269,7 +1415,7 @@ function createCaptureExtension(options) {
       }
       await persist(run);
     }, ctx));
-    const finish = async (id2, captured, isError = false, sample = false) => {
+    const finish = async (id3, captured, isError = false, sample = false) => {
       const target = captured.run;
       await check(target);
       const pairs = [];
@@ -1296,7 +1442,7 @@ function createCaptureExtension(options) {
         }
       }
       const overlap = sample ? true : await endCaptureLease(captured.store, captured.lease) || captured.store.directory !== store.directory;
-      if (!sample) pending.delete(id2);
+      if (!sample) pending.delete(id3);
       if (isError) target.incomplete = true;
       for (const { entry, after: rawAfter, uncertain } of pairs) {
         if (sameSnapshot(entry.before, rawAfter)) continue;
@@ -1318,7 +1464,7 @@ function createCaptureExtension(options) {
           capture: prior?.capture ?? entry.capture,
           before,
           after,
-          evidence: [...prior?.evidence ?? [], `${captured.name}:${id2}`].slice(-32),
+          evidence: [...prior?.evidence ?? [], `${captured.name}:${id3}`].slice(-32),
           ...captured.workspace && !ambiguous ? { note: "Observed workspace endpoints during a tool interval, not authoritative process-level authorship evidence." } : {},
           ...ambiguous ? { ambiguous: true, note: "Overlapping, discontinuous or delegated capture interval: file ownership is uncertain; diff and line counts unavailable." } : {}
         };
@@ -1329,12 +1475,46 @@ function createCaptureExtension(options) {
       }
       await persist(target);
     };
+    const updateDelegations = async (event, ctx) => {
+      const details = event.details ?? event.message?.toolResult?.details;
+      const name2 = toolName(event.toolName ?? event.message?.toolName);
+      const changed = /* @__PURE__ */ new Set();
+      const target = taskCalls.get(event.toolCallId ?? event.message?.toolCallId);
+      if (name2 === "task" && target?.sessionId === ctx.sessionManager.getSessionId()) {
+        const child = target.delegations?.find((child2) => child2.callId === (event.toolCallId ?? event.message?.toolCallId));
+        const sample = safeDelegation(details);
+        if (child && child.status === "running" && (event.isError || sample) && (!sample || !child.startedAt || child.startedAt === sample.startedAt)) {
+          Object.assign(child, event.isError ? { status: "failed" } : sample);
+          changed.add(target);
+        }
+      }
+      const samples = name2 === "task" ? [] : Object.values(safeTaskDetails(name2, details) ?? {}).flat();
+      for (const sample of samples) for (const target2 of new Set(taskCalls.values())) {
+        if (target2.sessionId !== ctx.sessionManager.getSessionId()) continue;
+        const child = target2.delegations?.find((child2) => child2.delegationId === sample.delegationId && child2.startedAt === sample.startedAt);
+        if (child?.status === "running") {
+          Object.assign(child, sample);
+          changed.add(target2);
+        }
+      }
+      for (const target2 of changed) {
+        if (target2.execution) target2.execution = { ...target2.execution, revision: target2.execution.revision + 1 };
+        await persist(target2);
+      }
+    };
     pi.on("tool_result", (event, ctx) => serial(async () => {
+      await updateDelegations(event, ctx);
+      const old = detached.get(event.toolCallId);
+      if (old && old.sessionId === ctx.sessionManager.getSessionId()) {
+        await endCaptureLease(old.store, old.lease);
+        detached.delete(event.toolCallId);
+        return;
+      }
       if (disposed || !run || run.sessionId !== ctx.sessionManager.getSessionId()) return;
       const captured = pending.get(event.toolCallId);
       if (!captured) {
         if (waits.delete(event.toolCallId) || ["taskwait", "task_wait"].includes(toolName(event.toolName))) {
-          for (const [id2, task] of pending) if (task.task) await finish(id2, task, !!event.isError, true);
+          for (const [id3, task] of pending) if (task.task) await finish(id3, task, !!event.isError, true);
         }
         return;
       }
@@ -1347,6 +1527,7 @@ function createCaptureExtension(options) {
       await finish(event.toolCallId, captured, !!event.isError);
     }, ctx));
     pi.on("message_end", (event, ctx) => serial(async () => {
+      await updateDelegations(event, ctx);
       if (!run || run.state !== "running" || run.sessionId !== ctx.sessionManager.getSessionId() || event.message?.role !== "assistant") return;
       const message = event.message, text = textContent(message);
       lastReply = void 0;
@@ -1370,12 +1551,15 @@ function createCaptureExtension(options) {
       await persist(run);
     }, ctx));
     pi.on("agent_end", (event, ctx) => serial(async () => {
-      if (!run || run.state !== "running" || run.sessionId !== ctx.sessionManager.getSessionId()) return;
+      if (!run || run.execution?.state !== "running" || run.sessionId !== ctx.sessionManager.getSessionId()) return;
+      if (event.parentToolCallId) return;
+      const ending = Array.isArray(event.messages) ? [...event.messages].reverse().find((m) => m.role === "assistant") : void 0;
+      if (ending && retiredReplies.has(`${ending.timestamp}:${digest(textContent(ending).trim())}`)) return;
       await check(run);
-      for (const [id2, captured] of pending) if (captured.task) await finish(id2, captured, false, true);
+      for (const [id3, captured] of pending) if (captured.task) await finish(id3, captured, false, true);
       if (pending.size) {
         run.incomplete = true;
-        pending.clear();
+        detachPending();
         lastReply = void 0;
       }
       const messages = Array.isArray(event.messages) ? event.messages : void 0;
@@ -1389,24 +1573,28 @@ function createCaptureExtension(options) {
         lastReply = void 0;
       }
       if (run.boundary === "user" && lastReply && !aborted) run.finalReply = lastReply;
-      run.state = aborted ? "aborted" : run.incomplete ? "incomplete" : "completed";
+      if (run.execution) run.execution = { ...run.execution, revision: run.execution.revision + 1, state: "settled" };
+      run.mainState = aborted ? "aborted" : run.incomplete ? "incomplete" : "completed";
+      run.state = run.mainState;
       run.endedAt = Date.now();
       await persist(run);
     }, ctx));
     pi.on("agent_settled", (_event, ctx) => serial(async () => {
-      if (run?.sessionId === ctx.sessionManager.getSessionId()) settled = true;
+      if (run?.sessionId === ctx.sessionManager.getSessionId() && run.execution?.state === "settled") settled = true;
     }, ctx));
     pi.on("session_shutdown", (_event, ctx) => serial(async () => {
-      if (run?.state === "running") {
+      if (run?.execution?.state === "running") {
         run.incomplete = true;
+        run.mainState = "aborted";
         run.state = "aborted";
+        run.execution = { ...run.execution, revision: run.execution.revision + 1, state: "settled" };
         delete run.finalReply;
         run.endedAt = Date.now();
         await persist(run).catch(() => {
         });
       }
       disposed = true;
-      pending.clear();
+      detachPending();
       seen.clear();
       observed.clear();
       run = null;

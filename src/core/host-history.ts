@@ -1,3 +1,4 @@
+import { collectDelegations } from './delegation-lifecycle';
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
@@ -5,14 +6,14 @@ import { MAX_TEXT_BYTES, type CaptureRun, type CapturedChange, type CaptureIdent
 import { absentSnapshot, assertPublicPath, canonical, digest, inside, snapshotFromBytes } from './path-policy';
 import { isImagePath } from './review-file-policy';
 import { replayRecordedEdit } from './edit-replay';
-import { captureCheckpoint, type SnapshotStore } from './storage';
+import { atomicJson, captureCheckpoint, type SnapshotStore } from './storage';
 
 type RecordValue = Record<string, any>;
 type HistoryChange = CapturedChange & { note?: string; oldPath?: string };
 export type HostHistoryRun = CaptureRun & { userMessageId?: string; replyMessageId?: string; source?: 'host-history'; notice?: string };
 export interface HostHistoryDiagnostics { imported: number; unchanged: number; skipped: number; events: number; runIds: string[]; warnings: string[] }
 interface Message { id: string; role: string; blocks: RecordValue[]; meta: RecordValue; createdAt: number; order: number; parent?: string }
-interface Event { meta: RecordValue; directory?: string; message: Message; block?: RecordValue; before?: FileSnapshot; after?: FileSnapshot; toolOnly?: boolean }
+interface Event { meta: RecordValue; directory?: string; message: Message; block?: RecordValue; before?: FileSnapshot; after?: FileSnapshot; toolOnly?: boolean; capturedBefore?: boolean }
 const ID = /^[a-zA-Z0-9-]{1,80}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -88,18 +89,20 @@ export class HostHistoryImporter {
     }
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
-  async syncSession(sessionId: string, root: string, options: { running?: boolean; taskId?: string; since?: number; messages?: unknown[] } | boolean = {}): Promise<HostHistoryDiagnostics> {
+  async syncSession(sessionId: string, root: string, options: { running?: boolean; mainRunning?: boolean; statusKnown?: boolean; taskId?: string; since?: number; messages?: unknown[]; repairRootConflicts?: boolean; repairUserMessageId?: string } | boolean = {}): Promise<HostHistoryDiagnostics> {
     if (!ID.test(sessionId) || !path.isAbsolute(root)) throw new Error('Invalid history session/root');
     root = path.resolve(root);
     const capture = (value: string) => this.capture(root, value, sessionId);
     const running = typeof options === 'boolean' ? options : options.running === true;
+    const mainRunning = typeof options === 'boolean' ? options : options.mainRunning ?? running;
+    const statusKnown = typeof options === 'boolean' || options.statusKnown !== false;
     const taskId = typeof options !== 'boolean' && typeof options.taskId === 'string' && /^[a-zA-Z0-9-]{1,256}$/.test(options.taskId) ? options.taskId : undefined;
     const since = typeof options !== 'boolean' && Number.isSafeInteger(options.since) && options.since! > 0 && options.since! <= Date.now() ? options.since : undefined;
     const d: HostHistoryDiagnostics = { imported: 0, unchanged: 0, skipped: 0, events: 0, runIds: [], warnings: [] };
     const warn = (value: string) => { if (d.warnings.length < 100 && !d.warnings.includes(value)) d.warnings.push(value); };
     // Empty source-owned markers contain no history to lose. Retire them from
     // authoritative idle/new-task metadata even if the transcript has not flushed.
-    if (!running || taskId) {
+    if (statusKnown && (!running || taskId)) {
       await this.store.init();
       await this.store.captureLock(async () => {
         for (const marker of await this.store.listRuns(false, true)) {
@@ -148,6 +151,7 @@ export class HostHistoryImporter {
       if (m.parent) { const parent = aliases.get(m.parent); return parent ? owner(parent, seen) : undefined; }
       return owners.get(m.id);
     };
+    const delegations = collectDelegations(ordered, message => owner(message as Message));
     const events: Event[] = [], eventKeys = new Set<string>();
     const add = (meta: RecordValue, directory?: string, toolOnly = false) => {
       if (meta.sessionId !== sessionId || meta.version !== 1 || typeof meta.path !== 'string' || typeof meta.messageId !== 'string') { d.skipped++; return; }
@@ -197,9 +201,36 @@ export class HostHistoryImporter {
     }
     events.sort((a, b) => a.message.order - b.message.order);
     if (events.length > 4096) { warn('Host event limit exceeded'); return d; }
+    await this.store.init();
+    const capturedEndpoints = new Map<string, FileSnapshot[]>();
+    const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
+    for (const source of sources) {
+      if (source.sessionId !== sessionId || canonical(source.root) !== canonical(root) || !source.userMessageId) continue;
+      for (const change of Object.values(source.changes)) {
+        if (change.ambiguous || !change.capture || !change.evidence?.length) continue;
+        for (const side of ['before', 'after'] as const) {
+          const ref = side === 'before' ? change.evidence[0] : change.evidence.at(-1)!;
+          const callId = ref.slice(ref.indexOf(':') + 1), message = aliases.get(callId);
+          if (!/^(native|write|edit):/.test(ref) || !message || owner(message) !== source.userMessageId) continue;
+          const key = `${callId}\0${change.capture.identity}\0${side}`;
+          capturedEndpoints.set(key, [...(capturedEndpoints.get(key) ?? []), change[side]]);
+        }
+      }
+    }
     let evidenceBytes = 0;
     for (const e of events) {
       e.before = await this.snapshot(e, 'before'); e.after = await this.snapshot(e, 'after');
+      for (const side of ['before', 'after'] as const) {
+        if (e[side]!.kind !== 'unavailable') continue;
+        const endpoints = capturedEndpoints.get(`${e.meta.messageId}\0${capture(e.meta.path).identity}\0${side}`) ?? [];
+        const unique = new Map(endpoints.map(snapshot => [JSON.stringify([snapshot.hash, snapshot.exists]), snapshot]));
+        if (unique.size !== 1) continue;
+        const snapshot = unique.values().next().value!;
+        if (HASH.test(e.meta[`${side}Hash`] ?? '') && snapshot.hash !== e.meta[`${side}Hash`]) continue;
+        if (typeof e.meta[`${side}Exists`] === 'boolean' && snapshot.exists !== e.meta[`${side}Exists`]) continue;
+        const verified = await this.store.hydrate(snapshot);
+        if (verified.kind === 'text') { e[side] = verified; if (side === 'before') e.capturedBefore = true; }
+      }
       evidenceBytes += e.before.size + e.after.size;
       if (evidenceBytes > 64 * 1024 * 1024) { warn('Host snapshot byte limit exceeded'); return d; }
     }
@@ -289,7 +320,9 @@ export class HostHistoryImporter {
         });
       for (const user of users) {
         const turnEvents = events.filter(e => owner(e.message) === user.id);
-        const live = running && (taskId ? user.id === taskId : user === users.at(-1));
+        const mainLive = statusKnown && mainRunning && (taskId ? user.id === taskId : user === users.at(-1));
+        const children = delegations.filter(child => child.owner === user.id);
+        const live = mainLive || children.some(child => child.status === 'running');
         const id = hostHistoryRunId(sessionId, user.id);
         const duplicates = existing.filter(r => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === 'host-history') return false;
@@ -304,15 +337,40 @@ export class HostHistoryImporter {
           // A later USER boundary disproves a stale binding; time never proves a merge.
           const boundary = nextBoundary.get(user.id);
           return r.userMessageId === user.id && !(boundary && r.startedAt >= boundary);
-        });
+        }).sort((a, b) => a.startedAt - b.startedAt);
         const duplicate = duplicates[0];
         // Merge only by a stable user identity, directly recorded or corroborated by exact tool IDs.
-        const previous = await this.store.getRun(id) as HostHistoryRun | null;
-        if (previous && (previous.source !== 'host-history' || canonical(previous.root) !== canonical(root))) { d.skipped++; warn('Existing run identity/root conflict'); continue; }
-        if (!turnEvents.length && !live && !duplicate && !previous) continue;
+        const candidate = await this.store.getRun(id) as HostHistoryRun | null;
+        const previous = candidate?.id === id ? candidate : null; // Retired IDs resolve for navigation, not as new source records.
         const members = ordered.filter(m => owner(m) === user.id && !m.parent);
         const last = members.filter(m => m.role === 'assistant' || m.role === 'tool').at(-1);
-        const reply = !live && last?.role === 'assistant' && last.meta.status === 'complete' && last.blocks.some(b => b.type === 'text') ? last : undefined;
+        const reply = !mainLive && last?.role === 'assistant' && last.meta.status === 'complete' && last.blocks.some(b => b.type === 'text') ? last : undefined;
+        let migrating = false;
+        if (previous && (previous.source !== 'host-history' || previous.sessionId !== sessionId || previous.userMessageId !== user.id)) { d.skipped++; warn('Existing run identity conflict; content preserved'); continue; }
+        if (previous && canonical(previous.root) !== canonical(root)) {
+          // Root migration is opt-in and restricted to a demonstrably mis-scoped scratch record.
+          // Exact tool IDs, absolute path identity and native endpoint hashes must corroborate every old file.
+          const verified = canonical(previous.root) === canonical(this.scratchRoot(sessionId)) && Object.values(previous.changes).every(change => {
+            const mapped = change.capture?.origin === 'workspace' ? capture(change.capture.path).identity : change.capture?.identity;
+            const linked = turnEvents.filter(e => capture(e.meta.path).identity === mapped);
+            return !!linked.length && !!change.evidence?.length && change.evidence.every(ref => ref.startsWith('native:') && linked.some(e => ref === `native:${e.meta.messageId}` && e.block?.status === 'success'))
+              && change.before.hash === linked[0].before!.hash && linked.some(e => e.after!.hash === change.after.hash)
+              && linked.every(e => e.before!.kind === 'text' && e.after!.kind === 'text');
+          });
+          migrating = typeof options !== 'boolean' && options.repairRootConflicts === true && (!options.repairUserMessageId || options.repairUserMessageId === user.id) && verified && duplicates.length === 1;
+          if (!migrating) {
+            // Content failure cannot freeze independent, exact user final-message evidence.
+            if (reply && (previous.state !== 'completed' || previous.endedAt !== reply.createdAt)) {
+              previous.state = 'completed'; previous.endedAt = reply.createdAt; previous.replyMessageId = reply.id;
+              previous.incomplete = true; previous.notice = '根目录冲突：内容被冻结，完成状态由同会话用户轮次的最终回复核验；需显式授权迁移。';
+              previous.contentVersion = (previous.contentVersion ?? 0) + 1; await this.store.writeRun(previous);
+            }
+            d.skipped++; warn('Existing run root conflict; content frozen; verified repair requires explicit approval'); continue;
+          }
+          const reviewState = Object.fromEntries(await Promise.all(['comments.json', 'selections.json', 'restores.json', 'run-aliases.json', 'file-aliases.json'].map(async file => [file, await fs.readFile(path.join(this.store.directory, file), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; })])));
+          await atomicJson(path.join(this.store.directory, 'backups', `repair-${id}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState, createdAt: Date.now() });
+        }
+        if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every(m => m.createdAt <= saved.endedAt!) ? saved.replyMessageId : undefined;
         const replyId = reply?.id ?? retainedReply;
@@ -325,19 +383,25 @@ export class HostHistoryImporter {
             for (const side of ['before', 'after'] as const) if (e[side]!.kind === 'unavailable' && !HASH.test(e[side]!.hash)) e[side] = recorded[side];
           }
           const note = ['原生历史修改事件；未读取当前文件。', e.meta.state === 'reverted' ? '主程序已标记撤销；此处保留原修改证据。' : '', e.meta.oldPath ? `重命名来源：${e.meta.oldPath}` : '', e.before!.kind === 'unavailable' || e.after!.kind === 'unavailable' ? '历史完整内容不可用，无法可靠计算完整差异。' : ''].filter(Boolean).join(' ');
-          changes[c.path] = { capture: c, before: old?.before ?? e.before!, after: e.after!, note, evidence: [...(old?.evidence ?? []), `native:${e.meta.messageId}`].slice(-32), ...(e.meta.oldPath ? { oldPath: e.meta.oldPath } : {}) };
+          const discontinuous = !!old && (old.ambiguous || ((!e.toolOnly || e.capturedBefore) && old.after.kind === 'text' && e.before!.kind === 'text' && (old.after.hash !== e.before!.hash || old.after.exists !== e.before!.exists)));
+          changes[c.path] = { capture: c, before: old?.before ?? e.before!, after: e.after!, note: discontinuous ? `${note} 并发或不连续的文件快照，不能作为自动合并；行数未知。` : note, evidence: [...(old?.evidence ?? []), `native:${e.meta.messageId}`].slice(-32), ...(discontinuous ? { ambiguous: true } : {}), ...(e.meta.oldPath ? { oldPath: e.meta.oldPath } : {}) };
         }
-        if (previous) for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes[value] && (change.evidence ?? []).every(standardEvidence)) changes[value] = change;
+        if (previous && !migrating) for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes[value] && (change.evidence ?? []).every(standardEvidence)) changes[value] = change;
         if (Object.keys(changes).length > 256) { warn('Turn exceeds 256 files; import skipped'); d.skipped++; continue; }
-        const incomplete = Object.values(changes).some(c => c.before.kind === 'unavailable' || c.after.kind === 'unavailable') || (!replyId && !live);
-        const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live ? undefined : retainedReply ? saved!.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, state: live ? 'running' : replyId ? 'completed' : 'incomplete', fileCount: Object.keys(changes).length, incomplete, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
+        const stopped = last?.meta.status === 'aborted' || children.some(child => ['aborted', 'stopped'].includes(child.status));
+        const failed = last?.meta.status === 'error' || children.some(child => child.status === 'failed');
+        const incomplete = stopped || failed || Object.values(changes).some(c => c.ambiguous || c.before.kind === 'unavailable' || c.after.kind === 'unavailable') || (!replyId && !live);
+        const unresolved = !statusKnown && !replyId && !live;
+        const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live || unresolved ? undefined : Math.max(retainedReply ? saved!.endedAt! : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map(child => child.completedAt ?? 0)), state: live ? 'running' : stopped ? 'aborted' : failed ? 'incomplete' : replyId ? 'completed' : unresolved ? 'unknown' : 'incomplete', fileCount: Object.keys(changes).length, incomplete: incomplete || unresolved, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? '执行状态证据缺失或过期，待核验；不代表任务已结束。' : incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
+        run.delegations = children.length ? children : undefined;
+        if (live) run.bindings = {};
         if (duplicates.length) {
           for (const duplicate of duplicates) {
             const liveRun = (await this.store.getRun(duplicate.id))!;
             const recoveredFiles = { ...liveRun.hostRecovery?.files };
             let changed = false;
             for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change) || (change.evidence ?? []).some(ref => !standardEvidence(ref))) {
-              delete liveRun.changes[value]; delete recoveredFiles[value]; changed = true;
+              recoveredFiles[value] ??= captureCheckpoint(change); delete liveRun.changes[value]; changed = true;
             }
             if (liveRun.userMessageId !== user.id || liveRun.boundary !== 'user') {
               liveRun.userMessageId = user.id; liveRun.boundary = 'user';
@@ -348,7 +412,8 @@ export class HostHistoryImporter {
             for (const [value, change] of Object.entries(changes)) {
               const old = liveRun.changes[value];
               const complete = change.before.kind === 'text' && change.after.kind === 'text';
-              if (!old || (complete && (old.ambiguous || old.before.kind === 'unavailable' || old.after.kind === 'unavailable')) || old.evidence?.some(e => e.startsWith('native:'))) {
+              const covered = !!old?.evidence?.length && old.evidence.every(ref => refOwner(ref) === user.id);
+              if (!old || (covered && complete) || (complete && (old.ambiguous || old.before.kind === 'unavailable' || old.after.kind === 'unavailable')) || old.evidence?.some(e => e.startsWith('native:'))) {
                 const signature = (c: HistoryChange | undefined) => c && JSON.stringify({ ...c, diffStats: undefined });
                 if (signature(old) !== signature(change)) {
                   recoveredFiles[value] ??= captureCheckpoint(old);
@@ -356,7 +421,10 @@ export class HostHistoryImporter {
                 }
               }
             }
+            if (JSON.stringify(liveRun.delegations) !== JSON.stringify(run.delegations)) { liveRun.delegations = run.delegations; changed = true; }
             if (liveRun.state !== run.state || liveRun.endedAt !== run.endedAt) { liveRun.state = run.state; liveRun.endedAt = run.endedAt; changed = true; }
+            if (statusKnown && !live && liveRun.execution?.state === 'running') { liveRun.execution = { ...liveRun.execution, state: 'settled', revision: liveRun.execution.revision + 1 }; changed = true; }
+            if (migrating && previous) { liveRun.bindings = { ...previous.bindings, ...liveRun.bindings }; changed = true; }
             const damaged = Object.values(liveRun.changes).some(c => c.ambiguous || c.before.kind === 'unavailable' || c.after.kind === 'unavailable');
             if (liveRun.incomplete !== (run.incomplete || damaged)) { liveRun.incomplete = run.incomplete || damaged; changed = true; }
             // Do not acknowledge an inbox version that has not actually been imported.
@@ -369,7 +437,8 @@ export class HostHistoryImporter {
             if (changed) { liveRun.contentVersion = (liveRun.contentVersion ?? 0) + 1; await this.store.writeRun(liveRun); d.imported++; }
             else d.unchanged++;
           }
-          if (previous?.source === 'host-history') await fs.rm(path.join(this.store.directory, 'runs', `${id}.json`), { force: true });
+          if (duplicates.length > 1) await this.coalesceCaptures(duplicates.map(duplicate => duplicate.id), run, refOwner);
+          if (await this.store.getRun(duplicates[0].id)) await this.store.retireRun(id, duplicates[0].id);
           continue;
         }
         // Compare source-owned state only: storage may add stats/previews and strip blob text.
@@ -382,6 +451,35 @@ export class HostHistoryImporter {
       }
     });
     return d;
+  }
+  /** Under captureLock: merge display records only after exact USER/tool ownership proof. */
+  private async coalesceCaptures(ids: string[], native: CaptureRun, refOwner: (ref: string) => string | undefined): Promise<void> {
+    const primary = (await this.store.getRun(ids[0]))!;
+    for (const id of ids.slice(1)) {
+      const child = await this.store.getRun(id); if (!child) continue;
+      for (const [value, change] of Object.entries(child.changes)) {
+        if (change.evidence?.some(ref => { const owner = refOwner(ref); return owner && owner !== native.userMessageId; })) continue;
+        const prior = primary.changes[value];
+        if (!prior) { primary.changes[value] = change; continue; }
+        const equal = (a: FileSnapshot, b: FileSnapshot) => a.hash === b.hash && a.exists === b.exists;
+        if (equal(prior.before, change.before) && equal(prior.after, change.after)) continue;
+        const refs = [...new Set([...(prior.evidence ?? []), ...(change.evidence ?? [])])];
+        if (!prior.ambiguous && !change.ambiguous && equal(prior.after, change.before)) primary.changes[value] = { ...prior, after: change.after, diffStats: undefined, evidence: refs };
+        else if (!prior.ambiguous && !change.ambiguous && equal(change.after, prior.before)) primary.changes[value] = { ...prior, before: change.before, diffStats: undefined, evidence: refs };
+        else primary.changes[value] = { ...prior, ambiguous: true, diffStats: undefined, evidence: refs, note: '同轮次执行者的文件端点无法接续；不自动合并并发覆盖，差异与行数未知。' };
+      }
+    }
+    for (const [value, change] of Object.entries(native.changes)) {
+      const prior = primary.changes[value];
+      const calls = new Set(prior?.evidence?.map(ref => ref.slice(ref.indexOf(':') + 1)));
+      const covered = change.evidence?.every(ref => calls.has(ref.slice(ref.indexOf(':') + 1)));
+      if (!prior || change.ambiguous || !covered || (change.before.kind === 'text' && change.after.kind === 'text')) primary.changes[value] = change;
+    }
+    primary.incomplete ||= Object.values(primary.changes).some(change => change.ambiguous || change.before.kind === 'unavailable' || change.after.kind === 'unavailable');
+    primary.startedAt = native.startedAt; primary.cardPreview = undefined;
+    primary.contentVersion = (primary.contentVersion ?? 0) + 1;
+    await this.store.writeRun(primary);
+    for (const id of ids.slice(1)) await this.store.retireRun(id, primary.id);
   }
 }
 

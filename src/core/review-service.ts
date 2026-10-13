@@ -1,5 +1,6 @@
 import type { CaptureContext } from './capture-context';
 import { isImagePath } from './review-file-policy';
+import { inspectCaptureLeases } from '../agent/workspace-capture';
 import { finalReplyCandidates } from './reply-content';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -40,11 +41,12 @@ export class ReviewService {
   async selectTarget(args: { runId: string; sessionId: string; fileId?: string; runningSince?: number; taskId?: string }): Promise<CaptureRun> {
     this.validateTurn(args);
     const run = args.runningSince == null ? await this.store.getRun(args.runId, false, false) : await this.currentRunningRun({ sessionId: args.sessionId, since: args.runningSince, taskId: args.taskId });
-    if (!run || run.id !== args.runId || run.sessionId !== args.sessionId) fail('RUN_NOT_FOUND', args.runningSince == null ? 'Recorded run not found in this session' : 'Recorded run is no longer current in this session');
+    if (!run || (args.runningSince != null && run.id !== args.runId) || run.sessionId !== args.sessionId) fail('RUN_NOT_FOUND', args.runningSince == null ? 'Recorded run not found in this session' : 'Recorded run is no longer current in this session');
     // Selection is read-only and can run while a review is authorizing another
     // project. Do not mutate its shared allowed/mutableRoots sets here. An exact
     // session-owned run grants historical read access, never mutation rights.
-    if (args.fileId && !Object.entries(run.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === args.fileId)) fail('FILE_MISSING', 'Recorded file no longer available; refresh');
+    const fileId = await this.store.resolveFileId(args.runId, args.fileId);
+    if (fileId && !Object.entries(run.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === fileId)) fail('FILE_MISSING', 'Recorded file no longer available; refresh');
     return run;
   }
   async bootstrap(sessionId?: string): Promise<Bootstrap> {
@@ -61,8 +63,11 @@ export class ReviewService {
     const runs = (await this.store.listRuns(false, true)).filter(r => Object.keys(r.changes).length > 0 || (r.version === 2 && r.boundary === 'user' && r.state === 'running'));
     const filtered = sessionId ? runs.filter(r => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
+    const leases = await inspectCaptureLeases(this.store).catch(() => null);
+    const unresolved = leases?.leases.filter(l => !l.sessionId && filtered.some(r => canonical(r.root) === canonical(l.root))).length ?? 0;
+    const recoveryNotice = [sessionId ? this.recoveryNotices.get(sessionId) : undefined, unresolved ? `${unresolved} 项历史租约缺少生命周期证据，可能影响归属；请先预览并确认旧 runner/后台写入已停止，不能直接清空。` : undefined].filter(Boolean).join(' ') || undefined;
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string })), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice: sessionId ? this.recoveryNotices.get(sessionId) : undefined, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, runs: filtered.map(runSummary).slice(0, 100), recoveryNotice, locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   private validateTurn(args: { runId?: string; sessionId?: string }, requireRun = true): void {
     if (typeof args.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail('SESSION_REQUIRED', 'A valid sessionId is required for recorded turns');
@@ -106,7 +111,8 @@ export class ReviewService {
     const explicit = args.taskId ? runs.filter(run => run.userMessageId === args.taskId && run.state === 'running') : [];
     if (explicit.length) {
       const run = explicit[0];
-      if (explicit.length !== 1 || !eligible(run) || (run.generation !== this.generation && run.source !== 'host-history' && !run.hostRecovery) || runs.some(other => other.startedAt > run.startedAt && other.userMessageId && other.userMessageId !== run.userMessageId)) return null;
+      const childRunning = run.delegations?.some(child => child.owner === run.userMessageId && child.status === 'running');
+      if (explicit.length !== 1 || !eligible(run) || (run.generation !== this.generation && run.source !== 'host-history' && !run.hostRecovery) || (!childRunning && runs.some(other => other.startedAt > run.startedAt && other.userMessageId && other.userMessageId !== run.userMessageId))) return null;
       return run;
     }
     if (!args.since) return null;
@@ -161,7 +167,7 @@ export class ReviewService {
     if (request.scope === 'lastTurn' || request.scope === 'turn') {
       this.validateTurn(request, request.scope === 'turn');
       if (!inboxImported) await this.store.importInbox(this.generation);
-      if (request.scope === 'turn') run = await this.store.getRun(request.runId!, false, false) ?? undefined;
+      if (request.scope === 'turn') { run = await this.store.getRun(request.runId!, false, false) ?? undefined; if (run && run.id !== request.runId) root = run.root; }
       else {
         const runs = (await this.store.listRuns(false, true)).filter(r => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
         // Latest means latest modified in this session, not the latest empty task.

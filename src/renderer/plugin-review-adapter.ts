@@ -1,5 +1,6 @@
 import React from 'react';
-import { transcriptEvidence, evidenceRevision } from '../core/host-transcript';
+import { transcriptEvidence, evidenceRevision, hostEvidenceMessages } from '../core/host-transcript';
+import { collectDelegations } from '../core/delegation-lifecycle';
 import type { NativeBuildInfo } from '../core/native-build-contract';
 export const REVIEW_TAB_ID = 'plugin:local.diff-view/review';
 interface Tab { id: string; kind: string; resource: string; location?: string; }
@@ -25,7 +26,7 @@ export interface PluginReviewModules {
 }
 export class PluginReviewError extends Error { constructor(readonly code: string, message: string) { super(message); } }
 export interface RunningActivity { sessionId: string; taskId: string; since: number; turnId?: string }
-export interface SessionContext { sessionId: string; root?: string; running: boolean; taskId?: string; since?: number; turnId?: string; evidence?: string; evidenceRevision?: string }
+export interface SessionContext { sessionId: string; root?: string; running: boolean; mainRunning?: boolean; statusKnown?: boolean; taskId?: string; since?: number; turnId?: string; evidence?: string; evidenceRevision?: string }
 export interface PluginReviewAdapter {
   subscribeSession(listener: (sessionId: string | null, context?: SessionContext) => void): Promise<() => void>;
   subscribeActivity(listener: (activity: RunningActivity | null) => void, diagnose?: (stage: string) => void): Promise<() => void>;
@@ -35,12 +36,25 @@ export interface PluginReviewAdapter {
 }
 export function activityDiagnostic(state: State): 'running-idle' | 'running-identity-missing' | 'running-ready' {
   const id = state.activeSessionId;
-  if (!id || state.selectingSessionId || state.page !== 'chat' || (state.runningSessions?.[id] ?? state.isRunning) !== true) return 'running-idle';
+  if (!id || state.selectingSessionId || state.page !== 'chat') return 'running-idle';
+  if (runningActivity(state)) return 'running-ready';
+  if (state.runningSessions?.[id] !== true) return 'running-idle';
   return (runningActivity(state)?.since ?? 0) > 0 ? 'running-ready' : 'running-identity-missing';
 }
 export function runningActivity(state: State): RunningActivity | null {
   const sessionId = state.activeSessionId;
-  if (!sessionId || state.selectingSessionId || state.page !== 'chat' || (state.runningSessions?.[sessionId] ?? state.isRunning) !== true) return null;
+  if (!sessionId || state.selectingSessionId || state.page !== 'chat') return null;
+  if (state.runningSessions?.[sessionId] !== true) {
+    const rows = new Map((state.retainedTranscripts?.[sessionId] ?? []).map(message => [message.id, message]));
+    for (const message of state.messages ?? []) rows.set(message.id, message);
+    const time = (value: unknown) => { const n = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : 0; return Number.isSafeInteger(n) && n > 0 ? n : 0; };
+    const messageTime = (message: ReturnType<typeof hostEvidenceMessages>[number]) => time(message.createdAt) || time(message.blocks.find(block => block.name === 'task')?.result?.details?.startedAt);
+    const messages = hostEvidenceMessages([...rows.values()]).sort((a, b) => messageTime(a) - messageTime(b));
+    const owners = new Set(collectDelegations(messages).filter(child => child.status === 'running').map(child => child.owner));
+    const user = messages.filter(message => message.role === 'user' && owners.has(message.id) && !message.meta.parentMessageId).at(-1);
+    const since = user ? time(user.createdAt) : 0;
+    return user && Number.isSafeInteger(since) && since > 0 && since <= Date.now() ? { sessionId, taskId: user.id, since } : null;
+  }
   // Read metadata only. The visible transcript can be windowed to an older section.
   const sources = [state.messages ?? [], state.retainedTranscripts?.[sessionId] ?? []].map(messages => messages.filter(message => message.role === 'user' && !message.steering && !message.parentToolCallId));
   const users = sources.flat();
@@ -101,7 +115,7 @@ export function createPluginReviewAdapter(options: { info?: () => Promise<Native
         const sessionId = state.selectingSessionId ? null : state.activeSessionId ?? null;
         if (sessionId !== null && typeof sessionId !== 'string') denied('SIDEBAR_CONTRACT', '无效的宿主会话状态 / Invalid host session state');
         const activity = runningActivity(state);
-        const context: SessionContext | undefined = sessionId ? { sessionId, root: state.sessions?.find(s => s.id === sessionId)?.projectPath, running: (state.runningSessions?.[sessionId] ?? state.isRunning) === true, taskId: activity?.taskId, since: activity?.since, turnId: activity?.turnId } : undefined;
+        const context: SessionContext | undefined = sessionId ? { sessionId, root: state.sessions?.find(s => s.id === sessionId)?.projectPath, running: state.runningSessions?.[sessionId] === true || activity !== null, mainRunning: state.runningSessions?.[sessionId] === true, statusKnown: typeof state.runningSessions?.[sessionId] === 'boolean', taskId: activity?.taskId, since: activity?.since, turnId: activity?.turnId } : undefined;
         if (context) {
           const rows = new Map((state.retainedTranscripts?.[sessionId!] ?? []).map(m => [m.id, m]));
           for (const m of state.messages ?? []) rows.set(m.id, m);
