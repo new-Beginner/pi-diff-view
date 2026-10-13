@@ -26,6 +26,9 @@ let locatorFile = '', generation = '', pluginRoot = '';
 let timer: ReturnType<typeof setInterval> | undefined;
 let turnEnded: ((event: { sessionId?: string; turnId?: string; reason?: string }) => void) | undefined;
 let tail: Promise<unknown> = Promise.resolve();
+let navigationTail: Promise<unknown> = Promise.resolve();
+let navigationVersion = 0;
+let navigationClearing = false;
 let disposed = false;
 let rendererStages: Record<string, number> = {};
 let runningDiagnostic: { sessionId: string; reason: string; at: number } | undefined;
@@ -55,7 +58,7 @@ export async function onLoad(): Promise<void> {
   locatorFile = await locatorPath(pluginRoot); await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: v => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: text => pi.clipboard.writeText(text), openPanel: () => pi.ui.openPanel({ title: 'Diff view' }) }, generation);
   const currentService = service;
-  jobs = new JobQueue((method, args) => serial(async () => { if (disposed) fail('PLUGIN_UNLOADED', 'Plugin unloaded'); return execute(currentService, method, args ?? {}); }));
+  jobs = new JobQueue((method, args) => method === 'selectTurn' ? dispatch(method, args) : serial(async () => { if (disposed) fail('PLUGIN_UNLOADED', 'Plugin unloaded'); return execute(currentService, method, args ?? {}); }));
   await store.importInbox(generation); await store.prune();
   await pi.commands.register({ id: 'diff-view.open', title: 'Diff view: Open review', keywords: ['diff', 'review', '审查', '变更'], run: () => pi.ui.openPanel({ title: 'Diff view' }) });
   turnEnded = event => { void serial(async () => {
@@ -81,6 +84,7 @@ export async function onUnload(): Promise<void> {
   jobs?.close(); jobs = null; navigation.clear();
   fileOpens.clear();
   await tail;
+  await navigationTail;
   evidence.clear(); contexts.clear();
   const current = await readJson<Locator | null>(locatorFile, null).catch(() => null);
   if (current?.generation === generation) await fs.rm(locatorFile, { force: true });
@@ -93,6 +97,12 @@ export async function onPanelInvoke(channel: string, payload: unknown): Promise<
 export async function onRendererCall(method: string, args: unknown): Promise<unknown> { return dispatch(method.startsWith('diff.') ? method.slice(5) : method, args); }
 async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (!service || disposed) fail('PLUGIN_UNLOADED', 'Diff view is not loaded');
+  if (method === 'selectTurn') {
+    if (navigationClearing) fail('SELECTION_MISSING', 'History is being cleared');
+    const s = service;
+    const result = navigationTail.catch(() => {}).then(async () => { if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args ?? {}); });
+    navigationTail = result.catch(() => {}); return result;
+  }
   if (method === 'activeReviewSession' || method === 'readTurnSelection' || method === 'openFile') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'rendererReport') {
@@ -191,8 +201,10 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   }
   if (method === 'selectTurn') {
     if (typeof args?.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== 'string' || !args.runId || args.runId.length > 128 || (args.fileId != null && (typeof args.fileId !== 'string' || args.fileId.length > 256))) fail('NAVIGATION_INVALID', 'Invalid recorded-task target');
+    const version = navigationVersion;
     const run = await s.selectTarget(args);
     if (!run) fail('RUN_MISSING', 'Recorded task not found in this session');
+    if (disposed || service !== s || version !== navigationVersion) fail('SELECTION_MISSING', 'Selection cleared or plugin unloaded');
     const selection = navigation.set({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }, args.fileId);
     await atomicJson(path.join(store!.directory, 'selections.json'), navigation.export());
     return selection;
@@ -205,6 +217,10 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     await s.selectTarget({ runId: selection.request.runId!, sessionId: args.sessionId });
     return selection;
   }
-  if (method === 'clearHistory' && args?.confirmed === true) { const result = await s.invoke(method, args); evidence.clear(); navigation.clear(); fileOpens.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
+  if (method === 'clearHistory' && args?.confirmed === true) {
+    navigationClearing = true; navigationVersion++;
+    try { await navigationTail; const result = await s.invoke(method, args); evidence.clear(); navigation.clear(); fileOpens.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
+    finally { navigationClearing = false; }
+  }
   return s.invoke(method, args);
 }

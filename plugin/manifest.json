@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.diff-view",
   "name": "Diff view",
-  "version": "1.4.17",
+  "version": "1.4.20",
   "description": "按会话和用户轮次保存修改证据、文末卡片与输入框浮窗，另设独立本地 Git 管理。",
   "author": "new-Beginner",
   "license": "MIT",
@@ -24,9 +24,9 @@
       { "key": "wordWrap", "type": "boolean", "default": false, "title": "Wrap long lines" }
     ]
   },
-  "safetyNotes": "可信本地插件：Agent/renderer 扩展无 OS 沙箱。捕获明确文件工具目标及有界 Shell/Task 工作区端点快照，排除凭据、私有数据和链接；并发归属不明标记不确定，不伪造统计。只读当前授权会话 JSONL 与原生修改证据用于历史恢复，不修改宿主记录、不读凭据、不联网。去正文的结构化工具证据持久化在插件数据区，单会话 8 MiB、最多 200 份、总量 128 MiB；清理历史时删除。恢复数据和持久导航令牌存插件数据区。公开插槽绘制浮窗，内部宿主 store 读取当前会话身份/运行元数据和打开页签；原生 UI 验收尚待完成。Git 独立入口，仅人工本地操作，提交/分支切换/删除/stash 等需确认，不提供远程操作。Git hooks/filters 为受信任本地代码。",
+  "safetyNotes": "可信本地插件：Agent/renderer 扩展无 OS 沙箱。仅捕获标准 Write/Edit 文件工具的明确目标，不从 Shell/Task 工作区端点推断修改；排除凭据、私有数据和链接，并发归属不明标记不确定，不伪造统计。只读当前授权会话 JSONL 与原生标准工具修改证据用于历史恢复，不修改宿主记录、不读凭据、不联网。去正文的结构化工具证据持久化在插件数据区，单会话 8 MiB、最多 200 份、总量 128 MiB；清理历史时删除。恢复数据和持久导航令牌存插件数据区。公开插槽绘制浮窗，内部宿主 store 读取当前会话身份/运行元数据和打开页签；原生 UI 验收尚待完成。Git 独立入口，仅人工本地操作，提交/分支切换/删除/stash 等需确认，不提供远程操作。Git hooks/filters 为受信任本地代码。",
   "i18n": {
-    "en": { "name": "Diff view", "description": "Session-isolated history, reply cards, running changes and independent local Git management.", "safetyNotes": "Trusted unsandboxed local plugin. Captures explicit file targets and bounded Shell/Task workspace endpoints; uncertain attribution stays explicit. Reads authorized session transcripts and native change evidence locally for recovery, never credentials or host database writes. Sanitized structured tool evidence persists in plugin data: 8 MiB per session/root record, 200 records, 128 MiB total; deleted with plugin history. No chat prose, network or remote Git. Persistent session-scoped navigation. Local Git mutations require explicit UI actions and confirmations; repository hooks/filters are trusted code. Native UI acceptance is not yet completed." },
-    "zh-CN": { "name": "差异审查", "description": "按会话和用户轮次保存修改证据、文末卡片与输入框浮窗，另设独立本地 Git 管理。", "safetyNotes": "可信非沙箱本地插件。采集明确文件目标与有界 Shell/Task 工作区快照；无法确定的归属明确标记。只读授权会话历史与原生修改证据用于恢复，不读取凭据或写入宿主数据库。去正文工具证据存于插件数据区：单记录 8 MiB、最多 200 条、总量 128 MiB；清理历史时删除。不保存聊天正文、不联网、不执行远程 Git。文件及本地 Git 写操作需要用户明确操作和确认；仓库 hooks/filters 为受信任代码。尚未完成原生客户端界面验收。" }
+    "en": { "name": "Diff view", "description": "Session-isolated history, reply cards, running changes and independent local Git management.", "safetyNotes": "Trusted unsandboxed local plugin. Captures only explicit standard Write/Edit targets, not Shell/Task workspace endpoints; uncertain attribution stays explicit. Reads authorized session transcripts and standard-tool change evidence locally for recovery, never credentials or host database writes. Sanitized structured tool evidence persists in plugin data: 8 MiB per session/root record, 200 records, 128 MiB total; deleted with plugin history. No chat prose, network or remote Git. Persistent session-scoped navigation. Local Git mutations require explicit UI actions and confirmations; repository hooks/filters are trusted code. Native UI acceptance is not yet completed." },
+    "zh-CN": { "name": "差异审查", "description": "按会话和用户轮次保存修改证据、文末卡片与输入框浮窗，另设独立本地 Git 管理。", "safetyNotes": "可信非沙箱本地插件。仅采集标准 Write/Edit 明确文件目标，不推断 Shell/Task 工作区修改；无法确定的归属明确标记。只读授权会话历史与标准工具修改证据用于恢复，不读取凭据或写入宿主数据库。去正文工具证据存于插件数据区：单记录 8 MiB、最多 200 条、总量 128 MiB；清理历史时删除。不保存聊天正文、不联网、不执行远程 Git。文件及本地 Git 写操作需要用户明确操作和确认；仓库 hooks/filters 为受信任代码。尚未完成原生客户端界面验收。" }
   }
 }

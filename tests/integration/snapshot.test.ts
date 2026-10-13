@@ -75,11 +75,11 @@ describe('snapshots and guarded restore', () => {
     const [run] = await imported(); expect(run.incomplete).toBe(true); expect(run.boundary).toBe('uncertain'); expect(run.finalReply).toBeUndefined(); expect(run.changes['from.txt'].before.text).toBe('original');
     expect(run.changes['from.txt'].after.exists).toBe(false); expect(run.changes['to.txt'].before.exists).toBe(false); expect(run.changes['to.txt'].after.exists).toBe(false);
   });
-  it('marks discontinuous external edits ambiguous, deduplicates calls and flags unfinished shell capture', async () => {
+  it('marks discontinuous explicit edits ambiguous and deduplicates calls', async () => {
     const h = harness(); await h.emit('before_agent_start'); const call = { toolName: 'Write', toolCallId: 'one', input: { path: 'a.txt' } };
     await h.emit('tool_call', call); await fs.writeFile(path.join(root, 'a.txt'), 'one'); await h.emit('tool_call', call); await h.emit('tool_result', { toolCallId: 'one' });
     await fs.writeFile(path.join(root, 'a.txt'), 'external'); await h.emit('tool_call', { ...call, toolCallId: 'two' }); await fs.writeFile(path.join(root, 'a.txt'), 'two'); await h.emit('tool_result', { toolCallId: 'two' });
-    await h.emit('tool_call', { toolName: 'Bash', toolCallId: 'bash', input: {} }); await h.emit('agent_end');
+    await h.emit('agent_end');
     const [run] = await imported(); expect(run.incomplete).toBe(true); expect(run.changes['a.txt'].before.exists).toBe(false);
     expect(run.changes['a.txt']).toMatchObject({ ambiguous: true, after: { text: null, kind: 'unavailable', hash: digest('two') } });
     expect(run.changes['a.txt'].note).toContain('discontinuous'); expect(run.changes['a.txt'].diffStats).toBeUndefined();

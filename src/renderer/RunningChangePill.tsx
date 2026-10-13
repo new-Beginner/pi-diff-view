@@ -39,9 +39,16 @@ export default function RunningChangePill({ transport, adapter, ui, report }: { 
       const shell = owner.closest<HTMLElement>('.composer-shell'), rect = rectOf(owner);
       const first = [...anchors].find(node => rectOf(node));
       const visible = Boolean(rect && first === owner);
+      const stack = shell?.closest<HTMLElement>('.composer-stack');
+      // Measure only this composer's visible task dock, never another session's dock.
+      const dock = stack?.querySelector<HTMLElement>('.todo-dock');
+      const dockRect = dock?.getBoundingClientRect();
+      const dockStyle = dock && getComputedStyle(dock);
+      const dockVisible = dock && dock.getClientRects().length > 0 && dockRect && dockRect.height > 0 && dockRect.width > 0 && dockStyle?.visibility !== 'hidden' && dockStyle?.display !== 'none' && dockStyle?.opacity !== '0' && rect && dockRect.right > rect.left && dockRect.left < rect.right && dockRect.top < rect.top && dockRect.bottom > 0;
+      const ceiling = dockVisible ? Math.min(rect!.top, dockRect!.top) : rect?.top ?? 0;
       const stage = !shell ? 'composer-anchor-missing' : !rect ? 'composer-anchor-offscreen' : 'composer-positioned';
       if (stage !== lastStage) { lastStage = stage; report(stage); }
-      const next = visible && rect ? { left: rect.left + rect.width / 2, top: rect.top - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible } : hidden;
+      const next = visible && rect && ceiling > 48 ? { left: rect.left + rect.width / 2, top: ceiling - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible } : hidden;
       setPosition(previous => previous.visible === next.visible && previous.left === next.left && previous.top === next.top && previous.width === next.width ? previous : next);
       frame = requestAnimationFrame(update);
     };

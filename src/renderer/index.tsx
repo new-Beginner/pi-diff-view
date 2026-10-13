@@ -99,20 +99,23 @@ async function restoreFeed(current: Hub, sessionId: string): Promise<Feed> {
     current.appearance = { locale: first.locale, base: first.base }; current.listeners.forEach(listener => listener());
   }
   if (!first.unchanged) {
-    const restored = [...first.cards]; let offset = first.nextOffset;
+    const restored: ReplyCard[] = [];
+    const accept = (cards: ReplyCard[]) => {
+      // Validate a whole page before publishing any of it. Later pages must not
+      // delay the visible first page or erase verified cache on paging failure.
+      for (const card of cards) if (card.run.sessionId !== sessionId || card.summary.sessionId !== sessionId || card.summary.runId !== card.run.id) throw new Error('Invalid recorded card identity');
+      for (const card of cards) { restored.push(card); remember(current, card); }
+    };
+    accept(first.cards); let offset = first.nextOffset;
     while (offset !== null) {
       const page = await current.transport.invoke<ReplyCardsPage>('replyCards', { sessionId, offset });
       if (!same(current)) return feed;
       if (page.revision !== first.revision || (page.nextOffset !== null && page.nextOffset <= offset)) throw new Error('Card history changed during paging; refresh required');
-      restored.push(...page.cards); offset = page.nextOffset;
+      accept(page.cards); offset = page.nextOffset;
     }
     const keys = new Set(restored.map(card => cardKey(sessionId, card.messageId)));
     for (const [key, card] of current.cache) if (card.run.sessionId === sessionId && !keys.has(key)) {
       current.cache.delete(key); current.cards.get(key)?.listeners.forEach(listener => listener(null));
-    }
-    for (const card of restored) {
-      if (card.run.sessionId !== sessionId || card.summary.sessionId !== sessionId || card.summary.runId !== card.run.id) throw new Error('Invalid recorded card identity');
-      remember(current, card);
     }
     if (restored.length) { report(current, 'card-bound'); void trackSession(current).catch(() => {}); }
   }
@@ -190,7 +193,7 @@ function EntryExtra(props: ReplyProps) {
     const guard = () => { if (!same(current) || current.activeSession !== run.sessionId || current.sessionVersion !== version) throw new Error('会话已切换，请在当前会话点击 / Session changed'); };
     guard();
     const selection = await current.transport.invoke<{ nonce: string }>('selectTurn', { sessionId: run.sessionId, runId: run.id, fileId: file?.id });
-    guard(); await current.adapter.open(run.sessionId, `diff-view:${selection.nonce}`); guard(); report(current, 'sidebar-opened');
+    guard(); await current.adapter.open(run.sessionId, `diff-view:${selection.nonce}`, guard); guard(); report(current, 'sidebar-opened');
   }} />;
 }
 function composerReport(stage: string) { if (hub) report(hub, stage); }

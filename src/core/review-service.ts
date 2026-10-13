@@ -41,8 +41,9 @@ export class ReviewService {
     this.validateTurn(args);
     const run = args.runningSince == null ? await this.store.getRun(args.runId, false, false) : await this.currentRunningRun({ sessionId: args.sessionId, since: args.runningSince, taskId: args.taskId });
     if (!run || run.id !== args.runId || run.sessionId !== args.sessionId) fail('RUN_NOT_FOUND', args.runningSince == null ? 'Recorded run not found in this session' : 'Recorded run is no longer current in this session');
-    await this.authorize(args.sessionId, run);
-    if (!this.allowed.has(canonical(run.root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
+    // Selection is read-only and can run while a review is authorizing another
+    // project. Do not mutate its shared allowed/mutableRoots sets here. An exact
+    // session-owned run grants historical read access, never mutation rights.
     if (args.fileId && !Object.entries(run.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === args.fileId)) fail('FILE_MISSING', 'Recorded file no longer available; refresh');
     return run;
   }
@@ -153,7 +154,7 @@ export class ReviewService {
     if (!summary.files.length && offset < cached.files.length) fail('SUMMARY_LIMIT', 'File metadata exceeds summary bridge budget');
     return summary;
   }
-  async review(request: ReviewRequest, inboxImported = false, activity?: CaptureContext): Promise<ReviewSummary> {
+  async review(request: ReviewRequest, inboxImported = false, _activity?: CaptureContext): Promise<ReviewSummary> {
     if (!request || !['unstaged', 'staged', 'commit', 'branch', 'lastTurn', 'turn'].includes(request.scope)) fail('INVALID_SCOPE', 'Unknown review scope');
     // Exact recorded-task opens do not enumerate unrelated history or run Git discovery.
     let root = request.root, files: InternalFile[] = [], git: GitReview | undefined, run: CaptureRun | undefined, notice: string | undefined;
@@ -163,16 +164,14 @@ export class ReviewService {
       if (request.scope === 'turn') run = await this.store.getRun(request.runId!, false, false) ?? undefined;
       else {
         const runs = (await this.store.listRuns(false, true)).filter(r => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
-        if (activity?.running && activity.sessionId === request.sessionId) {
-          // The active task wins even with zero files. Missing current evidence is
-          // an empty current turn, never permission to substitute previous changes.
-          const matches = runs.filter(r => r.version === 2 && r.boundary === 'user' && r.state === 'running' && (activity.taskId ? r.userMessageId === activity.taskId : !!activity.since && r.startedAt >= activity.since));
-          if (matches.length === 1) run = matches[0];
-        } else run = (!activity ? runs.find(r => r.version === 2 && r.boundary === 'user' && r.state === 'running') : undefined) ?? runs.find(r => Object.keys(r.changes).length > 0);
+        // Latest means latest modified in this session, not the latest empty task.
+        // Activity metadata may lag across session switches; it must not hide evidence.
+        // Use the same file policy as the rendered list, and never merge runs.
+        run = runs.find(r => Object.keys(r.changes).some(value => !isImagePath(value)));
       }
       if (run?.sessionId !== request.sessionId || (root && run && canonical(run.root) !== canonical(root))) run = undefined;
       await this.authorize(request.sessionId, run);
-      if (!run) { root = root ?? ''; notice = request.scope === 'lastTurn' && activity?.running ? '当前轮次正在运行，尚无可验证的修改记录；不会显示上一轮的修改。' : 'No recorded turn. History before installation is not reconstructed.'; }
+      if (!run) { root = root ?? ''; notice = request.scope === 'lastTurn' ? '本会话在当前筛选范围内暂无可展示的修改记录；不会使用其他会话或 Git 状态补造历史。' : 'No recorded turn. History before installation is not reconstructed.'; }
       else {
         root = run.root;
         if (!this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');

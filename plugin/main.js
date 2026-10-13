@@ -1860,8 +1860,6 @@ var ReviewService = class {
     this.validateTurn(args);
     const run2 = args.runningSince == null ? await this.store.getRun(args.runId, false, false) : await this.currentRunningRun({ sessionId: args.sessionId, since: args.runningSince, taskId: args.taskId });
     if (!run2 || run2.id !== args.runId || run2.sessionId !== args.sessionId) fail("RUN_NOT_FOUND", args.runningSince == null ? "Recorded run not found in this session" : "Recorded run is no longer current in this session");
-    await this.authorize(args.sessionId, run2);
-    if (!this.allowed.has(canonical(run2.root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
     if (args.fileId && !Object.entries(run2.changes).some(([value, change]) => !isImagePath(value) && (change.capture?.id ?? digest(value).slice(0, 24)) === args.fileId)) fail("FILE_MISSING", "Recorded file no longer available; refresh");
     return run2;
   }
@@ -1989,7 +1987,7 @@ var ReviewService = class {
     if (!summary.files.length && offset < cached.files.length) fail("SUMMARY_LIMIT", "File metadata exceeds summary bridge budget");
     return summary;
   }
-  async review(request, inboxImported = false, activity) {
+  async review(request, inboxImported = false, _activity) {
     if (!request || !["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(request.scope)) fail("INVALID_SCOPE", "Unknown review scope");
     let root = request.root, files = [], git2, run2, notice;
     if (request.scope === "lastTurn" || request.scope === "turn") {
@@ -1998,16 +1996,13 @@ var ReviewService = class {
       if (request.scope === "turn") run2 = await this.store.getRun(request.runId, false, false) ?? void 0;
       else {
         const runs = (await this.store.listRuns(false, true)).filter((r) => r.sessionId === request.sessionId && (!root || canonical(r.root) === canonical(root)));
-        if (activity?.running && activity.sessionId === request.sessionId) {
-          const matches = runs.filter((r) => r.version === 2 && r.boundary === "user" && r.state === "running" && (activity.taskId ? r.userMessageId === activity.taskId : !!activity.since && r.startedAt >= activity.since));
-          if (matches.length === 1) run2 = matches[0];
-        } else run2 = (!activity ? runs.find((r) => r.version === 2 && r.boundary === "user" && r.state === "running") : void 0) ?? runs.find((r) => Object.keys(r.changes).length > 0);
+        run2 = runs.find((r) => Object.keys(r.changes).some((value) => !isImagePath(value)));
       }
       if (run2?.sessionId !== request.sessionId || root && run2 && canonical(run2.root) !== canonical(root)) run2 = void 0;
       await this.authorize(request.sessionId, run2);
       if (!run2) {
         root = root ?? "";
-        notice = request.scope === "lastTurn" && activity?.running ? "\u5F53\u524D\u8F6E\u6B21\u6B63\u5728\u8FD0\u884C\uFF0C\u5C1A\u65E0\u53EF\u9A8C\u8BC1\u7684\u4FEE\u6539\u8BB0\u5F55\uFF1B\u4E0D\u4F1A\u663E\u793A\u4E0A\u4E00\u8F6E\u7684\u4FEE\u6539\u3002" : "No recorded turn. History before installation is not reconstructed.";
+        notice = request.scope === "lastTurn" ? "\u672C\u4F1A\u8BDD\u5728\u5F53\u524D\u7B5B\u9009\u8303\u56F4\u5185\u6682\u65E0\u53EF\u5C55\u793A\u7684\u4FEE\u6539\u8BB0\u5F55\uFF1B\u4E0D\u4F1A\u4F7F\u7528\u5176\u4ED6\u4F1A\u8BDD\u6216 Git \u72B6\u6001\u8865\u9020\u5386\u53F2\u3002" : "No recorded turn. History before installation is not reconstructed.";
       } else {
         root = run2.root;
         if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
@@ -2388,11 +2383,12 @@ var JobQueue = class {
   start(method, args) {
     if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
     if (!["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
-    if ([...this.jobs.values()].filter((j) => j.state === "pending").length >= 4) fail("JOB_BUSY", "Too many pending review operations");
+    const navigation2 = method === "selectTurn";
+    if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2).length >= (navigation2 ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
     for (const [id2, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id2);
-    const id = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now() };
+    const id = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {} };
     this.jobs.set(id, job);
-    this.tail = this.tail.then(async () => {
+    const work = async () => {
       await new Promise((r) => setTimeout(r, 0));
       if (this.closed) return;
       try {
@@ -2409,7 +2405,9 @@ var JobQueue = class {
           job.at = Date.now();
         }
       }
-    });
+    };
+    if (navigation2) void work();
+    else this.tail = this.tail.then(work);
     return { jobId: id };
   }
   poll(id) {
@@ -2773,6 +2771,12 @@ var HostHistoryImporter = class {
         warn("Unlinked host modification evidence");
         return;
       }
+      const block = message.blocks.find((b) => b.type === "tool_call" && b.callId === meta.messageId) ?? (message.id === meta.messageId && message.blocks.filter((b) => b.type === "tool_call").length === 1 ? message.blocks.find((b) => b.type === "tool_call") : void 0);
+      const tool = String(block?.name ?? "").split(".").pop().toLowerCase();
+      if (!block || !["write", "edit"].includes(tool)) {
+        d.skipped++;
+        return;
+      }
       let identity;
       try {
         identity = capture(meta.path).identity;
@@ -2781,11 +2785,10 @@ var HostHistoryImporter = class {
         d.skipped++;
         return;
       }
-      const block = message.blocks.find((b) => b.type === "tool_call" && (b.callId === meta.messageId || message.id === meta.messageId));
-      const key = `${block?.callId ?? meta.messageId}\0${identity}`;
+      const key = `${block.callId}\0${identity}`;
       if (eventKeys.has(key)) return;
       eventKeys.add(key);
-      events.push({ meta, directory, message, block, toolOnly });
+      events.push({ meta: { ...meta, messageId: block.callId }, directory, message, block, toolOnly });
     };
     const relative = `review-changes/${sessionId}`;
     try {
@@ -2815,7 +2818,7 @@ var HostHistoryImporter = class {
           d.skipped++;
           continue;
         }
-        add({ ...review, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
+        add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
       } else {
         const name = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
         if (!["write", "edit"].includes(name) || typeof target !== "string" || !import_node_path8.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
@@ -2919,6 +2922,16 @@ var HostHistoryImporter = class {
       const existing = await this.store.listRuns(false, true);
       const users = ordered.filter((m) => m.role === "user" && !m.parent && !m.meta.steering);
       const nextBoundary = new Map(users.slice(0, -1).map((user, index) => [user.id, users[index + 1].createdAt]));
+      const standardEvidence = (ref) => {
+        const separator = ref.indexOf(":");
+        if (separator < 0) return false;
+        const source2 = ref.slice(0, separator).toLowerCase(), id = ref.slice(separator + 1);
+        if (source2 === "native") {
+          const message = aliases.get(id);
+          return !!message?.blocks.some((b) => b.type === "tool_call" && b.callId === id && ["write", "edit"].includes(String(b.name).split(".").pop().toLowerCase()));
+        }
+        return ["write", "edit"].includes(source2);
+      };
       const refOwner = (ref) => {
         const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
         return message?.blocks.some((b) => b.type === "tool_call" && b.callId === callId) ? owner(message) : void 0;
@@ -2933,8 +2946,10 @@ var HostHistoryImporter = class {
         const id = hostHistoryRunId(sessionId, user.id);
         const duplicates = existing.filter((r) => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === "host-history") return false;
-          const attributable = Object.entries(r.changes).filter(([value, change]) => !foreignRecovery(r, value, change));
+          const attributable = Object.entries(r.changes).filter(([value, change]) => !foreignRecovery(r, value, change) && (change.evidence ?? []).every(standardEvidence));
           const linkedOwners = attributable.flatMap(([, c]) => c.evidence ?? []).map(refOwner);
+          const rejectedOwners = Object.values(r.changes).flatMap((change) => (change.evidence ?? []).filter((ref) => !standardEvidence(ref)).map(refOwner));
+          if (rejectedOwners.length && rejectedOwners.every((id2) => id2 === user.id)) return true;
           const verifiedOwner = linkedOwners[0] && attributable.every(([, c]) => !!c.evidence?.length) && linkedOwners.every((id2) => id2 === linkedOwners[0]) ? linkedOwners[0] : void 0;
           if (verifiedOwner) return verifiedOwner === user.id;
           if (linkedOwners.some((id2) => id2 && id2 !== user.id)) return false;
@@ -2966,7 +2981,7 @@ var HostHistoryImporter = class {
           changes2[c.path] = { capture: c, before: old?.before ?? e.before, after: e.after, note, evidence: [...old?.evidence ?? [], `native:${e.meta.messageId}`].slice(-32), ...e.meta.oldPath ? { oldPath: e.meta.oldPath } : {} };
         }
         if (previous) {
-          for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes2[value]) changes2[value] = change;
+          for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes2[value] && (change.evidence ?? []).every(standardEvidence)) changes2[value] = change;
         }
         if (Object.keys(changes2).length > 256) {
           warn("Turn exceeds 256 files; import skipped");
@@ -2980,7 +2995,7 @@ var HostHistoryImporter = class {
             const liveRun = await this.store.getRun(duplicate2.id);
             const recoveredFiles = { ...liveRun.hostRecovery?.files };
             let changed = false;
-            for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change)) {
+            for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change) || (change.evidence ?? []).some((ref) => !standardEvidence(ref))) {
               delete liveRun.changes[value];
               delete recoveredFiles[value];
               changed = true;
@@ -3825,6 +3840,9 @@ var pluginRoot = "";
 var timer;
 var turnEnded;
 var tail = Promise.resolve();
+var navigationTail = Promise.resolve();
+var navigationVersion = 0;
+var navigationClearing = false;
 var disposed = false;
 var rendererStages = {};
 var runningDiagnostic;
@@ -3867,7 +3885,7 @@ async function onLoad() {
   await heartbeat();
   service = new ReviewService(store, { workspace: () => pi.workspace.get(), settings: () => pi.plugin.getSettings(), setSettings: (v) => pi.plugin.setSettings(v), appearance: () => pi.app.getAppearance(), clipboard: (text2) => pi.clipboard.writeText(text2), openPanel: () => pi.ui.openPanel({ title: "Diff view" }) }, generation);
   const currentService = service;
-  jobs = new JobQueue((method, args) => serial(async () => {
+  jobs = new JobQueue((method, args) => method === "selectTurn" ? dispatch2(method, args) : serial(async () => {
     if (disposed) fail("PLUGIN_UNLOADED", "Plugin unloaded");
     return execute(currentService, method, args ?? {});
   }));
@@ -3910,6 +3928,7 @@ async function onUnload() {
   navigation.clear();
   fileOpens.clear();
   await tail;
+  await navigationTail;
   evidence.clear();
   contexts.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
@@ -3927,6 +3946,18 @@ async function onRendererCall(method, args) {
 }
 async function dispatch2(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
+  if (method === "selectTurn") {
+    if (navigationClearing) fail("SELECTION_MISSING", "History is being cleared");
+    const s2 = service;
+    const result = navigationTail.catch(() => {
+    }).then(async () => {
+      if (disposed || service !== s2) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+      return execute(s2, method, args ?? {});
+    });
+    navigationTail = result.catch(() => {
+    });
+    return result;
+  }
   if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openFile") return execute(service, method, args ?? {});
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
@@ -4047,8 +4078,10 @@ async function execute(s, method, args) {
   }
   if (method === "selectTurn") {
     if (typeof args?.sessionId !== "string" || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== "string" || !args.runId || args.runId.length > 128 || args.fileId != null && (typeof args.fileId !== "string" || args.fileId.length > 256)) fail("NAVIGATION_INVALID", "Invalid recorded-task target");
+    const version = navigationVersion;
     const run2 = await s.selectTarget(args);
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
+    if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
     const selection = navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, args.fileId);
     await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
@@ -4062,12 +4095,19 @@ async function execute(s, method, args) {
     return selection;
   }
   if (method === "clearHistory" && args?.confirmed === true) {
-    const result = await s.invoke(method, args);
-    evidence.clear();
-    navigation.clear();
-    fileOpens.clear();
-    await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), []);
-    return result;
+    navigationClearing = true;
+    navigationVersion++;
+    try {
+      await navigationTail;
+      const result = await s.invoke(method, args);
+      evidence.clear();
+      navigation.clear();
+      fileOpens.clear();
+      await atomicJson(import_node_path12.default.join(store.directory, "selections.json"), []);
+      return result;
+    } finally {
+      navigationClearing = false;
+    }
   }
   return s.invoke(method, args);
 }

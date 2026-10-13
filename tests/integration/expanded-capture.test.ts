@@ -41,20 +41,12 @@ async function call(h: ReturnType<typeof harness>, name: string, id: string, wor
 }
 
 describe('expanded live capture without Git or project command execution', () => {
-  it.each(['functions.Bash', 'Shell'])('captures %s add/edit/delete/rename/binary endpoints', async name => {
-    await write('edit.txt', 'old'); await write('delete.txt', 'gone'); await write('move.txt', 'moved');
+  it.each(['functions.Bash', 'Shell'])('does not record %s filesystem effects', async name => {
+    await write('edit.txt', 'old');
     const h = harness(); await h.emit('before_agent_start', { userMessageId: 'host-user-42' });
-    await call(h, name, 'shell', async () => {
-      await write('edit.txt', 'new'); await fs.unlink(path.join(root, 'delete.txt'));
-      await fs.rename(path.join(root, 'move.txt'), path.join(root, 'renamed.txt'));
-      await write('added.txt', 'add'); await write('binary.dat', new Uint8Array([0, 255, 1]));
-    }, { command: 'not executed or interpreted by capture' });
+    await call(h, name, 'shell', async () => { await write('edit.txt', 'new'); await write('binary.dat', new Uint8Array([0, 255, 1])); }, { command: 'not executed or interpreted by capture' });
     await h.emit('agent_end'); const [run] = await runs();
-    expect(run.userMessageId).toBe('host-user-42');
-    expect(Object.keys(run.changes).sort()).toEqual(['added.txt', 'binary.dat', 'delete.txt', 'edit.txt', 'move.txt', 'renamed.txt']);
-    expect(run.changes['edit.txt'].before.text).toBe('old'); expect(run.changes['edit.txt'].after.text).toBe('new');
-    expect(run.changes['delete.txt'].after.exists).toBe(false); expect(run.changes['move.txt'].after.exists).toBe(false);
-    expect(run.changes['binary.dat'].after.kind).toBe('binary'); expect(run.notice).toContain('256');
+    expect(await runs()).toEqual([]);
   });
   it('ignores explicit image-file writes while retaining ordinary text changes', async () => {
     await write('render.PNG', 'before'); await write('graphic.SVG', 'before'); await write('notes.txt', 'before');
@@ -74,13 +66,12 @@ describe('expanded live capture without Git or project command execution', () =>
     expect(sameSnapshot(run.changes['a.txt'].before, run.changes['a.txt'].after)).toBe(true);
     expect(run.changes['a.txt'].evidence).toEqual(['edit:edit', 'write:restore']); expect(run.userMessageId).toBeUndefined();
   });
-  it('keeps shell create-delete evidence across distinct operations', async () => {
+  it('does not retain shell create-delete endpoint evidence', async () => {
     const h = harness(); await h.emit('before_agent_start');
     await call(h, 'Bash', 'create', () => write('a.txt', 'one'));
     await call(h, 'Bash', 'remove', () => fs.unlink(path.join(root, 'a.txt')));
     await h.emit('agent_end'); const [run] = await runs();
-    expect(run.changes['a.txt'].before.exists).toBe(false); expect(run.changes['a.txt'].after.exists).toBe(false);
-    expect(run.changes['a.txt'].evidence).toHaveLength(2);
+    expect(await runs()).toEqual([]);
   });
   it('does not replace completed tool snapshots with unrelated agent_end modifications', async () => {
     const h = harness(); await h.emit('before_agent_start');
@@ -88,17 +79,14 @@ describe('expanded live capture without Git or project command execution', () =>
     await write('a.txt', 'external later'); await h.emit('agent_end');
     expect((await runs())[0].changes['a.txt'].after.text).toBe('owned');
   });
-  it('marks both overlapping session intervals unavailable, including an interval ended earlier', async () => {
+  it('does not let an overlapping shell interval taint an explicit Write capture', async () => {
     const a = harness('a'), b = harness('b'); await a.emit('before_agent_start'); await b.emit('before_agent_start');
     await a.emit('tool_call', { toolName: 'Bash', toolCallId: 'a' });
     await b.emit('tool_call', { toolName: 'Write', toolCallId: 'b', input: { path: 'shared.txt' } });
-    await write('shared.txt', 'uncertain'); await b.emit('tool_result', { toolCallId: 'b' }); await a.emit('tool_result', { toolCallId: 'a' });
+    await write('shared.txt', 'written'); await b.emit('tool_result', { toolCallId: 'b' }); await a.emit('tool_result', { toolCallId: 'a' });
     await a.emit('agent_end'); await b.emit('agent_end');
-    const captured = await runs(); expect(captured).toHaveLength(2);
-    for (const run of captured) {
-      expect(run.changes['shared.txt']).toMatchObject({ ambiguous: true, after: { kind: 'unavailable', text: null } });
-      expect(run.changes['shared.txt'].diffStats).toBeUndefined(); expect(run.changes['shared.txt'].note).toContain('uncertain');
-    }
+    const captured = await runs(); expect(captured).toHaveLength(1);
+    expect(captured[0].changes['shared.txt'].after).toMatchObject({ kind: 'text', text: 'written' });
   });
   it('marks independent overlapping operations in the same runner ambiguous', async () => {
     const h = harness(); await h.emit('before_agent_start');
@@ -125,16 +113,12 @@ describe('expanded live capture without Git or project command execution', () =>
     expect(await endCaptureLease(otherStore, other)).toBe(true); expect(await endCaptureLease(store, lease)).toBe(true);
     const clean = await beginCaptureLease(store, '/root-a', 'c'); expect(await endCaptureLease(store, clean)).toBe(false);
   });
-  it('does not finalize Task at launch, samples TaskWait and retains child restoration evidence', async () => {
+  it('does not record Task or TaskWait filesystem effects', async () => {
     await write('child.txt', 'before'); const h = harness(); await h.emit('before_agent_start');
-    await call(h, 'functions.Task', 'launch', async () => {}); expect(await runs()).toEqual([]);
-    await write('child.txt', 'child wrote');
-    await call(h, 'functions.TaskWait', 'wait', async () => {});
-    const [sampled] = await runs(); expect(sampled.state).toBe('running'); expect(sampled.changes['child.txt'].ambiguous).toBe(true);
+    await call(h, 'functions.Task', 'launch', async () => {});
+    await write('child.txt', 'child wrote'); await call(h, 'functions.TaskWait', 'wait', async () => {});
     await write('child.txt', 'before'); await h.emit('agent_end'); const [ended] = await runs();
-    expect(ended.state).toBe('incomplete'); expect(ended.finalReply).toBeUndefined();
-    expect(sameSnapshot(ended.changes['child.txt'].before, ended.changes['child.txt'].after)).toBe(true);
-    expect(ended.notice).toContain('not at launch');
+    expect(await runs()).toEqual([]);
   });
   it('recovers trusted locator generation without discarding the current user task', async () => {
     const h = harness(); await h.emit('before_agent_start', { message: { role: 'user', id: 'stable-id' } });

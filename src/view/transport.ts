@@ -7,11 +7,10 @@ const queue: NonNullable<typeof realm.__piDiffBurstQueue> = realm.__piDiffBurstQ
 const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'card', 'replyCards']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
-  const wire = <T,>(method: string, args?: unknown): Promise<T> => {
+  const wire = <T,>(method: string, args?: unknown, navigation = ['openFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn'].includes(method)): Promise<T> => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error('Request exceeds the bridge payload limit (48 KiB).'));
     if (method === 'saveComment' && bytes > 24000) return Promise.reject(new Error('Comment payload too large; shorten the comment or excerpt.'));
-    const navigation = method === 'openFile';
     const admission = (navigation ? queue.navigationTail ?? Promise.resolve() : queue.tail).catch(() => undefined).then(async () => {
       // Admission is serialized, not the long-poll response. Recheck after every wait
       // so concurrent navigation and ordinary traffic still share the six-request cap.
@@ -38,14 +37,15 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
   };
   return { async invoke<T>(method: string, args?: unknown): Promise<T> {
     if (!background.has(method)) return wire<T>(method, args);
-    const started = await wire<{ jobId: string } & Partial<JobResult<T>>>('jobStart', { method, args, waitMs: 40 });
+    const navigation = method === 'selectTurn';
+    const started = await wire<{ jobId: string } & Partial<JobResult<T>>>('jobStart', { method, args, waitMs: 40 }, navigation);
     if (started.state === 'done') return started.result as T;
     if (started.state === 'error') throw Object.assign(new Error(started.error?.message ?? 'Review failed'), { code: started.error?.code });
     const deadline = Date.now() + 120000;
     let delay = 40;
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, delay));
-      const job = await wire<JobResult<T>>('jobPoll', { jobId: started.jobId });
+      const job = await wire<JobResult<T>>('jobPoll', { jobId: started.jobId }, navigation);
       if (job.state === 'done') return job.result as T;
       if (job.state === 'error') throw Object.assign(new Error(job.error?.message ?? 'Review failed'), { code: job.error?.code });
       delay = Math.min(300, delay * 2);

@@ -165,3 +165,45 @@ test('an official layer refusal is visible and diagnosed, never bypassed with a 
   await expect.poll(() => page.evaluate(() => (window as any).__liveHost.calls.some((call: any) => call.method === 'rendererReport' && call.args.stage === 'composer-layer-error'))).toBe(true);
   await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
+
+test('avoids the owning task dock as it appears, expands, hides and is removed', async ({ page }) => {
+  await setup(page); const pill = page.locator('.dv-running-pill'); await expect(pill).toBeVisible();
+  await page.locator('.composer-shell').evaluate(shell => {
+    const stack = document.createElement('div'); stack.className = 'composer-stack';
+    shell.before(stack); stack.append(shell);
+    const dock = document.createElement('div'); dock.className = 'todo-dock'; dock.textContent = '1/3 · 正在核查';
+    Object.assign(dock.style, { height: '38px', marginBottom: '8px', border: '1px solid #ddd', borderRadius: '12px' }); stack.prepend(dock);
+  });
+  const above = async (selector: string) => {
+    await expect.poll(async () => { const p = await pill.boundingBox(), d = await page.locator(selector).boundingBox(); return !!p && !!d && p.y + p.height <= d.y - 7; }).toBe(true);
+  };
+  await above('.todo-dock');
+  await page.locator('.todo-dock').evaluate(node => { (node as HTMLElement).style.height = '140px'; }); await above('.todo-dock');
+  await page.locator('.todo-dock').evaluate(node => { (node as HTMLElement).hidden = true; }); await above('.composer-shell');
+  const nearComposer = async () => { const p = await pill.boundingBox(), c = await page.locator('.composer-shell').boundingBox(); return Math.abs(p!.y + p!.height - c!.y + 8); };
+  await expect.poll(nearComposer).toBeLessThan(2);
+  await page.locator('.todo-dock').evaluate(node => { (node as HTMLElement).hidden = false; }); await above('.todo-dock');
+  await page.locator('.todo-dock').evaluate(node => node.remove()); await expect.poll(nearComposer).toBeLessThan(2);
+  await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
+});
+test('returning to the same running task restores the pill before a delayed revalidation', async ({ page }) => {
+  await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible();
+  await page.evaluate(() => (window as any).__liveHost.switchSession('other'));
+  await expect(page.locator('.dv-running-pill')).toHaveCount(0);
+  let release!: () => void, waiting = false;
+  hold = () => { waiting = true; return new Promise<void>(resolve => release = resolve); };
+  await page.evaluate(() => (window as any).__liveHost.switchSession('s'));
+  try {
+    await expect(page.locator('.dv-running-pill')).toHaveText('1 个文件已更改+11-0', { timeout: 350 });
+    await expect.poll(() => waiting).toBe(true);
+  } finally { hold = undefined; release?.(); }
+  await stop(page);
+});
+test('a pill click does not submit a redundant running-summary query', async ({ page }) => {
+  await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible();
+  await page.locator('.dv-running-pill').click();
+  await expect(page.locator('#live-sidebar')).toBeVisible();
+  const methods = await page.evaluate(() => (window as any).__liveHost.calls.filter((call: any) => call.method === 'jobStart').map((call: any) => call.args.method));
+  expect(methods.filter((method: string) => method === 'runningChanges')).toHaveLength(1);
+  expect(methods).toContain('selectTurn'); await stop(page);
+});

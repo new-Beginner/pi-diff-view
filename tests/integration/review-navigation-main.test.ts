@@ -43,6 +43,12 @@ it('built main validates session-scoped navigation and restores selection after 
     const blockedHistory = plugin.onPanelInvoke('diff.bootstrap', {});
     await new Promise(resolve => setTimeout(resolve, 0));
     try {
+      // Selection must not queue behind bootstrap or mutate its authorization.
+      const quick = await plugin.onRendererCall('jobStart', { method: 'selectTurn', args: { sessionId: 's', runId: run.id, fileId }, waitMs: 40 });
+      let quickResult = quick;
+      for (let i = 0; quickResult.state !== 'done' && i < 50; i++) { quickResult = await plugin.onRendererCall('jobPoll', quick); if (quickResult.state === 'error') break; await new Promise(resolve => setTimeout(resolve, 10)); }
+      expect(quickResult.state).toBe('done');
+      expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: quickResult.result.nonce, sessionId: 's' })).fileId).toBe(fileId);
       const clickedAt = performance.now();
       const open = await plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 's' });
       expect(await listener).toEqual([{ ...open, sessionId: 's', path: path.join(root, 'file-120.txt') }]);

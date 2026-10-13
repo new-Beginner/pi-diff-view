@@ -54,3 +54,15 @@ it('concurrent navigation and ordinary admissions still obey the rolling burst c
   expect(starts).toHaveLength(12);
   for (const at of starts) expect(starts.filter(time => time >= at && time < at + 1000).length).toBeLessThanOrEqual(6);
 });
+it('target selection start and polls bypass a slow ordinary response while retaining burst limits', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(10000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; queue.navigationTail = Promise.resolve(); await queue.tail;
+  let finishSlow!: (value: unknown) => void;
+  const invoke = vi.fn((method: string) => method === 'file' ? new Promise(resolve => finishSlow = resolve) : Promise.resolve(method === 'jobStart' ? { jobId: 'selection' } : method === 'jobPoll' ? { state: 'done', result: { nonce: 'selection' } } : { ok: true }));
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const slow = transport.invoke('file'); await vi.advanceTimersByTimeAsync(0);
+  const selection = transport.invoke('selectTurn', { sessionId: 's', runId: 'r' }); await vi.advanceTimersByTimeAsync(100);
+  await expect(selection).resolves.toEqual({ nonce: 'selection' });
+  expect(invoke.mock.calls.map(([method]) => method)).toEqual(['file', 'jobStart', 'jobPoll']);
+  finishSlow({ ok: true }); await slow;
+});

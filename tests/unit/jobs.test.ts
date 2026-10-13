@@ -9,3 +9,15 @@ it('starts long review work without blocking bridge and serializes operations', 
 it('bounds jobs and returns coded errors without leaking a rejection', async () => {
  const q = new JobQueue(async()=>{throw Object.assign(new Error('conflict'),{code:'FILE_CONFLICT'});}); const id = q.start('action',{}).jobId; await vi.waitFor(() => expect(q.poll(id).error?.code).toBe('FILE_CONFLICT')); expect(()=>q.start('arbitraryExec',{})).toThrow(); q.close();
 });
+it('reserves one bounded navigation job while four ordinary jobs are pending', async () => {
+  let release!: () => void;
+  const calls: string[] = [], q = new JobQueue(async method => { calls.push(method); if (method === 'review') await new Promise<void>(resolve => release = resolve); return method; });
+  const first = q.start('review', {}); q.start('action', {}); q.start('bootstrap', {}); q.start('replyCards', {});
+  expect(() => q.start('card', {})).toThrow('Too many');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  const selected = q.start('selectTurn', {});
+  expect(() => q.start('selectTurn', {})).toThrow('Too many');
+  await vi.waitFor(() => expect(q.poll(selected.jobId).result).toBe('selectTurn'));
+  expect(q.poll(first.jobId).state).toBe('pending'); expect(calls).toEqual(['review', 'selectTurn']);
+  release(); await vi.waitFor(() => expect(q.poll(first.jobId).state).toBe('done')); q.close();
+});

@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { onLoad, onUnload, type RendererHost } from '../../src/renderer/index';
 import { createPluginReviewAdapter, resolvePluginReviewModules } from '../../src/renderer/plugin-review-adapter';
 const sessionListeners = new Set<() => void>();
-let renderReplies: ((visible: boolean) => void) | undefined;
-const state = { draft: 'Existing draft. ', sessionId: 'session-demo', styles: 0, sidebars: 0, subscriptions: 0, positions: [] as unknown[], opens: [] as any[], hideReplies() { renderReplies?.(false); }, showReplies() { renderReplies?.(true); }, unload() { onUnload(); closeSidebar(); }, switchSession(sessionId: string) { state.sessionId = sessionId; nativeState.activeSessionId = sessionId; closeSidebar(); sessionListeners.forEach(listener => listener()); draftListener?.({ text: state.draft, marks: [], generation: 1 }); } };
+let renderReplies: ((visible: boolean, sessionId?: string) => void) | undefined;
+const state = { draft: 'Existing draft. ', sessionId: 'session-demo', styles: 0, sidebars: 0, subscriptions: 0, positions: [] as unknown[], opens: [] as any[], hideReplies() { renderReplies?.(false); }, showReplies(sessionId?: string) { renderReplies?.(true, sessionId); }, unload() { onUnload(); closeSidebar(); }, switchSession(sessionId: string) { state.sessionId = sessionId; nativeState.activeSessionId = sessionId; closeSidebar(); sessionListeners.forEach(listener => listener()); draftListener?.({ text: state.draft, marks: [], generation: 1 }); } };
 let draftListener: ((value: { text: string; marks: unknown[]; generation: number } | null) => void) | null = null;
 let sidebar: HTMLElement | null = null;
 function closeSidebar() { sidebar?.remove(); sidebar = null; state.sidebars = 0; nativeState.workPanelOpen = false; nativeState.activeWorkPanelTabId = null; nativeState.workPanelTabs = []; document.body.classList.remove('sidebar-open'); }
@@ -38,7 +38,7 @@ const host: RendererHost = {
     const element = document.createElement('div'); element.dataset.testSlot = options.slot; element.dataset.piPlugin = 'local.diff-view'; (document.getElementById('mock-reply') ?? document.body).append(element);
     const root = createRoot(element); const Component = options.component;
     const historyCount = Number(params.get('historyCards') || 0);
-    renderReplies = visible => root.render(visible ? <>{Array.from({ length: historyCount || 12 }, (_, index) => <Component key={index} sessionId="session-demo" messageId={historyCount ? `history-${index}` : index === target ? 'reply-demo' : `unbound-${index}`} message={{ content: index === target && params.has('longReply') ? `${'进度😀\n\n'.repeat(12000)}Demo reply ${index}` : `Demo reply ${index}`, createdAt: new Date(Date.parse('2025-06-15T15:07:40.000Z') + (params.has('latestAtEnd') ? index * 1000 : 0)).toISOString() }} />)}</> : null);
+    renderReplies = (visible, sessionId = 'session-demo') => root.render(visible ? <>{Array.from({ length: historyCount || 12 }, (_, index) => <Component key={index} sessionId={sessionId} messageId={historyCount ? `history-${index}` : index === target ? 'reply-demo' : `unbound-${index}`} message={{ content: index === target && params.has('longReply') ? `${'进度😀\n\n'.repeat(12000)}Demo reply ${index}` : `Demo reply ${index}`, createdAt: new Date(Date.parse('2025-06-15T15:07:40.000Z') + (params.has('latestAtEnd') ? index * 1000 : 0)).toISOString() }} />)}</> : null);
     renderReplies(true);
     return () => { root.unmount(); element.remove(); };
   } },

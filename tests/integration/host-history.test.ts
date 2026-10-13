@@ -44,9 +44,8 @@ describe('native host evidence importer', () => {
     await evidence('png', { path: 'screen.PNG' }); await evidence('svg', { path: 'logo.SVG' });
     await evidence('text', { path: 'notes.txt' }); await evidence('rename', { path: 'renamed.txt', oldPath: 'source.JPG' });
     const diagnostics = await importer().syncSession(sid, root), run = (await get())!;
-    expect(diagnostics.events).toBe(2);
-    expect(Object.keys(run.changes).sort()).toEqual(['notes.txt', 'renamed.txt']);
-    expect((run.changes['renamed.txt'] as any).oldPath).toBe('source.JPG'); expect(run.fileCount).toBe(2);
+    expect(diagnostics.events).toBe(1);
+    expect(Object.keys(run.changes)).toEqual(['notes.txt']); expect(run.fileCount).toBe(1);
   });
   it('incrementally updates one running turn and settles its final reply without timestamp guesses', async () => {
     await session([user(), tool('call-one')]); await evidence('call-one');
@@ -64,14 +63,14 @@ describe('native host evidence importer', () => {
     await importer().syncSession(sid, root);
     expect((await get())!.changes['a.txt'].after.text).toBe('keep\nnew\n');
   });
-  it('keeps unknown shell modifications, rejects arbitrary shell claims and fabricated snippet stats', async () => {
-    await session([user(), tool('shell', 'Bash', { command: 'echo fake > a.txt' }), tool('claim', 'Bash', { command: 'echo changed imaginary.txt' }), reply()]);
-    await evidence('shell', { beforeExists: true, beforeHash: digest('old'), afterHash: digest('unrecoverable') }, 'corrupt');
+  it('rejects shell modification history while retaining standard Write evidence', async () => {
+    await session([user(), tool('shell', 'Bash', { command: 'echo fake > a.txt' }), tool('standard', 'Write', { path: 'standard.txt', content: 'new\n' }), tool('claim', 'Bash', { command: 'echo changed imaginary.txt' }), reply()]);
+    await evidence('shell', { path: 'a.txt', beforeExists: true, beforeHash: digest('old'), afterHash: digest('unrecoverable') }, 'corrupt');
+    await evidence('standard', { path: 'standard.txt', beforeExists: false, afterHash: digest('new\n') }, undefined, 'new\n');
     await fs.mkdir(root); await fs.writeFile(path.join(root, 'a.txt'), 'unrecoverable');
     await importer().syncSession(sid, root);
-    const run = (await get())!; expect(run.fileCount).toBe(1); expect(run.incomplete).toBe(true);
-    expect(run.changes['a.txt'].before.kind).toBe('unavailable'); expect(run.changes['a.txt'].after.kind).toBe('unavailable');
-    expect(run.changes['a.txt'].diffStats).toBeUndefined(); expect((run.changes['a.txt'] as any).note).toContain('不可用');
+    const run = (await get())!; expect(Object.keys(run.changes)).toEqual(['standard.txt']); expect(run.fileCount).toBe(1);
+    expect(run.changes['standard.txt'].after.text).toBe('new\n'); expect(run.changes['a.txt']).toBeUndefined();
   });
   it('retains structured events after missing/corrupt metadata without trusting patch-only counts', async () => {
     await session([user(), tool('lost', 'Edit', {}, { version: 1, messageId: 'lost', path: 'a.txt', operation: 'edit', additions: 400, deletions: 300, hunks: [] }), reply()]);
@@ -81,7 +80,7 @@ describe('native host evidence importer', () => {
     expect(c.before.kind).toBe('unavailable'); expect(c.after.kind).toBe('unavailable'); expect(c.diffStats).toBeUndefined();
   });
   it('imports deletions and explicit rename metadata, and marks stopped tool-only turns incomplete', async () => {
-    await session([user(), tool('delete', 'Bash'), tool('rename', 'Bash')]);
+    await session([user(), tool('delete', 'Edit'), tool('rename', 'Edit')]);
     await evidence('delete', { path: 'gone.txt', operation: 'delete', beforeExists: true, beforeHash: digest('old'), afterExists: false, afterHash: undefined }, 'old');
     await evidence('rename', { path: 'renamed.txt', oldPath: 'original.txt', operation: 'rename', beforeExists: true, beforeHash: digest('old'), afterHash: digest('new') }, 'old', 'new');
     await importer().syncSession(sid, root);
@@ -123,7 +122,7 @@ describe('native host evidence importer', () => {
     expect((await importer().syncSession('missing', root)).warnings).toHaveLength(1);
   });
   it('passes net-zero events to storage instead of filtering them', async () => {
-    await session([user(), tool('zero', 'Bash'), reply()]); await evidence('zero', { beforeExists: true, beforeHash: digest('new\n') }, 'new\n', 'new\n');
+    await session([user(), tool('zero', 'Write'), reply()]); await evidence('zero', { beforeExists: true, beforeHash: digest('new\n') }, 'new\n', 'new\n');
     const write = vi.spyOn(store, 'writeRun'); await importer().syncSession(sid, root);
     expect(write).toHaveBeenCalledOnce(); expect(write.mock.calls[0][0].fileCount).toBe(1);
     expect(Object.keys(write.mock.calls[0][0].changes)).toEqual(['a.txt']);
@@ -144,7 +143,7 @@ describe('native host evidence importer', () => {
     expect((await get())!.changes['failed.txt'].after.kind).toBe('unavailable');
   });
   it('isolates foreign metadata and refuses snapshot directory junctions', async () => {
-    await session([user(), tool('foreign'), tool('linked', 'Bash'), reply()]);
+    await session([user(), tool('foreign'), tool('linked', 'Write'), reply()]);
     await evidence('foreign', { sessionId: 'different-session' });
     await evidence('linked', { beforeExists: true, beforeHash: digest('old') }, 'old', 'new\n');
     const dir = path.join(host, 'review-changes', sid, 'linked'), elsewhere = path.join(temp, 'elsewhere');
@@ -176,7 +175,7 @@ describe('native host evidence importer', () => {
   });
   it('rejects corrupt before/after hashes and malformed CRLF hunks even when disk matches the alleged result', async () => {
     const hunks = [{ header: '@@ -1 +1 @@', lines: [{ type: 'del', text: 'WRONG' }, { type: 'add', text: 'new' }] }];
-    await session([user(), tool('bad-before', 'Bash'), tool('bad-after', 'Bash'), tool('bad-hunk', 'Edit', { path: 'c.txt' }, { hunks }), reply()]);
+    await session([user(), tool('bad-before', 'Write'), tool('bad-after', 'Write'), tool('bad-hunk', 'Edit', { path: 'c.txt' }, { hunks }), reply()]);
     await evidence('bad-before', { beforeExists: true, beforeHash: digest('old'), afterHash: digest('new') }, 'corrupt', 'new');
     await evidence('bad-after', { path: 'b.txt', afterHash: digest('different-new') }, undefined, 'corrupt');
     await evidence('bad-hunk', { path: 'c.txt', beforeExists: true, beforeHash: digest('old\r\n'), afterHash: digest('new\r\n') }, 'old\r\n');
@@ -219,12 +218,12 @@ describe('native host evidence importer', () => {
     expect((await store.getRun('live-agent'))!.state).toBe('running');
   });
   it('keeps verified historical blobs after native snapshot cleanup and incomplete transcript refresh', async () => {
-    await session([user(), tool('one', 'Bash'), reply()]);
+    await session([user(), tool('one', 'Write'), reply()]);
     await evidence('one', { beforeExists: true, beforeHash: digest('old\n') }, 'old\n', 'new\n');
     await importer().syncSession(sid, root);
     await fs.rm(path.join(host, 'review-changes', sid, 'one', 'before'));
     await fs.rm(path.join(host, 'review-changes', sid, 'one', 'after'));
-    await session([user(), tool('one', 'Bash')]);
+    await session([user(), tool('one', 'Write')]);
     await importer().syncSession(sid, root);
     const run = (await get())!;
     expect(run).toMatchObject({ state: 'completed', replyMessageId: 'reply-one', incomplete: false });

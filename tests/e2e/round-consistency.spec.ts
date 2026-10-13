@@ -49,8 +49,8 @@ test('a late review cannot overwrite the files or turn dropdown after switching 
   await page.getByTitle('显示设置', { exact: true }).click(); await page.getByRole('button', { name: '刷新', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__demo.waitingReview)).toBe(true);
   await page.evaluate(() => (window as any).__demo.openLocation('diff-session:session-b?sessionId=session-b'));
-  await expect(page.locator('.dv-review h2')).toHaveText('session-b/late-run.ts');
+  await expect(page.locator('.dv-review:visible h2')).toHaveText('session-b/late-run.ts');
   await page.evaluate(() => { const demo = (window as any).__demo; demo.holdReview = false; demo.releaseReview(); });
-  await page.waitForTimeout(400); await expect(page.locator('.dv-file')).not.toContainText('session-a/');
+  await page.waitForTimeout(400); await expect(page.locator('.dv-file:visible')).not.toContainText('session-a/');
   await expect(page.getByRole('combobox', { name: '对话轮次', exact: true })).toHaveCount(0);
 });

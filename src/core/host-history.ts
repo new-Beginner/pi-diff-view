@@ -154,14 +154,18 @@ export class HostHistoryImporter {
       if (isImagePath(meta.path)) { d.skipped++; return; }
       const message = aliases.get(meta.messageId);
       if (!message || !owner(message)) { d.skipped++; warn('Unlinked host modification evidence'); return; }
+      const block = message.blocks.find(b => b.type === 'tool_call' && b.callId === meta.messageId)
+        ?? (message.id === meta.messageId && message.blocks.filter(b => b.type === 'tool_call').length === 1 ? message.blocks.find(b => b.type === 'tool_call') : undefined);
+      const tool = String(block?.name ?? '').split('.').pop()!.toLowerCase();
+      if (!block || !['write', 'edit'].includes(tool)) { d.skipped++; return; }
       let identity: string;
       try { identity = capture(meta.path).identity; if (meta.oldPath) capture(meta.oldPath); } catch { d.skipped++; return; }
-      const block = message.blocks.find(b => b.type === 'tool_call' && (b.callId === meta.messageId || message.id === meta.messageId));
-      // Native metadata may use a message alias or a relative spelling of the same tool target.
-      const key = `${block?.callId ?? meta.messageId}\0${identity}`;
+      // Native evidence is accepted only when tied to an explicit standard
+      // mutation tool; Bash/Shell/Task endpoints are not authorship evidence.
+      const key = `${block.callId}\0${identity}`;
       if (eventKeys.has(key)) return;
       eventKeys.add(key);
-      events.push({ meta, directory, message, block, toolOnly });
+      events.push({ meta: { ...meta, messageId: block.callId }, directory, message, block, toolOnly });
     };
     const relative = `review-changes/${sessionId}`;
     try {
@@ -181,7 +185,7 @@ export class HostHistoryImporter {
       if (b.type !== 'tool_call' || b.status !== 'success' || b.result?.isError) continue;
       if (object(review)) {
         if ((review.messageId !== m.id && review.messageId !== b.callId) || (review.sessionId !== undefined && review.sessionId !== sessionId)) { d.skipped++; continue; }
-        add({ ...review, sessionId, beforeExists: review.beforeExists ?? (review.status === 'added' ? false : undefined), afterExists: review.afterExists ?? (review.status === 'deleted' ? false : undefined) });
+        add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === 'added' ? false : undefined), afterExists: review.afterExists ?? (review.status === 'deleted' ? false : undefined) });
       } else {
         // Successful native Write/Edit calls are evidence even without native review snapshots.
         // Missing before bytes stay unknown; never assume Write created an absent file.
@@ -261,6 +265,16 @@ export class HostHistoryImporter {
       const existing = await this.store.listRuns(false, true) as HostHistoryRun[];
       const users = ordered.filter(m => m.role === 'user' && !m.parent && !m.meta.steering);
       const nextBoundary = new Map(users.slice(0, -1).map((user, index) => [user.id, users[index + 1].createdAt]));
+      const standardEvidence = (ref: string) => {
+        const separator = ref.indexOf(':');
+        if (separator < 0) return false;
+        const source = ref.slice(0, separator).toLowerCase(), id = ref.slice(separator + 1);
+        if (source === 'native') {
+          const message = aliases.get(id);
+          return !!message?.blocks.some(b => b.type === 'tool_call' && b.callId === id && ['write', 'edit'].includes(String(b.name).split('.').pop()!.toLowerCase()));
+        }
+        return ['write', 'edit'].includes(source);
+      };
       const refOwner = (ref: string) => {
         const callId = ref.slice(ref.indexOf(':') + 1), message = aliases.get(callId);
         return message?.blocks.some(b => b.type === 'tool_call' && b.callId === callId) ? owner(message) : undefined;
@@ -280,8 +294,10 @@ export class HostHistoryImporter {
         const duplicates = existing.filter(r => {
           if (r.sessionId !== sessionId || canonical(r.root) !== canonical(root) || r.source === 'host-history') return false;
           // Exact original tool ownership overrides an obsolete context binding.
-          const attributable = Object.entries(r.changes).filter(([value, change]) => !foreignRecovery(r, value, change));
+          const attributable = Object.entries(r.changes).filter(([value, change]) => !foreignRecovery(r, value, change) && (change.evidence ?? []).every(standardEvidence));
           const linkedOwners = attributable.flatMap(([, c]) => c.evidence ?? []).map(refOwner);
+          const rejectedOwners = Object.values(r.changes).flatMap(change => (change.evidence ?? []).filter(ref => !standardEvidence(ref)).map(refOwner));
+          if (rejectedOwners.length && rejectedOwners.every(id => id === user.id)) return true;
           const verifiedOwner = linkedOwners[0] && attributable.every(([, c]) => !!c.evidence?.length) && linkedOwners.every(id => id === linkedOwners[0]) ? linkedOwners[0] : undefined;
           if (verifiedOwner) return verifiedOwner === user.id;
           if (linkedOwners.some(id => id && id !== user.id)) return false;
@@ -311,7 +327,7 @@ export class HostHistoryImporter {
           const note = ['原生历史修改事件；未读取当前文件。', e.meta.state === 'reverted' ? '主程序已标记撤销；此处保留原修改证据。' : '', e.meta.oldPath ? `重命名来源：${e.meta.oldPath}` : '', e.before!.kind === 'unavailable' || e.after!.kind === 'unavailable' ? '历史完整内容不可用，无法可靠计算完整差异。' : ''].filter(Boolean).join(' ');
           changes[c.path] = { capture: c, before: old?.before ?? e.before!, after: e.after!, note, evidence: [...(old?.evidence ?? []), `native:${e.meta.messageId}`].slice(-32), ...(e.meta.oldPath ? { oldPath: e.meta.oldPath } : {}) };
         }
-        if (previous) for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes[value]) changes[value] = change;
+        if (previous) for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes[value] && (change.evidence ?? []).every(standardEvidence)) changes[value] = change;
         if (Object.keys(changes).length > 256) { warn('Turn exceeds 256 files; import skipped'); d.skipped++; continue; }
         const incomplete = Object.values(changes).some(c => c.before.kind === 'unavailable' || c.after.kind === 'unavailable') || (!replyId && !live);
         const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live ? undefined : retainedReply ? saved!.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, state: live ? 'running' : replyId ? 'completed' : 'incomplete', fileCount: Object.keys(changes).length, incomplete, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
@@ -320,7 +336,7 @@ export class HostHistoryImporter {
             const liveRun = (await this.store.getRun(duplicate.id))!;
             const recoveredFiles = { ...liveRun.hostRecovery?.files };
             let changed = false;
-            for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change)) {
+            for (const [value, change] of Object.entries(liveRun.changes)) if (foreignRecovery(liveRun, value, change) || (change.evidence ?? []).some(ref => !standardEvidence(ref))) {
               delete liveRun.changes[value]; delete recoveredFiles[value]; changed = true;
             }
             if (liveRun.userMessageId !== user.id || liveRun.boundary !== 'user') {

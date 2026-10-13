@@ -135,11 +135,10 @@ var realm = globalThis;
 var queue = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
 var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "card", "replyCards"]);
 function boundedTransport(invoke) {
-  const wire = (method, args) => {
+  const wire = (method, args, navigation = ["openFile", "activeReviewSession", "readTurnSelection", "selectTurn"].includes(method)) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
     if (bytes > 48 * 1024) return Promise.reject(new Error("Request exceeds the bridge payload limit (48 KiB)."));
     if (method === "saveComment" && bytes > 24e3) return Promise.reject(new Error("Comment payload too large; shorten the comment or excerpt."));
-    const navigation = method === "openFile";
     const admission = (navigation ? queue.navigationTail ?? Promise.resolve() : queue.tail).catch(() => void 0).then(async () => {
       for (; ; ) {
         queue.starts = queue.starts.filter((at) => Date.now() - at < 1e3);
@@ -171,14 +170,15 @@ function boundedTransport(invoke) {
   };
   return { async invoke(method, args) {
     if (!background.has(method)) return wire(method, args);
-    const started = await wire("jobStart", { method, args, waitMs: 40 });
+    const navigation = method === "selectTurn";
+    const started = await wire("jobStart", { method, args, waitMs: 40 }, navigation);
     if (started.state === "done") return started.result;
     if (started.state === "error") throw Object.assign(new Error(started.error?.message ?? "Review failed"), { code: started.error?.code });
     const deadline = Date.now() + 12e4;
     let delay = 40;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, delay));
-      const job = await wire("jobPoll", { jobId: started.jobId });
+      const job = await wire("jobPoll", { jobId: started.jobId }, navigation);
       if (job.state === "done") return job.result;
       if (job.state === "error") throw Object.assign(new Error(job.error?.message ?? "Review failed"), { code: job.error?.code });
       delay = Math.min(300, delay * 2);
@@ -608,8 +608,12 @@ import React4, { useEffect as useEffect2, useLayoutEffect as useLayoutEffect2, u
 import { createPortal } from "react-dom";
 
 // src/renderer/running-changes.ts
+var caches = /* @__PURE__ */ new WeakMap();
+var taskKey = (task) => JSON.stringify([task.sessionId, task.taskId, task.since, task.turnId ?? null]);
 function createRunningChangesController(transport, adapter, publish, report2 = () => {
 }) {
+  const cache = caches.get(transport) ?? /* @__PURE__ */ new Map();
+  caches.set(transport, cache);
   let activity = null, epoch = 0, disposed = false;
   let timer;
   let view = { summary: null, busy: false, error: "" };
@@ -626,17 +630,24 @@ function createRunningChangesController(transport, adapter, publish, report2 = (
   };
   const valid = (version) => !disposed && epoch === version && activity !== null;
   const matches = (result, task) => result !== null && result.sessionId === task.sessionId && result.startedAt >= task.since && result.fileCount > 0;
+  const remember2 = (task, summary) => {
+    const key = taskKey(task);
+    cache.delete(key);
+    if (summary) cache.set(key, summary);
+    while (cache.size > 32) cache.delete(cache.keys().next().value);
+  };
   async function poll(version, task) {
     try {
       const result = await transport.invoke("runningChanges", { sessionId: task.sessionId, since: task.since, taskId: task.taskId });
       if (!valid(version)) return;
       const summary = matches(result, task) ? result : null;
+      remember2(task, summary);
       diagnose(summary ? "running-visible" : "running-query-empty");
       emit({ ...view, summary, error: "" });
     } catch {
       if (valid(version)) {
         diagnose("running-query-error");
-        emit({ summary: null, busy: false, error: "" });
+        emit({ ...view, error: "" });
       }
     } finally {
       if (valid(version)) timer = setTimeout(() => {
@@ -652,7 +663,8 @@ function createRunningChangesController(transport, adapter, publish, report2 = (
       const version = ++epoch;
       if (timer) clearTimeout(timer);
       timer = void 0;
-      emit({ summary: null, busy: false, error: "" });
+      const summary = next ? cache.get(taskKey(next)) ?? null : null;
+      emit({ summary, busy: false, error: "" });
       diagnose(next ? next.since > 0 ? "running-ready" : "running-identity-missing" : "running-idle");
       if (next) void poll(version, next);
     },
@@ -664,22 +676,19 @@ function createRunningChangesController(transport, adapter, publish, report2 = (
       };
       emit({ ...view, busy: true, error: "" });
       try {
-        const result = await transport.invoke("runningChanges", { sessionId: task.sessionId, since: task.since, taskId: task.taskId });
-        guard();
-        if (!matches(result, task) || result.runId !== summary.runId) {
-          emit({ summary: null, busy: false, error: "" });
-          return;
-        }
-        await transport.invoke("activeReviewSession", { sessionId: task.sessionId });
-        guard();
         const selection = await transport.invoke("selectTurn", { sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
         guard();
         await adapter.open(task.sessionId, `diff-view:${selection.nonce}`, guard);
         guard();
       } catch (error) {
         if (valid(version) && view.summary?.runId === summary.runId) {
-          diagnose("running-click-error");
-          emit({ ...view, error: String(error.message ?? error) });
+          if (["RUN_NOT_FOUND", "RUN_MISSING", "TASK_REQUIRED"].includes(String(error.code))) {
+            remember2(task, null);
+            emit({ summary: null, busy: false, error: "" });
+          } else {
+            diagnose("running-click-error");
+            emit({ ...view, error: String(error.message ?? error) });
+          }
         }
       } finally {
         if (valid(version)) emit({ ...view, busy: false });
@@ -761,12 +770,18 @@ function RunningChangePill({ transport, adapter, ui, report: report2 }) {
       const shell = owner.closest(".composer-shell"), rect = rectOf(owner);
       const first = [...anchors].find((node) => rectOf(node));
       const visible2 = Boolean(rect && first === owner);
+      const stack = shell?.closest(".composer-stack");
+      const dock = stack?.querySelector(".todo-dock");
+      const dockRect = dock?.getBoundingClientRect();
+      const dockStyle = dock && getComputedStyle(dock);
+      const dockVisible = dock && dock.getClientRects().length > 0 && dockRect && dockRect.height > 0 && dockRect.width > 0 && dockStyle?.visibility !== "hidden" && dockStyle?.display !== "none" && dockStyle?.opacity !== "0" && rect && dockRect.right > rect.left && dockRect.left < rect.right && dockRect.top < rect.top && dockRect.bottom > 0;
+      const ceiling = dockVisible ? Math.min(rect.top, dockRect.top) : rect?.top ?? 0;
       const stage = !shell ? "composer-anchor-missing" : !rect ? "composer-anchor-offscreen" : "composer-positioned";
       if (stage !== lastStage) {
         lastStage = stage;
         report2(stage);
       }
-      const next = visible2 && rect ? { left: rect.left + rect.width / 2, top: rect.top - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible: visible2 } : hidden;
+      const next = visible2 && rect && ceiling > 48 ? { left: rect.left + rect.width / 2, top: ceiling - 8, width: Math.min(rect.width - 16, window.innerWidth - 24), visible: visible2 } : hidden;
       setPosition((previous) => previous.visible === next.visible && previous.left === next.left && previous.top === next.top && previous.width === next.width ? previous : next);
       frame = requestAnimationFrame(update);
     };
@@ -957,23 +972,27 @@ async function restoreFeed(current, sessionId) {
     current.listeners.forEach((listener) => listener());
   }
   if (!first.unchanged) {
-    const restored = [...first.cards];
+    const restored = [];
+    const accept = (cards) => {
+      for (const card of cards) if (card.run.sessionId !== sessionId || card.summary.sessionId !== sessionId || card.summary.runId !== card.run.id) throw new Error("Invalid recorded card identity");
+      for (const card of cards) {
+        restored.push(card);
+        remember(current, card);
+      }
+    };
+    accept(first.cards);
     let offset = first.nextOffset;
     while (offset !== null) {
       const page = await current.transport.invoke("replyCards", { sessionId, offset });
       if (!same(current)) return feed;
       if (page.revision !== first.revision || page.nextOffset !== null && page.nextOffset <= offset) throw new Error("Card history changed during paging; refresh required");
-      restored.push(...page.cards);
+      accept(page.cards);
       offset = page.nextOffset;
     }
     const keys = new Set(restored.map((card) => cardKey(sessionId, card.messageId)));
     for (const [key, card] of current.cache) if (card.run.sessionId === sessionId && !keys.has(key)) {
       current.cache.delete(key);
       current.cards.get(key)?.listeners.forEach((listener) => listener(null));
-    }
-    for (const card of restored) {
-      if (card.run.sessionId !== sessionId || card.summary.sessionId !== sessionId || card.summary.runId !== card.run.id) throw new Error("Invalid recorded card identity");
-      remember(current, card);
     }
     if (restored.length) {
       report(current, "card-bound");
@@ -1082,7 +1101,7 @@ function EntryExtra(props) {
     guard();
     const selection = await current.transport.invoke("selectTurn", { sessionId: run.sessionId, runId: run.id, fileId: file?.id });
     guard();
-    await current.adapter.open(run.sessionId, `diff-view:${selection.nonce}`);
+    await current.adapter.open(run.sessionId, `diff-view:${selection.nonce}`, guard);
     guard();
     report(current, "sidebar-opened");
   } });

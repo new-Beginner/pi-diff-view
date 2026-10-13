@@ -15,7 +15,7 @@ const reply = (id: string, createdAt: number) => ({ type: 'message', id, role: '
 const tool = (id: string, createdAt: number, meta = {}) => ({ type: 'message', id, role: 'tool', createdAt, meta, blocks: [{ type: 'tool_call', callId: id, name: 'Write', args: { path: path.join(root, 'native.txt'), content: 'new\n' }, status: 'success', result: { isError: false } }] });
 const context = (taskId = 'new-user') => ({ sessionId: sid, root, running: true, taskId, since: now + 4000, updatedAt: Date.now() });
 async function session(rows: object[]) { await fs.writeFile(path.join(host, 'sessions', `${sid}.jsonl`), rows.map(row => JSON.stringify(row)).join('\n') + '\n'); }
-function captured(id: string, userMessageId: string, startedAt: number, evidence: string[] = ['bash:old-shell']): CaptureRun {
+function captured(id: string, userMessageId: string, startedAt: number, evidence: string[] = ['write:old-write']): CaptureRun {
   const absolutePath = path.join(root, 'agent.txt'), identity = canonical(absolutePath);
   return { version: 2, id, userMessageId, sessionId: sid, root, startedAt, state: 'running', generation: 'generation', boundary: 'user', incomplete: false, contentVersion: 3, fileCount: 1, changes: { 'agent.txt': { capture: { id: digest(identity).slice(0, 24), identity, absolutePath, origin: 'workspace', path: 'agent.txt' }, before: snapshotOfText('old\n'), after: snapshotOfText('new\n'), evidence } }, replies: [], bindings: {} };
 }
@@ -28,30 +28,31 @@ beforeEach(async () => {
 });
 afterEach(async () => { await fs.rm(temp, { recursive: true, force: true }); });
 
-it('selects the empty current turn from trusted identity before JSONL flush, never reopens the previous turn', async () => {
+it('shows the previous modified turn before current JSONL flush without merging its changes into the empty current capture', async () => {
   await session([user('old-user', now), tool('old-tool', now + 1000), reply('old-reply', now + 2000)]);
   await importer.syncSession(sid, root);
   const activity = context();
   await importer.syncSession(sid, root, activity);
   expect((await store.getRun(hostHistoryRunId(sid, 'old-user')))!.state).toBe('completed');
   const review = await service.review({ scope: 'lastTurn', sessionId: sid, root }, false, activity);
-  expect(review.run).toMatchObject({ id: hostHistoryRunId(sid, 'new-user'), state: 'running', fileCount: 0 });
-  expect(review.files).toEqual([]);
+  expect(review.run).toMatchObject({ id: hostHistoryRunId(sid, 'old-user'), state: 'completed', fileCount: 1 });
+  expect(review.files).toHaveLength(1);
+  expect((await store.getRun(hostHistoryRunId(sid, 'new-user')))!.changes).toEqual({});
   expect((await service.bootstrap(sid)).runs.filter(run => run.state === 'running')).toHaveLength(1);
   await importer.syncSession(sid, root, { running: false });
   expect((await store.listRuns(false, true)).filter(run => run.state === 'running')).toEqual([]);
   expect((await service.review({ scope: 'lastTurn', sessionId: sid, root }, false, { ...activity, running: false })).runId).toBe(hostHistoryRunId(sid, 'old-user'));
 });
 
-it('does not substitute any previous changes when the current identity has no capture yet', async () => {
+it('shows previous recorded changes when the current identity has no capture yet', async () => {
   await store.writeRun(captured('older-capture', 'old-user', now));
   const review = await service.review({ scope: 'lastTurn', sessionId: sid, root }, false, context());
-  expect(review.files).toEqual([]); expect(review.runId).toBeUndefined();
-  expect(review.notice).toContain('当前轮次');
+  expect(review.files).toHaveLength(1); expect(review.runId).toBe('older-capture');
+  expect(review.notice).not.toContain('不会显示上一轮');
 });
 
-it('settles an older shell-only main turn and prevents its stale inbox from reopening it', async () => {
-  const old = captured('shell-capture', 'old-user', now);
+it('settles an older standard-tool main turn and prevents its stale inbox from reopening it', async () => {
+  const old = captured('write-capture', 'old-user', now);
   await store.writeRun(old); await store.writeRun(old, true);
   await session([user('old-user', now), reply('old-reply', now + 2000), user('new-user', now + 4000)]);
   await importer.syncSession(sid, root, context());
@@ -141,4 +142,75 @@ it('does not use a stale identity to merge genuinely mixed tool ownership', asyn
   expect(Object.keys((await store.getRun(mixed.id))!.changes)).toEqual(['agent.txt']);
   expect((await store.getRun(hostHistoryRunId(sid, 'old-user')))!.state).toBe('completed');
   expect((await store.getRun(hostHistoryRunId(sid, 'new-user')))!.state).toBe('running');
+});
+
+it('drops old shell evidence and does not resurrect it from a stale inbox', async () => {
+  const old = captured('shell-only', 'old-user', now, ['bash:old-shell']);
+  await store.writeRun(old); await store.writeRun(old, true);
+  await session([user('old-user', now), reply('old-reply', now + 2000), user('new-user', now + 4000)]);
+  await importer.syncSession(sid, root, context());
+  expect(await store.getRun(old.id)).toBeNull();
+  await store.importInbox('generation');
+  expect(await store.getRun(old.id)).toBeNull();
+});
+
+it.each(['trusted', 'missing', 'stale', 'idle'] as const)('skips empty current turns with %s activity metadata', async metadata => {
+  const old = { ...captured('previous', 'old-user', now), state: 'completed' as const, endedAt: now + 2000 };
+  const current = { ...captured('current', 'new-user', now + 4000), changes: {}, fileCount: 0 };
+  await store.writeRun(old); await store.writeRun(current);
+  const activity = metadata === 'missing' ? undefined : metadata === 'idle' ? { ...context(), running: false } : context(metadata === 'stale' ? 'stale-user' : 'new-user');
+  const review = await service.review({ scope: 'lastTurn', sessionId: sid }, false, activity);
+  expect(review.runId).toBe(old.id); expect(review.files).toHaveLength(1);
+  expect((await store.getRun(current.id))!.changes).toEqual({});
+});
+
+it('switches to the current turn on its first modification and retains it after completion', async () => {
+  const old = { ...captured('previous', 'old-user', now), state: 'completed' as const, endedAt: now + 2000 };
+  const current = captured('current', 'new-user', now + 4000);
+  await store.writeRun(old); await store.writeRun({ ...current, changes: {}, fileCount: 0 });
+  const request = { scope: 'lastTurn' as const, sessionId: sid };
+  expect((await service.review(request, false, context())).runId).toBe(old.id);
+  await store.writeRun(current);
+  expect((await service.review(request, false, context('stale-user'))).runId).toBe(current.id);
+  await store.writeRun({ ...current, state: 'completed', endedAt: now + 6000 });
+  expect((await service.review(request, false, { ...context(), running: false })).runId).toBe(current.id);
+  await store.writeRun({ ...captured('next-empty', 'next-user', now + 7000), changes: {}, fileCount: 0, state: 'completed', endedAt: now + 8000 });
+  expect((await service.review(request, false, { ...context('next-user'), running: false })).runId).toBe(current.id);
+});
+
+it('keeps exact historical selection separate from latest-modified selection including empty history', async () => {
+  const old = captured('previous', 'old-user', now), current = captured('current', 'new-user', now + 4000);
+  await store.writeRun(old); await store.writeRun(current);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid })).runId).toBe(current.id);
+  expect((await service.review({ scope: 'turn', sessionId: sid, runId: old.id })).runId).toBe(old.id);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid })).runId).toBe(current.id);
+  await store.writeRun({ ...current, changes: {}, fileCount: 0 });
+  expect((await service.review({ scope: 'turn', sessionId: sid, runId: current.id })).files).toEqual([]);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid })).runId).toBe(old.id);
+});
+
+it('selects across this session roots unless the user explicitly supplies a root filter', async () => {
+  const old = captured('previous', 'old-user', now), oldRoot = root;
+  await store.writeRun(old);
+  root = path.join(temp, 'other-project'); await fs.mkdir(root);
+  const current = captured('current', 'new-user', now + 4000); await store.writeRun(current);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid })).runId).toBe(current.id);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid, root: oldRoot })).runId).toBe(old.id);
+});
+
+it('does not let image-only turns hide the most recent reviewable changes', async () => {
+  const old = captured('previous', 'old-user', now), image = captured('image-turn', 'new-user', now + 4000);
+  const absolutePath = path.join(root, 'image.png'), identity = canonical(absolutePath);
+  image.changes = { 'image.png': { ...image.changes['agent.txt'], capture: { id: digest(identity).slice(0, 24), identity, absolutePath, origin: 'workspace', path: 'image.png' } } };
+  await store.writeRun(old); await store.writeRun(image);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid }, false, context())).runId).toBe(old.id);
+  expect((await service.review({ scope: 'lastTurn', sessionId: sid }, false, { ...context(), running: false })).runId).toBe(old.id);
+});
+
+it('returns an empty scope only when this session has no reviewable changes, never borrowing another session', async () => {
+  await store.writeRun({ ...captured('other-session', 'other-user', now + 8000), sessionId: 'another-session' });
+  await store.writeRun({ ...captured('empty', 'new-user', now + 4000), changes: {}, fileCount: 0 });
+  const review = await service.review({ scope: 'lastTurn', sessionId: sid }, false, context());
+  expect(review.files).toEqual([]); expect(review.runId).toBeUndefined();
+  await expect(service.review({ scope: 'lastTurn' })).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
 });

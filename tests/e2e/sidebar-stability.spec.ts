@@ -121,3 +121,36 @@ test('paged background snapshots never drop the existing later file or its diff'
   expect(await page.evaluate(() => (window as any).__demo.pageFlicker)).toBe(false);
   await expect(page.locator('.dv-file')).toHaveCount(2);
 });
+
+test('copy status expires after 3 seconds, repeat copies restart the timer without shifting files', async ({ page }) => {
+  await setup(page);
+  const menu = page.locator('.dv-file-menu').first();
+  const copy = async () => { await menu.locator('summary').click(); await menu.getByRole('button', { name: '复制路径', exact: true }).click(); };
+  const before = await page.locator('.dv-workspace').boundingBox();
+  await copy();
+  await expect(page.locator('.dv-toast')).toHaveText('路径已复制');
+  expect(await page.locator('.dv-workspace').boundingBox()).toEqual(before);
+  await page.waitForTimeout(2100); await copy(); await page.waitForTimeout(1200);
+  await expect(page.locator('.dv-toast')).toBeVisible();
+  await expect(page.locator('.dv-toast')).toHaveCount(0, { timeout: 3500 });
+  expect(await page.locator('.dv-workspace').boundingBox()).toEqual(before);
+});
+
+test('transient selection polling failure retains the same app, file, folds and diff nodes', async ({ page }) => {
+  await setup(page); await page.evaluate(route => { (window as any).__demo.extra = true; (window as any).__demo.openLocation(route); }, selectionRoute);
+  await expect(page.locator('.dv-review h2')).toHaveText('session-a/src/theme/index.ts');
+  await page.locator('[data-hunk-nav]').first().click();
+  await page.evaluate(() => {
+    const d = (window as any).__demo, app = document.querySelector('.dv-app')!, file = document.querySelector('.dv-file')!, hunk = document.querySelector('.dv-hunk')!;
+    d.selectionFlicker = false; d.failSelection = true;
+    new MutationObserver(() => { if (!app.isConnected || !file.isConnected || !hunk.isConnected) d.selectionFlicker = true; }).observe(document.querySelector('.dv-panel')!, { childList: true, subtree: true });
+    const bridge = (window as any).pluginBridge, invoke = bridge.invoke.bind(bridge);
+    bridge.invoke = (method: string, args: any, internal: boolean) => method === 'diff.readTurnSelection' && d.failSelection ? Promise.reject(new Error('Transient navigation failure')) : invoke(method, args, internal);
+  });
+  await expect(page.getByRole('alert')).toContainText('Transient navigation failure');
+  await expect(page.locator('.dv-review h2')).toHaveText('session-a/src/theme/index.ts');
+  await expect(page.locator('[data-hunk-nav]').first()).toHaveAttribute('aria-expanded', 'false');
+  await page.evaluate(() => { (window as any).__demo.failSelection = false; });
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__demo.selectionFlicker)).toBe(false);
+});

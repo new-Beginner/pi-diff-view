@@ -113,7 +113,10 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       if (seen.size >= 4096 || pending.size >= 256 || event.toolCallId.length > 256) { run.incomplete = true; await persist(run); return; }
       await check(run); seen.add(event.toolCallId);
       const name = toolName(event.toolName), targetSet = toolPaths(name, event.input ?? event.args), targets = targetSet.targets;
-      const workspace = ['bash', 'shell', 'task'].includes(name);
+      // Workspace snapshots cannot prove which process authored a file.
+      // Only explicit Write/Edit calls are eligible for turn evidence.
+      if (['bash', 'shell', 'task', 'taskwait', 'task_wait'].includes(name)) return;
+      const workspace = false;
       if (name === 'taskwait' || name === 'task_wait') {
         // Wait results are sampling points, not proof that every delegated task ended.
         waits.add(event.toolCallId);

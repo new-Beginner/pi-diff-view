@@ -6,7 +6,7 @@ let harness = '';
 test.beforeAll(async () => {
   harness = (await build({ entryPoints: ['tests/e2e/renderer-harness.tsx'], bundle: true, platform: 'browser', format: 'iife', target: 'es2022', write: false, loader: { '.css': 'empty' } })).outputFiles[0].text;
 });
-async function setup(page: Page, locale = 'en', query = '', filesPerCard = 4) {
+async function setup(page: Page, locale = 'en', query = '', filesPerCard = 4, expectedCards?: number) {
   await page.route('**/renderer-demo*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"><script src="/mock.js"></script><style>body{margin:0;font:14px/1.7 'Segoe UI',system-ui;background:#fff;color:#30343b}#mock-chat{padding:30px;width:min(880px,100%);box-sizing:border-box;transition:none}body.sidebar-open #mock-chat{width:calc(100% - 640px)}h1{font-size:17px;margin:0 0 26px}.demo-label{color:#7b8290;font-size:12px;padding:8px 16px;background:#f4f6f9}.mock-reply-text{padding:60px 0 12px}.mock-composer{margin-top:90px;border:1px solid #e4e7ec;border-radius:20px;padding:18px 20px;color:#8a929e}#demo-plugin-sidebar{position:fixed;right:0;top:0;bottom:0;width:640px;border-left:1px solid #e4e7ec;background:#fff;display:flex;flex-direction:column}#demo-plugin-sidebar header{padding:10px 14px;border-bottom:1px solid #e4e7ec;display:flex;justify-content:space-between}#demo-plugin-sidebar header button{background:transparent;border:0;cursor:pointer}#demo-plugin-sidebar iframe{width:100%;flex:1;border:0;min-height:0}</style></head><body><div class="demo-label">界面预览 · 测试数据与模拟宿主，不是实际会话验收</div><main id="mock-chat"><h1>Diff view 文末文件变更</h1><div class="mock-reply-text"><p>已完成本次修改，文件变更与检查结果如下。</p><p>点击下面的文件名，在右侧 Diff view 页签查看对应差异。</p></div><article id="mock-reply"></article><div class="mock-composer">与 PI 协作…</div></main></body></html>` }));
   await page.route('**/sidebar-demo*', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><script src="/mock.js"></script><link rel="stylesheet" href="/index.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/index.js"></script></body></html>' }));
   await page.goto(`/renderer-demo?scenario=renderer&lang=${locale}${query}`);
@@ -28,7 +28,7 @@ async function setup(page: Page, locale = 'en', query = '', filesPerCard = 4) {
     const other = block.cloneNode(false) as HTMLElement; other.id = 'other-plugin'; other.innerHTML = '<div class="pi-entry-extra-viewport" data-expanded="true" style="max-height:480px"><div style="height:900px">Other plugin</div></div>'; block.after(other);
   });
   await page.addScriptTag({ content: harness });
-  const count = Number(new URLSearchParams(query).get('historyCards') || 1);
+  const count = expectedCards ?? Number(new URLSearchParams(query).get('historyCards') || 1);
   await expect(page.locator('.dv-turn-card')).toHaveCount(count, { timeout: 3000 });
   await expect(page.locator('.dv-turn-file')).toHaveCount(count * filesPerCard);
 }
@@ -398,4 +398,34 @@ test('only the directory scrolls when host limits change and short lists need no
   expect(await directory.evaluate(node => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
   expect(await viewport.evaluate(node => ({ max: (node as HTMLElement).style.maxHeight, overflow: getComputedStyle(node).overflowY }))).toEqual({ max: '310px', overflow: 'hidden' });
+});
+test('publishes the first history page before a delayed second page returns', async ({ page }) => {
+  await page.addInitScript(() => {
+    let bridge: any;
+    Object.defineProperty(window, 'pluginBridge', { configurable: true, get: () => bridge, set(value) {
+      bridge = value; const invoke = value.invoke.bind(value);
+      value.invoke = async (method: string, args: any, internal: boolean) => {
+        if (method === 'diff.replyCards' && args.offset) {
+          (window as any).__pageWaiting = true;
+          await new Promise<void>(resolve => { (window as any).__releasePage = resolve; });
+        }
+        return invoke(method, args, internal);
+      };
+    } });
+  });
+  await setup(page, 'en', '&historyCards=24', 4, 20);
+  await expect.poll(() => page.evaluate(() => (window as any).__pageWaiting)).toBe(true);
+  await expect(page.locator('.dv-turn-card')).toHaveCount(20);
+  await page.evaluate(() => (window as any).__releasePage());
+  await expect(page.locator('.dv-turn-card')).toHaveCount(24);
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+test('A → B → A restores only A cards immediately while feed revalidation is failing', async ({ page }) => {
+  await setup(page, 'en', '&persisted=true');
+  await page.evaluate(() => { const host = (window as any).__rendererDemo; (window as any).__demo.failFeed = true; host.hideReplies(); host.switchSession('other-session'); host.showReplies('other-session'); });
+  await expect(page.locator('.dv-turn-card')).toHaveCount(0);
+  await page.evaluate(() => { const host = (window as any).__rendererDemo; host.hideReplies(); host.switchSession('session-demo'); host.showReplies('session-demo'); });
+  await expect(page.locator('.dv-turn-file')).toHaveCount(4, { timeout: 350 });
+  await expect(page.locator('.dv-turn-head')).toContainText('4 files changed');
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
 });

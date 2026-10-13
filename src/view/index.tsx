@@ -12,13 +12,15 @@ declare global { interface Window { pluginBridge?: Bridge } }
 export function Panel() {
   const [appearance, setAppearance] = useState<Appearance>(() => ({ base: document.documentElement.dataset.base === 'dark' || (!document.documentElement.dataset.base && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light' }));
   const [route, setRoute] = useState<unknown>(() => new URLSearchParams(location.search).get('piViewOpen'));
-  const [navigation, setNavigation] = useState<ReviewNavigation | null>(null);
+  const [navigationBySession, setNavigationBySession] = useState<Record<string, ReviewNavigation>>({});
+  const [cachedSessions, setCachedSessions] = useState<string[]>([]);
   const [error, setError] = useState(''), [selecting, setSelecting] = useState(Boolean(route));
   const [retry, setRetry] = useState(0), [fallback, setFallback] = useState(false);
   const [mode, setMode] = useState<'session' | 'git'>('session');
   const [roots, setRoots] = useState<string[]>([]), [gitRoot, setGitRoot] = useState(''), [gitError, setGitError] = useState('');
   const [gitLoaded, setGitLoaded] = useState(false);
   const readySession = useRef('');
+  const resolvedSelection = useRef<Record<string, string>>({});
   const transport = useMemo<UiTransport>(() => ensureBounded({ invoke<T>(method: string, args?: unknown) {
     if (!window.pluginBridge) return Promise.reject(new Error('PI-Desktop 桥接不可用。'));
     return window.pluginBridge.invoke<T>(`diff.${method}`, args);
@@ -59,7 +61,7 @@ export function Panel() {
     if (fallback || route == null || route === '') return;
     if (typeof route !== 'string') { setError('无效的视图定位参数'); return; }
     if (!sessionId) { setError('旧版视图没有会话标识，请从当前会话重新打开差异审查。'); return; }
-    if (target === `diff-session:${encodeURIComponent(sessionId)}`) { setNavigation(null); return; }
+    if (target === `diff-session:${encodeURIComponent(sessionId)}`) return;
     if (!/^diff-view:[0-9a-f-]{36}$/i.test(target)) { setError('无效的文件选择'); return; }
     if (mode !== 'session') return;
     const load = async () => {
@@ -69,19 +71,31 @@ export function Panel() {
         const selected = await transport.invoke<ReviewNavigation>('readTurnSelection', { nonce: target.slice('diff-view:'.length), sessionId });
         if (!live) return;
         if (selected.sessionId !== sessionId || selected.request.sessionId !== sessionId) throw new Error('所选记录不属于当前会话。');
-        setNavigation(previous => previous?.nonce === selected.nonce && previous.revision === selected.revision ? previous : selected);
+        setNavigationBySession(previous => ({ ...previous, [sessionId]: previous[sessionId]?.nonce === selected.nonce && previous[sessionId]?.revision === selected.revision ? previous[sessionId] : selected }));
+        resolvedSelection.current[sessionId] = target;
         setError('');
-      } catch (err) { if (live) { setNavigation(null); setError(String((err as Error)?.message ?? err)); } }
+      } catch (err) { if (live) { if (resolvedSelection.current[sessionId] !== target) setNavigationBySession(previous => { const next = { ...previous }; delete next[sessionId]; return next; }); setError(String((err as Error)?.message ?? err)); } }
       finally { pending = false; if (live) setSelecting(false); }
     };
     setSelecting(true); void load();
     const timer = setInterval(() => { if (mode === 'session' && document.visibilityState !== 'hidden') void load(); }, 1500);
     return () => { live = false; clearInterval(timer); };
   }, [transport, route, target, sessionId, retry, fallback, mode]);
-  const initialRequest = useMemo<Partial<ReviewRequest>>(() => ({ scope: 'lastTurn', sessionId: sessionId || undefined }), [sessionId]);
-  const activeNavigation = navigation?.sessionId === sessionId ? navigation : null;
   if (sessionId && !selecting && !error) readySession.current = sessionId;
-  const showReview = Boolean(sessionId && !error && (!selecting || readySession.current === sessionId));
+  // A transient same-target poll failure must not unmount a verified session view.
+  const retainReview = readySession.current === sessionId && resolvedSelection.current[sessionId] === target;
+  const showReview = Boolean(sessionId && (!error || retainReview) && (!selecting || readySession.current === sessionId));
+  useEffect(() => {
+    if (!sessionId || !showReview) return;
+    setCachedSessions(previous => {
+      const next = [sessionId, ...previous.filter(id => id !== sessionId)].slice(0, 6);
+      return next;
+    });
+  }, [sessionId, showReview]);
+  useEffect(() => {
+    setNavigationBySession(values => Object.fromEntries(Object.entries(values).filter(([id]) => cachedSessions.includes(id))));
+    resolvedSelection.current = Object.fromEntries(Object.entries(resolvedSelection.current).filter(([id]) => cachedSessions.includes(id)));
+  }, [cachedSessions]);
   return <div className="dv-panel dv-theme" data-base={appearance.base}>
     <nav className="dv-panel-nav" aria-label="Diff view 功能"><div className="dv-panel-modes" role="group" aria-label="功能切换"><button onClick={() => setMode('session')} aria-pressed={mode === 'session'}>会话修改</button><button onClick={() => setMode('git')} aria-pressed={mode === 'git'}>本地 Git</button></div>{mode === 'git' && roots.length > 1 && <select aria-label="Git 项目" title={gitRoot} value={gitRoot} onChange={e => setGitRoot(e.target.value)}>{roots.map(root => <option key={root}>{root}</option>)}</select>}</nav>
     <div className="dv-panel-content">
@@ -90,9 +104,11 @@ export function Panel() {
       {gitLoaded ? <GitManagement key={gitRoot} active={mode === 'git'} transport={transport} root={gitRoot || undefined} base={appearance.base} /> : mode === 'git' && <p className="dv-panel-message" role="status">正在读取 Git 项目…</p>}
     </div>
     <div className="dv-panel-page" hidden={mode !== 'session'}>
-      {showReview ? <ReviewApp key={sessionId} active={mode === 'session'} transport={transport} initialRequest={activeNavigation?.request ?? initialRequest} initialFileId={activeNavigation?.fileId} navigationKey={activeNavigation ? `${activeNavigation.nonce}:${activeNavigation.revision}` : `session:${sessionId}`} {...appearance} /> : selecting || error ?
-        <section className="dv-panel-message" role={error ? 'alert' : 'status'}>{error || '正在定位所选文件…'}{error && <><button onClick={() => { setFallback(false); setRetry(n => n + 1); }}>重试</button>{sessionId && <button onClick={() => { setFallback(true); setNavigation(null); setError(''); setSelecting(false); }}>返回本会话修改记录</button>}</>}</section> :
-        <section className="dv-panel-message" role="status">缺少会话身份，请从当前会话侧栏打开。历史记录不会回退到全局；本地 Git 可独立使用。</section>}
+      {error && sessionId && (showReview || cachedSessions.includes(sessionId)) && <div className="dv-panel-message" role="alert">{error}<button onClick={() => setRetry(n => n + 1)}>重试</button><button onClick={() => { setFallback(true); setNavigationBySession(previous => { const next = { ...previous }; delete next[sessionId]; return next; }); setError(''); setSelecting(false); }}>返回本会话修改记录</button></div>}
+      {cachedSessions.map(id => <div className="dv-panel-page" key={id} hidden={mode !== 'session' || sessionId !== id}>
+        <ReviewApp active={mode === 'session' && sessionId === id} transport={transport} initialRequest={navigationBySession[id]?.request ?? { scope: 'lastTurn', sessionId: id }} initialFileId={navigationBySession[id]?.fileId} navigationKey={navigationBySession[id] ? `${navigationBySession[id].nonce}:${navigationBySession[id].revision}` : `session:${id}`} {...appearance} />
+      </div>)}
+      {!showReview && !cachedSessions.includes(sessionId) ? selecting || error ? <section className="dv-panel-message" role={error ? 'alert' : 'status'}>{error || '正在定位所选文件…'}{error && <><button onClick={() => { setFallback(false); setRetry(n => n + 1); }}>重试</button>{sessionId && <button onClick={() => { setFallback(true); setNavigationBySession(previous => { const next = { ...previous }; delete next[sessionId]; return next; }); setError(''); setSelecting(false); }}>返回本会话修改记录</button>}</>}</section> : !sessionId ? <section className="dv-panel-message" role="status">缺少会话身份，请从当前会话侧栏打开。历史记录不会回退到全局；本地 Git 可独立使用。</section> : null : null}
     </div>
     </div>
   </div>;

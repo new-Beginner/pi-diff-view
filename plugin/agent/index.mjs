@@ -1229,7 +1229,8 @@ function createCaptureExtension(options) {
       await check(run);
       seen.add(event.toolCallId);
       const name = toolName(event.toolName), targetSet = toolPaths(name, event.input ?? event.args), targets = targetSet.targets;
-      const workspace = ["bash", "shell", "task"].includes(name);
+      if (["bash", "shell", "task", "taskwait", "task_wait"].includes(name)) return;
+      const workspace = false;
       if (name === "taskwait" || name === "task_wait") {
         waits.add(event.toolCallId);
         return;

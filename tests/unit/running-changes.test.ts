@@ -40,11 +40,14 @@ it('does not inherit earlier totals at a new user boundary or from another sessi
   f.controller.setActivity({ ...task, taskId: 'new', since: 200 }); expect(f.view.summary).toBeNull(); await flush(); expect(f.view.summary).toBeNull();
   f.result({ ...summary, sessionId: 'other' }); await vi.advanceTimersByTimeAsync(1000); expect(f.view.summary).toBeNull(); f.controller.dispose();
 });
-it('hides on no net changes, a failed query, or a settled result at click time', async () => {
-  const f = fixture(); f.controller.setActivity(task); await flush(); f.result(null); await f.controller.open();
-  expect(f.adapter.open).not.toHaveBeenCalled(); expect(f.view.summary).toBeNull();
+it('hides on no net changes or a settled target, but keeps verified totals on transient failure', async () => {
+  const f = fixture(); f.controller.setActivity(task); await flush();
+  f.invoke.mockRejectedValueOnce(new Error('Bridge unavailable')); await vi.advanceTimersByTimeAsync(1000); expect(f.view.summary).toEqual(summary);
+  const original = f.invoke.getMockImplementation()!;
+  f.invoke.mockImplementation(async (method, args) => { if (method === 'selectTurn') throw Object.assign(new Error('No longer current'), { code: 'RUN_NOT_FOUND' }); return original(method, args); });
+  await f.controller.open(); expect(f.adapter.open).not.toHaveBeenCalled(); expect(f.view.summary).toBeNull();
   f.result({ ...summary, fileCount: 0 }); await vi.advanceTimersByTimeAsync(1000); expect(f.view.summary).toBeNull();
-  f.invoke.mockRejectedValueOnce(new Error('Bridge unavailable')); await vi.advanceTimersByTimeAsync(1000); expect(f.view.summary).toBeNull(); f.controller.dispose();
+  f.controller.setActivity(null); f.controller.setActivity(task); expect(f.view.summary).toBeNull(); f.controller.dispose();
 });
 it('extracts only current host task metadata and ignores steering and nested users', () => {
   const state = { activeSessionId: 's', page: 'chat', runningSessions: { s: true }, messages: [{ id: 'old', role: 'user', createdAt: 1 }, { id: 'current', role: 'user', createdAt: 100 }, { id: 'steer', role: 'user', steering: true, createdAt: 200 }, { id: 'nested', role: 'user', parentToolCallId: 'tool', createdAt: 300 }], workPanelOpen: false, activeWorkPanelTabId: null, pluginViews: [], openWorkPanelTabForSession() {} };
@@ -77,4 +80,28 @@ it('invalid older timestamps do not mask current metadata, but an unidentified l
   expect(runningActivity(state)).toEqual({ sessionId: 's', taskId: 'current', since: 100 });
   expect(runningActivity({ ...state, messages: [...state.messages, { id: 'bad-new', role: 'user' }] })).toBeNull();
   expect(runningActivity({ ...state, messages: [{ id: 'current', role: 'user' }], retainedTranscripts: { s: [{ id: 'current', role: 'user', createdAt: 100 }] } })).toEqual({ sessionId: 's', taskId: 'current', since: 100 });
+});
+it('restores A synchronously before revalidation and ignores a late B response', async () => {
+  const f = fixture(); f.controller.setActivity(task); await flush();
+  let releaseB!: (data: RunningChanges) => void, releaseA!: (data: RunningChanges | null) => void;
+  f.invoke.mockImplementationOnce(() => new Promise(resolve => releaseB = resolve) as any);
+  f.controller.setActivity({ sessionId: 'b', taskId: 'b-user', since: 100 }); expect(f.view.summary).toBeNull();
+  f.invoke.mockImplementationOnce(() => new Promise(resolve => releaseA = resolve) as any);
+  f.controller.setActivity(task); expect(f.view.summary).toEqual(summary);
+  releaseB({ ...summary, runId: 'b-run', sessionId: 'b' }); await flush(); expect(f.view.summary).toEqual(summary);
+  releaseA(null); await flush(); expect(f.view.summary).toBeNull();
+  f.controller.setActivity(null); f.controller.setActivity(task); expect(f.view.summary).toBeNull(); f.controller.dispose();
+});
+it('clicks without a second summary query and preserves remount cache only for the same transport/task', async () => {
+  const f = fixture(); const transport = { invoke: f.invoke as any };
+  let view: RunningView = { summary: null, busy: false, error: '' };
+  const first = createRunningChangesController(transport, f.adapter, next => view = next);
+  first.setActivity(task); await flush(); const queries = f.invoke.mock.calls.filter(([method]) => method === 'runningChanges').length;
+  await first.open(); expect(f.invoke.mock.calls.filter(([method]) => method === 'runningChanges')).toHaveLength(queries); first.dispose();
+  f.invoke.mockImplementationOnce(() => new Promise(() => {}) as any);
+  const second = createRunningChangesController(transport, f.adapter, next => view = next);
+  second.setActivity(task); expect(view.summary).toEqual(summary);
+  second.setActivity({ ...task, taskId: 'next' }); expect(view.summary).toBeNull(); second.dispose();
+  const isolated = createRunningChangesController({ invoke: f.invoke as any }, f.adapter, next => view = next);
+  isolated.setActivity(task); expect(view.summary).toBeNull(); isolated.dispose(); f.controller.dispose();
 });
