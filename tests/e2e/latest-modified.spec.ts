@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { selectScope } from './scope-helpers';
 // Production Panel with a session-scoped mock bridge. Native-host acceptance is separate.
 const route = (id = 'session-a') => `diff-session:${id}?sessionId=${id}`;
 async function setup(page: Page) {
@@ -43,27 +44,24 @@ async function setup(page: Page) {
 const scope = (page: Page) => page.getByRole('combobox', { name: '范围', exact: true });
 const title = (page: Page) => page.locator('.dv-review:visible h2');
 
-test('latest modified view follows first changes and completion, explicitly labels the selected turn', async ({ page }) => {
+test('latest modified view follows changes and completion without a redundant turn label', async ({ page }) => {
   await setup(page);
-  await expect(scope(page).locator('option:checked')).toHaveText('最近轮次');
-  await expect(page.locator('.dv-turn-identity:visible')).toContainText('session-a-previous');
-  await expect(page.locator('.dv-turn-identity:visible')).toContainText('已完成');
+  await expect(scope(page)).toContainText('最近轮次');
+  await expect(page.locator('.dv-turn-identity')).toHaveCount(0);
   await page.evaluate(() => { (window as any).__latest.currentFiles = true; });
   await expect(title(page)).toHaveText('session-a/current.ts');
-  await expect(page.locator('.dv-turn-identity:visible')).toContainText('session-a-current');
-  await expect(page.locator('.dv-turn-identity:visible')).toContainText('运行中');
   await page.evaluate(() => { (window as any).__latest.currentState = 'completed'; });
-  await expect(page.locator('.dv-turn-identity:visible')).toContainText('已完成');
+  await expect.poll(() => page.evaluate(() => (window as any).__demo.review.run?.state)).toBe('completed');
   await expect(title(page)).toHaveText('session-a/current.ts');
 });
 
 test('history round-trip drops inherited roots but preserves an explicitly chosen latest root', async ({ page }) => {
   await setup(page);
-  await scope(page).selectOption('turn');
+  await selectScope(scope(page), 'turn');
   await page.getByRole('combobox', { name: '对话轮次', exact: true }).selectOption('session-a-historical');
   await expect(title(page)).toHaveText('session-a/historical.ts');
   await page.evaluate(() => { (window as any).__latest.currentFiles = true; });
-  await scope(page).selectOption('lastTurn');
+  await selectScope(scope(page), 'lastTurn');
   await expect(title(page)).toHaveText('session-a/current.ts');
   const requests = await page.evaluate(() => (window as any).__demo.calls.filter((c: any) => c.method === 'diff.review' && c.args.scope === 'lastTurn'));
   expect(requests.at(-1).args.root).toBeUndefined();
@@ -71,11 +69,11 @@ test('history round-trip drops inherited roots but preserves an explicitly chose
   await page.getByRole('combobox', { name: '仓库', exact: true }).selectOption('D:/projects/historical');
   await page.keyboard.press('Escape');
   await expect(title(page)).toHaveText('session-a/historical.ts');
-  await scope(page).selectOption('turn');
+  await selectScope(scope(page), 'turn');
   await expect(title(page)).toHaveText('session-a/historical.ts');
   await page.waitForTimeout(1000); // Latest polling must not override exact historical selection.
   await expect(title(page)).toHaveText('session-a/historical.ts');
-  await scope(page).selectOption('lastTurn');
+  await selectScope(scope(page), 'lastTurn');
   await expect(title(page)).toHaveText('session-a/historical.ts');
   await page.getByTitle('显示设置', { exact: true }).click();
   await page.getByRole('combobox', { name: '仓库', exact: true }).selectOption('');

@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { selectScope } from './scope-helpers';
 import { build } from 'esbuild';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -75,7 +76,7 @@ for (const width of [360, 600, 1100]) for (const theme of ['light', 'dark'] as c
 test('updates real net totals, opens latest-turn mode without recovery UI and preserves the draft', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toContainText('+11'); await change('first\nsecond\n'); await expect(page.locator('.dv-running-pill')).toHaveText('1 个文件已更改+2-0');
   await page.locator('.dv-running-pill').click(); const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toHaveText('current.txt'); await expect(frame.locator('.dv-code').filter({ hasText: 'second' })).toBeVisible();
-  await expect(frame.getByRole('combobox', { name: '范围', exact: true })).toHaveValue('lastTurn');
+  await expect(frame.getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
   await expect(frame.getByText(/历史恢复|历史租约|预览恢复/)).toHaveCount(0);
   await expect(frame.getByRole('button', { name: /撤销|重新应用|暂存/ })).toHaveCount(0); await expect(page.locator('.dv-layer, dialog')).toHaveCount(0);
@@ -85,7 +86,7 @@ test('hides on complete, then shows the original reply card with no simultaneous
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible(); run.state = 'completed'; run.endedAt = Date.now(); run.finalReply = { hash: digest('Done live task'), timestamp: replyAt }; run.replies = [run.finalReply]; await store.writeRun(run);
   await page.evaluate(() => (window as any).__liveHost.setRunning(false)); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 500 }); await expect(page.locator('.dv-turn-card')).toHaveCount(1);
   await page.locator('.dv-turn-file').click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt'); await expect(page.locator('.dv-running-pill')).toHaveCount(0);
-  await expect(page.frameLocator('iframe').getByRole('combobox', { name: '范围', exact: true })).toHaveValue('turn'); await stop(page);
+  await expect(page.frameLocator('iframe').getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'turn'); await stop(page);
 });
 test('stops, switches, rejects old task totals, and hides zero-net changes', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible(); await page.evaluate(() => (window as any).__liveHost.switchSession('other')); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 500 });
@@ -234,15 +235,15 @@ test('reopening from the pill resets history mode and follows the next modified 
   await setup(page); const frame = page.frameLocator('iframe');
   await page.locator('.dv-running-pill').click();
   const scope = frame.getByRole('combobox', { name: '范围', exact: true });
-  await expect(scope).toHaveValue('lastTurn'); await scope.selectOption('turn');
+  await expect(scope).toHaveAttribute('data-value', 'lastTurn'); await selectScope(scope, 'turn');
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toBeVisible();
-  await page.locator('.dv-running-pill').click(); await expect(scope).toHaveValue('lastTurn');
+  await page.locator('.dv-running-pill').click(); await expect(scope).toHaveAttribute('data-value', 'lastTurn');
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
   const nextSince = Date.now(); run.state = 'completed'; run.endedAt = nextSince; await store.writeRun(run);
   await page.evaluate(value => (window as any).__liveHost.task('next-user', value), nextSince);
   run = { ...run, id: 'next-live-run', userMessageId: 'next-user', startedAt: nextSince + 1, state: 'running', endedAt: undefined, changes: {}, replies: [], bindings: {} };
   await change('latest turn content\n');
   await expect(frame.locator('.dv-code').filter({ hasText: 'latest turn content' })).toBeVisible();
-  await expect(scope).toHaveValue('lastTurn'); await expect(page.locator('.dv-running-pill')).toBeVisible();
+  await expect(scope).toHaveAttribute('data-value', 'lastTurn'); await expect(page.locator('.dv-running-pill')).toBeVisible();
   await stop(page);
 });

@@ -50,8 +50,11 @@ test('reply-end summary opens the plugin sidebar at the clicked file with no idl
   const frame = page.frameLocator('iframe[title="Diff view plugin"]');
   await expect(frame.locator('.dv-review h2')).toHaveText('src/theme/index.ts');
   await expect(frame.getByRole('navigation', { name: 'Diff view 功能' })).toBeVisible();
-  await expect(frame.getByRole('combobox', { name: 'Scope' })).toHaveValue('turn');
-  expect(await frame.getByRole('combobox', { name: 'Scope' }).locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['lastTurn', 'turn']);
+  const scope = frame.getByRole('combobox', { name: 'Scope' });
+  await expect(scope).toHaveAttribute('data-value', 'turn');
+  await scope.click();
+  expect(await frame.getByRole('listbox').getByRole('option').evaluateAll(options => options.map(option => (option as HTMLElement).dataset.value))).toEqual(['lastTurn', 'turn']);
+  await scope.press('Escape');
   expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.find((call: any) => call.method === 'diff.review').args)).toMatchObject({ scope: 'turn', sessionId: 'session-demo' });
   const opens = await page.evaluate(() => (window as any).__rendererDemo.opens);
   expect(opens).toHaveLength(1); expect(opens[0]).toMatchObject({ sessionId: 'session-demo', tab: { id: 'plugin:local.diff-view/review', resource: 'local.diff-view/review' } });

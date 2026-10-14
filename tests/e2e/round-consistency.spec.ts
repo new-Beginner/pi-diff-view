@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { selectScope } from './scope-helpers';
 // Production panel bundle with explicitly mocked history, not native-host acceptance.
 async function setup(page: Page, unknown = false) {
   await page.addInitScript(({ unknown }) => {
@@ -28,7 +29,7 @@ async function setup(page: Page, unknown = false) {
 test('latest view omits the turn dropdown; recorded turns include review-proven history after refresh', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-review h2')).toHaveText('session-a/late-run.ts');
   await expect(page.getByRole('combobox', { name: '对话轮次', exact: true })).toHaveCount(0);
-  await page.getByRole('combobox', { name: '范围', exact: true }).selectOption('turn');
+  await selectScope(page.getByRole('combobox', { name: '范围', exact: true }), 'turn');
   const turns = page.getByRole('combobox', { name: '对话轮次', exact: true });
   await expect(turns).toHaveValue('late-run'); await expect(turns).not.toContainText('暂无修改记录'); await expect(turns).toContainText('1 个文件');
   await page.getByTitle('显示设置', { exact: true }).click(); await page.getByRole('button', { name: '刷新', exact: true }).click();

@@ -83,14 +83,14 @@ test('selection errors allow retry and fallback to only this session, including 
   await page.evaluate(route => { (window as any).__demo.navigation.clear(); (window as any).__demo.openLocation(route); }, selectionRoute('session-b'));
   await expect(page.getByRole('alert')).toContainText('Demo selection expired');
   await page.getByRole('button', { name: '返回本会话修改记录', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: 'Scope', exact: true })).toHaveValue('lastTurn');
+  await expect(page.getByRole('combobox', { name: 'Scope', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   await expect(page.locator('.dv-review:visible h2')).toHaveText('session-b/src/review/index.ts');
   expect((await calls(page, 'diff.review')).at(-1).args).toMatchObject({ scope: 'lastTurn', sessionId: 'session-b' });
   await page.getByRole('button', { name: '本地 Git', exact: true }).click();
   await expect(page.getByRole('region', { name: '本地 Git 管理' })).toBeVisible();
   await page.getByRole('button', { name: '会话修改', exact: true }).click();
   await expect(page.locator('.dv-review:visible h2')).toHaveText('session-b/src/review/index.ts');
-  await expect(page.getByRole('combobox', { name: 'Scope', exact: true })).toHaveValue('lastTurn');
+  await expect(page.getByRole('combobox', { name: 'Scope', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   expect((await calls(page, 'diff.review')).every((call: any) => call.args.sessionId === 'session-b')).toBe(true);
 });
 

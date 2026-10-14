@@ -6,6 +6,7 @@ import { DiffRows } from './DiffRows';
 import FilePath from './FilePath';
 import FileIcon from './FileIcon';
 import ReviewIcon from './ReviewIcon';
+import ScopePicker from './ScopePicker';
 import { messages, kindLabel } from './i18n';
 import { ensureBounded } from './transport';
 import { useDiffDetail, prefetchDiffDetail, prepareDiffDetail } from './useDiffDetail';
@@ -372,18 +373,17 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       {file.oldPath && <p>← {file.oldPath}</p>}<p className="dv-muted">{t[file.status]} · {kindLabel(file.kind, locale)}</p>{file.note && <p className="dv-muted">{file.note}</p>}
     </div></details>
   </div>;
-  const runLabel = (id: string) => { const run = sessionRuns.find(item => item.id === id); return run ? `${new Date(run.startedAt).toLocaleString(locale)} · ${run.prompt?.slice(0, 60) ?? run.id} · ${t[run.state]}${run.incomplete ? ` · ${t.incomplete}` : ''}` : id; };
   return <section ref={appRef} className="dv-app" data-base={base} lang={locale} aria-label={t.title} onKeyDown={event => { if (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && !confirmation) { event.preventDefault(); navigateHunk(event.key === 'ArrowDown' ? 1 : -1); } }}>
     <header className="dv-top">
       <div className="dv-heading">
-        <div className="dv-review-pill"><select className="dv-scope" aria-label={t.scope} value={request.scope} disabled={!boot || busy} onChange={event => {
-          const scope = event.target.value as Scope; const run = matchingReview?.run ?? sessionRuns.find(item => item.root === request.root) ?? sessionRuns[0];
+        <div className="dv-review-pill"><ScopePicker label={t.scope} value={request.scope} disabled={!boot || busy || !panelActive} options={(initialRequest.sessionId ? ['lastTurn', 'turn'] : ['lastTurn', 'turn', 'unstaged', 'staged', 'commit', 'branch']).map(scope => ({ value: scope as Scope, label: scope === 'turn' ? locale.startsWith('zh') ? '历史轮次' : 'History' : t[scope as Scope] }))} onChange={scope => {
+          const run = matchingReview?.run ?? sessionRuns.find(item => item.root === request.root) ?? sessionRuns[0];
           setFileCollapsed(false); setRequest(value => ({ root: value.root, scope, sessionId: initialRequest.sessionId, ...(scope === 'turn' || scope === 'lastTurn' ? { root: scope === 'lastTurn' ? latestRoot.current : run?.root ?? value.root, sessionId: initialRequest.sessionId ?? run?.sessionId, runId: scope === 'turn' ? run?.id : undefined } : {}), ref: scope === 'commit' || scope === 'branch' ? refDraft : undefined }));
-        }}>{(initialRequest.sessionId ? ['lastTurn', 'turn'] : ['lastTurn', 'turn', 'unstaged', 'staged', 'commit', 'branch']).map(scope => <option value={scope} key={scope}>{scope === 'turn' ? locale.startsWith('zh') ? '历史轮次' : 'History' : t[scope as Scope]}</option>)}</select>
+        }} />
         {matchingReview && <span className="dv-counts" aria-label={unknownFiles ? '部分统计' : '行数统计'}>{verifiedFiles.length > 0 && <><span className="dv-added">+{verifiedFiles.reduce((sum, file) => sum + file.additions, 0)}</span><span className="dv-deleted">-{verifiedFiles.reduce((sum, file) => sum + file.deletions, 0)}</span></>}{unknownFiles > 0 && <span className="dv-muted">{verifiedFiles.length ? '部分统计' : '行数未知'}</span>}</span>}</div>
         <div className="dv-top-actions">
           <button className="dv-icon-button" aria-label={t.search} title={t.search} aria-pressed={searchOpen} onClick={() => setSearchOpen(value => !value)}><ReviewIcon name="search" /></button>
-          <details className="dv-menu"><summary aria-label={t.settings} title={t.settings}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
+          <details className="dv-menu dv-settings-menu"><summary aria-label={t.settings} title={t.settings}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
             <button disabled={busy || loadingReview} onClick={() => setBootTick(value => value + 1)}>{t.refresh}</button>
             <label className="dv-check"><input type="checkbox" checked={wrap} onChange={event => saveSettings({ wordWrap: event.target.checked })} />{t.wrap}</label>
             <div className="dv-segment" role="group" aria-label={t.settings}><button aria-pressed={layout === 'unified'} onClick={() => saveSettings({ layout: 'unified' })}>{t.unified}</button><button aria-pressed={layout === 'split'} onClick={() => saveSettings({ layout: 'split' })}>{t.split}</button></div>
@@ -403,7 +403,6 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         </div>
       </div>
       <div className="dv-toolbar dv-repo-toolbar">
-        {request.scope === 'lastTurn' && matchingReview?.run && <span className="dv-turn-identity dv-muted" title={runLabel(matchingReview.run.id)}>{locale.startsWith('zh') ? '显示轮次：' : 'Showing turn: '}{runLabel(matchingReview.run.id)}</span>}
         {request.scope === 'turn' && <label className="dv-run">{t.run} <select aria-label="对话轮次" value={selectedRunId} disabled={busy || loadingReview} onChange={event => { const run = sessionRuns.find(r => r.id === event.target.value); if (run) setRequest({ scope: 'turn', sessionId: run.sessionId, runId: run.id, root: run.root }); }}>{!selectedRunId && <option value="" disabled>{loadingReview || !boot ? '正在读取轮次…' : '暂无修改记录'}</option>}{selectedRunId && !sessionRuns.some(run => run.id === selectedRunId) && <option value={selectedRunId}>当前轮次 · {matchingReview?.files.length ?? 0} 个文件</option>}{sessionRuns.map(run => <option key={run.id} value={run.id}>{new Date(run.startedAt).toLocaleString(locale)} · {run.fileCount} 个文件 · {t[run.state]}</option>)}</select></label>}
         {(request.scope === 'commit' || request.scope === 'branch') && <form className="dv-toolbar" onSubmit={event => { event.preventDefault(); setRequest(value => ({ ...value, ref: refDraft.trim() })); }}><label>{t.ref}<input aria-label={t.ref} value={refDraft} onChange={event => setRefDraft(event.target.value)} maxLength={250} /></label><button disabled={busy || !refDraft.trim()}>{t.applyRef}</button></form>}
         {searchOpen && <input autoFocus type="search" aria-label={t.search} placeholder={t.search} value={query} onChange={event => setQuery(event.target.value)} />}

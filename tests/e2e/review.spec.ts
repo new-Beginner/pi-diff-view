@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { selectScope } from './scope-helpers';
 // Generic diff/Git component coverage is isolated from production Panel identity rules.
 const ready = async (page: Page, query = '') => { await page.goto(`/review-component/${query}`); await expect(page.locator('.dv-hunk')).toHaveCount(2); };
 const calls = async (page: Page, method: string) => page.evaluate(method => (window as any).__demo.calls.filter((call: any) => call.method === method), method);
@@ -130,7 +131,7 @@ test('errors recover; empty scopes and special nontext statuses have no operatio
     await expect(page.locator('.dv-diff-pane')).toContainText(phrase);
     await expect(fileMenu(page).getByRole('button', { name: /Stage|Revert/ })).toHaveCount(0);
   }
-  await page.getByRole('combobox', { name: 'Scope' }).selectOption('staged');
+  await selectScope(page.getByRole('combobox', { name: 'Scope' }), 'staged');
   await page.getByRole('searchbox').fill('');
   await expect(page.locator('.dv-rail-empty')).toHaveText('No changes in this scope.');
   await expect(page.locator('.dv-rail-empty')).toBeVisible();
@@ -164,7 +165,7 @@ test('appearance events update both language/theme; bridge calls stay below ten/
 
 test('recorded turns have file-only restore operations; reference scopes are read-only', async ({ page }) => {
   await ready(page);
-  await page.getByRole('combobox', { name: 'Scope' }).selectOption('turn');
+  await selectScope(page.getByRole('combobox', { name: 'Scope' }), 'turn');
   await settings(page);
   await expect(page.getByRole('combobox', { name: '对话轮次', exact: true })).toBeVisible();
   await expect(page.locator('.dv-hunk')).toHaveCount(2);
@@ -172,7 +173,7 @@ test('recorded turns have file-only restore operations; reference scopes are rea
   await expect(page.locator('.dv-hunk-heading').getByRole('button', { name: 'Revert', exact: true })).toHaveCount(0);
   await fileActions(page);
   await expect(fileMenu(page).getByRole('button', { name: 'Revert', exact: true })).toBeVisible();
-  await page.getByRole('combobox', { name: 'Scope' }).selectOption('commit');
+  await selectScope(page.getByRole('combobox', { name: 'Scope' }), 'commit');
   await page.getByRole('textbox', { name: 'Reference', exact: true }).fill('HEAD~1');
   await page.getByRole('button', { name: 'Review reference' }).click();
   await expect(page.locator('.dv-hunk')).toHaveCount(2);
@@ -187,7 +188,7 @@ test('bootstrap error/no-root states are honest; scope changes discard slow resp
   await expect(page.locator('main')).toContainText('No repository or recorded turn is available');
   await page.goto('/review-component/?scenario=slow');
   await expect(page.getByRole('combobox', { name: 'Scope' })).toBeEnabled();
-  await page.getByRole('combobox', { name: 'Scope' }).selectOption('commit');
+  await selectScope(page.getByRole('combobox', { name: 'Scope' }), 'commit');
   await expect(page.locator('main')).toContainText('Enter a commit or branch reference');
   await page.getByRole('textbox', { name: 'Reference', exact: true }).fill('HEAD');
   await page.getByRole('button', { name: 'Review reference' }).click();
