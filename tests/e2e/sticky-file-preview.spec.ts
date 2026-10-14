@@ -132,7 +132,7 @@ test('file boundary pushes the old title away, then the next expanded file takes
 
 for (const location of ['middle', 'bottom'] as const) test(`direct title collapse at ${location} keeps that file in place without scrolling before the click`, async ({ page }) => {
   await setup(page, location === 'bottom' ? 360 : 1100); await scrollInside(page, location); await expectPinned(page);
-  const before = await geometry(page), box = (await currentRow(page).locator(location === 'bottom' ? '.dv-file-collapse' : '.dv-file').boundingBox())!;
+  const before = await geometry(page), box = (await currentRow(page).locator('.dv-file').boundingBox())!;
   // A physical pointer click (no locator auto-scroll) proves the sticky control is reachable.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(page.locator('.dv-review')).toBeHidden();

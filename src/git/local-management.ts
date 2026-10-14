@@ -348,7 +348,6 @@ export class LocalGitManagement {
       else {
         await resolveCommit(root, `refs/heads/${name}`);
         if (op === 'branchSwitch') {
-          if ((await status(root)).entries.length) fail('DIRTY_WORKTREE', 'Branch switching is blocked while staged, unstaged or untracked changes exist. Commit or stash them first.');
           await run(root, ['switch', '--no-guess', '--', name]);
         } else if (op === 'branchRename') await run(root, ['branch', '-m', '--', name, await branchName(root, args.newName)]);
         else if (op === 'branchDelete') {

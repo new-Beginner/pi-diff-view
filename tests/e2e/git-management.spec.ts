@@ -21,7 +21,7 @@ test.beforeAll(async () => {
   browserCode = bundle.outputFiles[0].text;
 });
 
-test('real local backend: explicit stage, staged-only commit, confirmation cancel, history and dirty branch error', async ({ page }) => {
+test('real local backend: stage, staged-only commit, history, safe dirty switch and overwrite refusal', async ({ page }) => {
   test.setTimeout(60000);
   if (!process.env.PI_SCRATCH_DIR) throw new Error('PI_SCRATCH_DIR is required for isolated Git tests.');
   const root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR, 'git-management-ui-'));
@@ -34,7 +34,9 @@ test('real local backend: explicit stage, staged-only commit, confirmation cance
     await command(['config', 'user.name', 'UI Test']); await command(['config', 'user.email', 'ui@example.invalid']);
     await command(['config', 'commit.gpgsign', 'false']); await command(['config', 'core.hooksPath', '/dev/null']);
     await fs.writeFile(path.join(root, 'a.txt'), 'selected\n'); await fs.writeFile(path.join(root, 'keep.txt'), 'keep untracked\n');
+    const operations: string[] = [];
     await page.exposeFunction('gitManagementInvoke', async (method: string, args: unknown) => {
+      operations.push((args as { operation: string }).operation);
       try { return await dispatch(method, args, [root]); }
       catch (cause) { const error = cause as Error & { code?: string }; throw new Error(`${error.code}: ${error.message}`); }
     });
@@ -70,9 +72,40 @@ test('real local backend: explicit stage, staged-only commit, confirmation cance
     await page.getByRole('button', { name: '从 HEAD 创建', exact: true }).click();
     await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
     await page.locator('li').filter({ hasText: 'feature' }).getByRole('button', { name: '切换', exact: true }).click();
+    await expect(page.getByRole('dialog')).toContainText('不会强制覆盖');
+    await page.getByRole('button', { name: '取消', exact: true }).click();
+    expect(operations.filter(operation => operation === 'branchSwitch')).toHaveLength(0);
+    await page.locator('li').filter({ hasText: 'feature' }).getByRole('button', { name: '切换', exact: true }).click();
     await page.getByRole('button', { name: '确认执行', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('DIRTY_WORKTREE');
+    await expect(page.locator('.gm-branch')).toHaveText('feature');
+    expect((await command(['branch', '--show-current'])).trim()).toBe('feature');
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('unstaged later\n');
+    expect(await fs.readFile(path.join(root, 'keep.txt'), 'utf8')).toBe('keep untracked\n');
+    await fs.writeFile(path.join(root, 'a.txt'), 'feature committed\n');
+    await command(['add', '--', 'a.txt']); await command(['commit', '-m', 'feature change']);
+    await command(['switch', 'main']); await fs.writeFile(path.join(root, 'a.txt'), 'unstaged later\n');
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
+    await expect(page.locator('.gm-branch')).toHaveText('main');
+    await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+    const beforeHead = await command(['rev-parse', 'HEAD']), beforeIndex = await fs.readFile(path.join(root, '.git/index'));
+    await page.locator('li').filter({ hasText: 'feature' }).getByRole('button', { name: '切换', exact: true }).click();
+    await page.getByRole('button', { name: '确认执行', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('切换会覆盖本地改动');
+    await expect(page.getByRole('button', { name: '查看工作区', exact: true })).toBeEnabled();
+    await page.getByText('查看 Git 原始信息', { exact: true }).click();
+    await expect(page.getByRole('alert').locator('pre')).toContainText('would be overwritten');
     expect((await command(['branch', '--show-current'])).trim()).toBe('main');
+    expect(await command(['rev-parse', 'HEAD'])).toBe(beforeHead);
+    expect(await fs.readFile(path.join(root, '.git/index'))).toEqual(beforeIndex);
+    expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('unstaged later\n');
+    await page.getByRole('button', { name: '前往 Stash', exact: true }).click();
+    await expect(page.getByRole('button', { name: '创建 Stash', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '创建 Stash', exact: true }).click();
+    await expect(page.getByRole('dialog')).toContainText('保存仓库改动');
+    await page.getByRole('button', { name: '取消', exact: true }).click();
+    expect(operations.filter(operation => operation === 'branchSwitch')).toHaveLength(2);
+    expect(operations.some(operation => ['stashCreate', 'stashApply', 'stashPop'].includes(operation))).toBe(false);
+    expect(await command(['stash', 'list'])).toBe('');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 

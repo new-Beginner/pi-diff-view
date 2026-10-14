@@ -93,12 +93,10 @@ describe('independent authorized local Git management', () => {
     expect((await call<ManagementStatus>('status')).head).toMatch(/^[a-f0-9]{40}$/);
   }, 30000);
 
-  it('supports branch create/switch/rename/safe-delete and blocks dirty switches and unmerged deletion', async () => {
+  it('supports branch create/switch/rename/safe-delete and blocks unmerged deletion', async () => {
     await fixture(); await call('branchCreate', { name: 'feature' });
     expect(await call('branches')).toMatchObject({ branches: expect.arrayContaining([expect.objectContaining({ name: 'feature' })]) });
-    await write('dirty.txt', 'keep');
-    await expect(call('branchSwitch', { name: 'feature', ...confirm })).rejects.toMatchObject({ code: 'DIRTY_WORKTREE' });
-    await fs.unlink(path.join(root, 'dirty.txt'));
+    await expect(call('branchSwitch', { name: 'feature' })).rejects.toMatchObject({ code: 'CONFIRM_REQUIRED' });
     await call('branchSwitch', { name: 'feature', ...confirm });
     await call('branchRename', { name: 'feature', newName: 'renamed', ...confirm });
     expect((await call<ManagementStatus>('status')).branch).toBe('renamed');
@@ -110,6 +108,42 @@ describe('independent authorized local Git management', () => {
     await call('branchDelete', { name: 'safe', ...confirm });
     await expect(call('branchCreate', { name: '--force' })).rejects.toMatchObject({ code: 'INVALID_REF' });
     await expect(call('branchCreate', { name: '@{-1}' })).rejects.toMatchObject({ code: 'INVALID_REF' });
+  }, 60000);
+
+  it.each(['unstaged', 'staged', 'untracked'])('preserves non-overlapping %s changes when switching branches', async kind => {
+    await fixture(); await write('keep.txt', 'base keep\n'); await command(['add', '--', 'keep.txt']); await command(['commit', '-m', 'keep']);
+    await call('branchCreate', { name: 'target' }); await call('branchSwitch', { name: 'target', ...confirm });
+    await write('a.txt', 'target\n'); await command(['add', '--', 'a.txt']); await command(['commit', '-m', 'target']);
+    await call('branchSwitch', { name: 'main', ...confirm });
+    const rel = kind === 'untracked' ? 'local.txt' : 'keep.txt';
+    await write(rel, 'local edit\n');
+    if (kind === 'staged') await command(['add', '--', rel]);
+    const beforeStatus = await command(['status', '--porcelain=v1']);
+    const beforeStaged = await command(['diff', '--cached']);
+    await call('branchSwitch', { name: 'target', ...confirm });
+    expect((await call<ManagementStatus>('status')).branch).toBe('target');
+    expect(await fs.readFile(path.join(root, rel), 'utf8')).toBe('local edit\n');
+    expect(await command(['status', '--porcelain=v1'])).toBe(beforeStatus);
+    expect(await command(['diff', '--cached'])).toBe(beforeStaged);
+    expect(await command(['stash', 'list'])).toBe('');
+  }, 60000);
+
+  it.each(['unstaged', 'staged', 'untracked'])('refuses overwriting %s changes without altering branch, HEAD, index or local bytes', async kind => {
+    await fixture(); await call('branchCreate', { name: 'target' }); await call('branchSwitch', { name: 'target', ...confirm });
+    const rel = kind === 'untracked' ? 'target-only.txt' : 'a.txt';
+    await write(rel, 'target\n'); await command(['add', '--', rel]); await command(['commit', '-m', 'target']);
+    await call('branchSwitch', { name: 'main', ...confirm }); await write(rel, 'local edit\n');
+    if (kind === 'staged') await command(['add', '--', rel]);
+    const beforeStatus = await command(['status', '--porcelain=v1']);
+    const beforeHead = await command(['rev-parse', 'HEAD']);
+    const beforeIndex = await fs.readFile(path.join(root, '.git/index'));
+    await expect(call('branchSwitch', { name: 'target', ...confirm })).rejects.toMatchObject({ code: 'GIT_FAILED', message: expect.stringContaining('would be overwritten') });
+    expect((await command(['branch', '--show-current'])).trim()).toBe('main');
+    expect(await command(['rev-parse', 'HEAD'])).toBe(beforeHead);
+    expect(await fs.readFile(path.join(root, '.git/index'))).toEqual(beforeIndex);
+    expect(await command(['status', '--porcelain=v1'])).toBe(beforeStatus);
+    expect(await fs.readFile(path.join(root, rel), 'utf8')).toBe('local edit\n');
+    expect(await command(['stash', 'list'])).toBe('');
   }, 60000);
 
   it('provides paginated history, root/ordinary commit patches and committed blame', async () => {

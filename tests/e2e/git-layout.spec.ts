@@ -12,6 +12,7 @@ test.beforeAll(async () => {
     const base = new URLSearchParams(location.search).get('base');
     const entries = Array.from({length: 80}, (_, i) => ({path: 'src/very-long-directory/components/file-' + i + '.tsx', index: 'M', working: 'M'}));
     window.calls = []; window.failCommit = false; window.diffDelay = 0; window.failDiff = false; window.diffRevision = 1; window.failStats = false;
+    window.historyCommits = [{oid:'abc123',subject:'created commit',author:'fixture',date:'2026-01-01'}];
     window.pluginBridge = { on() {}, async invoke(method, args = {}) {
       window.calls.push({method, args});
       if (method === 'app.getAppearance') return {base, locale:'zh-CN'};
@@ -33,7 +34,8 @@ test.beforeAll(async () => {
         return {text:'diff --git a/file b/file\\n--- a/file\\n+++ b/file\\n@@ -1,1 +1,1 @@\\n-old\\n+new-' + revision + '-' + args.paths[0] + '\\n',truncated:false};
       }
       if (args.operation === 'branches') return {branches:[{name:'main',current:true,oid:'head'}]};
-      if (args.operation === 'history') return {commits:[{oid:'abc123',subject:'created commit',author:'fixture',date:'2026-01-01'}],hasMore:false};
+      if (args.operation === 'history') return {commits:window.historyCommits,hasMore:false};
+      if (args.operation === 'commitDiff') return {text:'commit patch',truncated:false};
       if (args.operation === 'stashList') return {stashes:[]};
       if (args.operation === 'discardPreview') return {fingerprint:'snapshot',untracked:false};
       if (args.operation === 'stage' || args.operation === 'unstage') window.diffRevision++;
@@ -199,4 +201,29 @@ test('stats are scope-specific and binary/failed stats are never fabricated as z
   await expect(page.locator('.gm-file-stats').first()).toHaveText('行数未知');
   await expect(page.locator('.gm-file-stats').first()).not.toContainText('+0');
   await expect(page.getByRole('button', {name:'工作区',exact:true})).toBeEnabled();
+});
+
+for (const width of [560, 380]) for (const base of ['light', 'dark']) test(`history uses themed two-line rows (${width}px ${base})`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 800 }); await open(page, base);
+  const subject = '很长的提交摘要 '.repeat(25), date = '2026-10-14T20:32:15+08:00';
+  await page.evaluate(({ subject, date }) => { (window as any).historyCommits = [
+    {oid:'a'.repeat(40),subject,author:'fixture',date},
+    {oid:'b'.repeat(40),subject:'second',author:'fixture',date},
+  ]; }, { subject, date });
+  await page.getByRole('button', { name: '历史', exact: true }).click();
+  const first = page.locator('.gm-commit').first();
+  await expect(first).toHaveAttribute('title', subject);
+  await expect(page.getByText('独立仓库管理 · 无远程操作', { exact: true })).toHaveCount(0);
+  await expect(first.locator('time')).toHaveAttribute('title', date);
+  expect(await first.locator('time').textContent()).toBe(await page.evaluate(date => new Date(date).toLocaleString(undefined, {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}), date));
+  const style = await first.evaluate(node => { const css = getComputedStyle(node); return {height:node.getBoundingClientRect().height,border:css.borderTopWidth,radius:css.borderRadius}; });
+  expect(style).toEqual({height:56,border:'0px',radius:'0px'});
+  expect(await first.locator('.gm-commit-subject').evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
+  await first.click(); await expect(page.getByRole('region', { name: 'Git 详情' })).toContainText('commit patch');
+  await expect(first).toHaveAttribute('aria-pressed', 'true');
+  await first.focus(); await page.keyboard.press('Tab');
+  expect(await page.locator('.gm-commit').nth(1).evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).outlineStyle !== 'none')).toBe(true);
+  await page.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(first).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('.gm-scroll')!.scrollWidth <= document.querySelector('.gm-scroll')!.clientWidth)).toBe(true);
 });

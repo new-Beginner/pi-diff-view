@@ -4060,7 +4060,6 @@ ${rel}: binary or oversized untracked file (no text preview).
       else {
         await resolveCommit(root, `refs/heads/${name2}`);
         if (op === "branchSwitch") {
-          if ((await status(root)).entries.length) fail("DIRTY_WORKTREE", "Branch switching is blocked while staged, unstaged or untracked changes exist. Commit or stash them first.");
           await run(root, ["switch", "--no-guess", "--", name2]);
         } else if (op === "branchRename") await run(root, ["branch", "-m", "--", name2, await branchName(root, args.newName)]);
         else if (op === "branchDelete") {
