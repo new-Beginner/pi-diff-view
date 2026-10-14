@@ -3,14 +3,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import type { CaptureRun, FileSnapshot } from '../core/contracts';
+import { MAX_CAPTURE_SEGMENTS, type CaptureRun, type FileSnapshot } from '../core/contracts';
 import { absentSnapshot, digest, readCapturedSnapshot, resolveCapturePath, sameSnapshot } from '../core/path-policy';
 import { locatorPath, resolveLocator, SnapshotStore } from '../core/storage';
 import { isImagePath } from '../core/review-file-policy';
+import { explicitToolName, isExplicitFileTool, isReplacementTool } from '../core/explicit-file-tools';
 import { beginCaptureLease, endCaptureLease, snapshotWorkspace, WORKSPACE_NOTICE, type CapturedPath } from './workspace-capture';
 import { checkScratchAncestry, readCaptureContext } from '../core/capture-context';
 interface Pending { run: CaptureRun; paths: CapturedPath[]; store: SnapshotStore; lease: string; name: string; workspace: boolean; complete: boolean; task: boolean; }
-const toolName = (name: unknown): string => String(name).split('.').pop()!.toLowerCase();
+const toolName = explicitToolName;
 interface Context { cwd: string; sessionManager: { getSessionId(): string }; ui?: { notify(message: string, level?: string): void }; }
 interface Extension { on(event: string, handler: (event: any, ctx: Context) => unknown): void; }
 interface Options { pluginRoot: string; locator?: string; }
@@ -21,7 +22,7 @@ function textContent(message: any): string {
 }
 function toolPaths(name: string, input: any): { targets: string[]; hadTargets: boolean; truncated: boolean } {
   const p = input?.path ?? input?.file_path;
-  if (typeof p !== 'string' || !['write', 'edit'].includes(name)) return { targets: [], hadTargets: false, truncated: false };
+  if (typeof p !== 'string' || !isExplicitFileTool(name) || (isReplacementTool(name) && input?.dry_run === true)) return { targets: [], hadTargets: false, truncated: false };
   const targets = new Set<string>(); let hadTargets = false, truncated = false;
   const add = (target: string) => { hadTargets = true; if (!isImagePath(target)) targets.add(target); };
   add(p);
@@ -80,6 +81,10 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       target.fileCount = Object.values(target.changes).filter(c => !c.ambiguous && !sameSnapshot(c.before, c.after)).length;
       target.contentVersion = (target.contentVersion ?? 0) + 1;
       await store!.writeRun(target, true);
+      // Segment blobs were persisted above; do not retain/re-hash every earlier full text on each call.
+      for (const change of Object.values(target.changes)) for (const segment of change.segments ?? []) {
+        segment.before = { ...segment.before, text: null }; segment.after = { ...segment.after, text: null };
+      }
     };
     const bounded = (snapshot: FileSnapshot, extra: FileSnapshot[] = []): FileSnapshot => {
       const retained = new Set([...Object.values(run!.changes).flatMap(c => [c.before, c.after]), ...[...pending.values()].flatMap(p => p.paths.map(e => e.before)), ...extra]);
@@ -133,8 +138,12 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       if (seen.size >= 4096 || pending.size >= 256 || event.toolCallId.length > 256) { run.incomplete = true; await persist(run); return; }
       await check(run); seen.add(event.toolCallId);
       const name = toolName(event.toolName), targetSet = toolPaths(name, event.input ?? event.args), targets = targetSet.targets;
+      if (isReplacementTool(name) && targets.length) {
+        // Directory replacement is deliberately not expanded, even when a glob is supplied.
+        try { if (!(await fs.lstat(path.resolve(run.root, targets[0]))).isFile()) return; } catch { return; }
+      }
       // Workspace snapshots cannot prove which process authored a file.
-      // Only explicit Write/Edit calls are eligible for turn evidence.
+      // Only exact file adapters are eligible; arbitrary plugin path arguments are not evidence.
       if (name === 'task') {
         if ((run.delegations?.length ?? 0) >= 256) { run.incomplete = true; await persist(run); return; }
         (run.delegations ??= []).push({ callId: event.toolCallId, owner: run.userMessageId ?? run.id, status: 'running' });
@@ -151,7 +160,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       }
       if (targetSet.hadTargets && targets.length === 0 && !targetSet.truncated) return;
       if (!targets.length && !workspace) {
-        if (['write', 'edit'].includes(name) || name.startsWith('plugin_')) { run.incomplete = true; await persist(run); }
+        if (['write', 'edit'].includes(name)) { run.incomplete = true; await persist(run); }
         return;
       }
       const leaseStore = store!, lease = await beginCaptureLease(leaseStore, run.root, run.id, targets.slice(0, 256).map(p => path.resolve(run!.root, p)), { sessionId: run.sessionId, toolCallId: event.toolCallId, executionId: run.execution?.id });
@@ -208,8 +217,14 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
         const priorKey = Object.keys(target.changes).find(p => target.changes[p].capture?.identity === entry.capture.identity);
         const prior = priorKey ? target.changes[priorKey] : undefined;
         if (!prior && Object.keys(target.changes).length >= 256) { target.incomplete = true; continue; }
-        const ambiguous = !!(overlap || uncertain || captured.task || prior?.ambiguous || (prior && !sameSnapshot(prior.after, entry.before)));
-        let before = prior?.before ?? entry.before, after = bounded(rawAfter, captured.paths.map(e => e.before));
+        const intervalAmbiguous = !!(overlap || uncertain || captured.task || isError);
+        const ambiguous = !!(intervalAmbiguous || prior?.ambiguous || (prior && !sameSnapshot(prior.after, entry.before)));
+        const rawSegmentAfter = bounded(rawAfter, captured.paths.map(e => e.before));
+        const segment = { before: entry.before, after: rawSegmentAfter, evidence: `${captured.name}:${id}`, ...(intervalAmbiguous ? { ambiguous: true } : {}) };
+        const segments = [...(prior?.segments ?? []), segment];
+        const segmentsTruncated = !!prior?.segmentsTruncated || segments.length > MAX_CAPTURE_SEGMENTS;
+        if (segmentsTruncated) target.incomplete = true;
+        let before = prior?.before ?? entry.before, after = rawSegmentAfter;
         if (ambiguous) {
           before = { ...before, text: null, kind: 'unavailable' }; after = { ...after, text: null, kind: 'unavailable' };
           target.incomplete = true;
@@ -218,6 +233,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
         target.changes[priorKey ?? entry.capture.path] = {
           capture: prior?.capture ?? entry.capture, before, after,
           evidence: [...(prior?.evidence ?? []), `${captured.name}:${id}`].slice(-32),
+          segments: segments.slice(-MAX_CAPTURE_SEGMENTS), ...(segmentsTruncated ? { segmentsTruncated: true } : {}),
           ...(captured.workspace && !ambiguous ? { note: 'Observed workspace endpoints during a tool interval, not authoritative process-level authorship evidence.' } : {}),
           ...(ambiguous ? { ambiguous: true, note: 'Overlapping, discontinuous or delegated capture interval: file ownership is uncertain; diff and line counts unavailable.' } : {}),
         };

@@ -78,6 +78,7 @@ export class ReviewService {
   private turnFile(run: CaptureRun, value: string, change: CapturedChange, states: Record<string, string>, verified = true): InternalFile {
     assertPublicPath(value);
     const { before, after, capture } = change, origin = capture?.origin ?? 'workspace';
+    const segmentCount = change.ambiguous ? change.segments?.filter(s => !s.ambiguous && s.before.kind === 'text' && s.after.kind === 'text').length ?? 0 : 0;
     const kind = change.ambiguous ? 'unavailable' : before.kind !== 'text' ? before.kind : after.kind;
     const reverted = origin === 'workspace' && states[`${run.id}:${value}`] === 'reverted';
     const writable = !sameSnapshot(before, after) && !change.ambiguous && verified && run.version === 2 && run.boundary === 'user' && run.state === 'completed' && !run.incomplete && this.mutableRoots.has(canonical(run.root)) && origin === 'workspace';
@@ -85,8 +86,8 @@ export class ReviewService {
     const indexed = cachedStats?.beforeHash === before.hash && cachedStats.afterHash === after.hash && Number.isSafeInteger(cachedStats.additions) && cachedStats.additions >= 0 && Number.isSafeInteger(cachedStats.deletions) && cachedStats.deletions >= 0;
     const statsKnown = kind === 'text' && (indexed || ((!before.exists || before.text !== null) && (!after.exists || after.text !== null)));
     const counts = !statsKnown ? { additions: 0, deletions: 0 } : indexed ? { additions: cachedStats!.additions, deletions: cachedStats!.deletions } : stats(before.text ?? '', after.text ?? '');
-    const reason = change.ambiguous ? '并发修改归属不明，不计入本会话确定统计。' : !statsKnown ? '历史内容不可验证或非文本；行数未知，不计入确定统计。' : origin === 'external' ? 'Explicit external tool capture; read-only.' : !verified ? 'Snapshot content is verified when selected; read-only until loaded.' : !writable ? 'Capture incomplete, unsettled or project not authorized for restore.' : undefined;
-    return { id: capture?.id ?? digest(value).slice(0, 24), path: value, origin, absolutePath: capture?.absolutePath, status: !before.exists ? 'added' : !after.exists ? 'deleted' : before.hash === after.hash ? 'mode' : 'modified', kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode])), ...counts, statsKnown, actions: kind === 'text' && writable ? [reverted ? 'reapply' : 'revert'] : [], state: reverted ? 'reverted' : 'active', note: [change.note, reason, statsKnown && sameSnapshot(before, after) ? '发生过修改事件；本轮净变化为零。' : undefined].filter(Boolean).join(' ') || undefined };
+    const reason = segmentCount ? '修改链不连续；可查看独立分段，但净行数未知，不计入本会话确定统计，禁止自动撤销。' : change.ambiguous ? '并发修改归属不明，不计入本会话确定统计。' : !statsKnown ? '历史内容不可验证或非文本；行数未知，不计入确定统计。' : origin === 'external' ? 'Explicit external tool capture; read-only.' : !verified ? 'Snapshot content is verified when selected; read-only until loaded.' : !writable ? 'Capture incomplete, unsettled or project not authorized for restore.' : undefined;
+    return { id: capture?.id ?? digest(value).slice(0, 24), path: value, origin, absolutePath: capture?.absolutePath, status: !before.exists ? 'added' : !after.exists ? 'deleted' : before.hash === after.hash ? 'mode' : 'modified', kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode, ...(segmentCount ? [change.segments?.map(s => [s.evidence, s.before.hash, s.after.hash, s.ambiguous])] : [])])), ...counts, statsKnown, ...(segmentCount ? { segmentCount } : {}), actions: kind === 'text' && writable ? [reverted ? 'reapply' : 'revert'] : [], state: reverted ? 'reverted' : 'active', note: [change.note, reason, change.segmentsTruncated ? '仅保留最近 32 次文件修改快照。' : undefined, statsKnown && sameSnapshot(before, after) ? '发生过修改事件；本轮净变化为零。' : undefined].filter(Boolean).join(' ') || undefined };
   }
   async turnSummary(args: { runId: string; sessionId: string; offset?: number; limit?: number }): Promise<TurnSummary> {
     this.validateTurn(args);
@@ -273,7 +274,19 @@ export class ReviewService {
     const cacheKey = `${file.id}:${context}`;
     let hunks = review.hunksCache.get(cacheKey);
     if (!hunks) {
-      hunks = file.kind === 'text' ? buildHunks(file.before.text ?? '', file.after.text ?? '', context) : [];
+      if (file.segmentCount && review.run) {
+        // Only the selected file's historical blobs are hydrated; segment diffs are computed on demand.
+        hunks = []; const started = Date.now();
+        const segments = review.run.changes[file.path].segments ?? [];
+        for (const [index, segment] of segments.entries()) {
+          if (Date.now() - started > 4000) fail('DIFF_LIMIT', 'Segment detail exceeds computation budget');
+          const header = `分段 ${index + 1} · ${segment.evidence} · 只读 / Read-only`;
+          const [before, after] = await Promise.all([this.hydrateSnapshot(segment.before), this.hydrateSnapshot(segment.after)]);
+          const valid = !segment.ambiguous && before.kind === 'text' && after.kind === 'text' && (!before.exists || before.text !== null) && (!after.exists || after.text !== null);
+          hunks.push({ id: `segment:${index}:notice`, header, oldStart: 0, oldLines: 0, newStart: 0, newLines: 0, lines: [{ kind: 'notice', text: valid ? '独立工具修改；中间未归属变化不自动合并。' : '该分段内容缺失或存在并发归属冲突，无法展示差异。', oldLine: null, newLine: null }] });
+          if (valid) hunks.push(...buildHunks(before.text ?? '', after.text ?? '', context).map(h => ({ ...h, id: `segment:${index}:${h.id}`, header: `${header} ${h.header}` })));
+        }
+      } else hunks = file.kind === 'text' ? buildHunks(file.before.text ?? '', file.after.text ?? '', context) : [];
       review.hunksCache.set(cacheKey, hunks);
       while (review.hunksCache.size > 50) review.hunksCache.delete(review.hunksCache.keys().next().value!);
     }

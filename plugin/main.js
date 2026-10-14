@@ -91,6 +91,7 @@ var import_node_crypto = require("node:crypto");
 
 // src/core/contracts.ts
 var MAX_TEXT_BYTES = 2 * 1024 * 1024;
+var MAX_CAPTURE_SEGMENTS = 32;
 
 // src/core/public-path.ts
 function deny(code, message) {
@@ -731,7 +732,7 @@ var MAX_RUNS = 200;
 var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
 function captureCheckpoint(change) {
   const snapshot = (value) => [value.exists, value.kind, value.hash, value.size, value.mode];
-  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after)] : null));
+  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after), change.segments?.map((s) => [s.evidence, s.ambiguous, s.conflicted, snapshot(s.before), snapshot(s.after)]), change.segmentsTruncated] : null));
 }
 async function atomicJson(file, value) {
   await import_promises2.default.mkdir(import_node_path2.default.dirname(file), { recursive: true, mode: 448 });
@@ -764,7 +765,8 @@ function validRun(run2, id2) {
   try {
     for (const [value, change] of Object.entries(run2.changes)) {
       assertPublicPath(value);
-      for (const snapshot of [change.before, change.after]) if (!snapshot || typeof snapshot.exists !== "boolean" || typeof snapshot.hash !== "string" || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(snapshot.kind)) return false;
+      if (change.segments !== void 0 && (!Array.isArray(change.segments) || change.segments.length > MAX_CAPTURE_SEGMENTS || change.segments.some((s) => !s || typeof s.evidence !== "string" || s.evidence.length > 1024 || !s.evidence.includes(":") || s.ambiguous !== void 0 && typeof s.ambiguous !== "boolean" || s.conflicted !== void 0 && (s.conflicted !== true || s.ambiguous !== true)))) return false;
+      for (const snapshot of [change.before, change.after, ...(change.segments ?? []).flatMap((s) => [s.before, s.after])]) if (!snapshot || typeof snapshot.exists !== "boolean" || typeof snapshot.hash !== "string" || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(snapshot.kind)) return false;
       if (run2.version === 1) {
         if (import_node_path2.default.isAbsolute(value) || !inside(run2.root, import_node_path2.default.resolve(run2.root, value))) return false;
       } else {
@@ -926,6 +928,15 @@ var SnapshotStore = class {
   }
   async writeRun(run2, inbox = false) {
     const save = async () => {
+      const saved = /* @__PURE__ */ new Map();
+      const saveSnapshot = (snapshot) => {
+        let value = saved.get(snapshot);
+        if (!value) {
+          value = this.saveBlob(snapshot);
+          saved.set(snapshot, value);
+        }
+        return value;
+      };
       validId(run2.id);
       const changes2 = /* @__PURE__ */ Object.create(null);
       if (Object.keys(run2.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
@@ -948,7 +959,9 @@ var SnapshotStore = class {
           } catch {
           }
         }
-        changes2[p] = { ...c, diffStats, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+        if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail("STORE_LIMIT", "Too many capture segments");
+        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : void 0;
+        changes2[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...segments ? { segments } : {} };
       }
       await atomicJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${run2.id}.json`), { ...run2, fileCount, changes: changes2 });
     };
@@ -973,7 +986,22 @@ var SnapshotStore = class {
     }
     const run2 = await readJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${id2}.json`), null);
     if (!run2 || !validRun(run2, id2)) return null;
-    if (hydrate) for (const [p, c] of Object.entries(run2.changes)) run2.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
+    if (hydrate) {
+      const loaded = /* @__PURE__ */ new Map();
+      const load = (snapshot) => {
+        const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
+        let pending = loaded.get(key);
+        if (!pending) {
+          pending = this.hydrate(snapshot);
+          loaded.set(key, pending);
+        }
+        return pending;
+      };
+      for (const [p, c] of Object.entries(run2.changes)) {
+        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : void 0;
+        run2.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...segments ? { segments } : {} };
+      }
+    }
     return run2;
   }
   async importInbox(generation2) {
@@ -2040,6 +2068,7 @@ var ReviewService = class {
   turnFile(run2, value, change, states2, verified = true) {
     assertPublicPath(value);
     const { before, after, capture } = change, origin = capture?.origin ?? "workspace";
+    const segmentCount = change.ambiguous ? change.segments?.filter((s) => !s.ambiguous && s.before.kind === "text" && s.after.kind === "text").length ?? 0 : 0;
     const kind = change.ambiguous ? "unavailable" : before.kind !== "text" ? before.kind : after.kind;
     const reverted = origin === "workspace" && states2[`${run2.id}:${value}`] === "reverted";
     const writable = !sameSnapshot(before, after) && !change.ambiguous && verified && run2.version === 2 && run2.boundary === "user" && run2.state === "completed" && !run2.incomplete && this.mutableRoots.has(canonical(run2.root)) && origin === "workspace";
@@ -2047,8 +2076,8 @@ var ReviewService = class {
     const indexed = cachedStats?.beforeHash === before.hash && cachedStats.afterHash === after.hash && Number.isSafeInteger(cachedStats.additions) && cachedStats.additions >= 0 && Number.isSafeInteger(cachedStats.deletions) && cachedStats.deletions >= 0;
     const statsKnown = kind === "text" && (indexed || (!before.exists || before.text !== null) && (!after.exists || after.text !== null));
     const counts = !statsKnown ? { additions: 0, deletions: 0 } : indexed ? { additions: cachedStats.additions, deletions: cachedStats.deletions } : stats(before.text ?? "", after.text ?? "");
-    const reason = change.ambiguous ? "\u5E76\u53D1\u4FEE\u6539\u5F52\u5C5E\u4E0D\u660E\uFF0C\u4E0D\u8BA1\u5165\u672C\u4F1A\u8BDD\u786E\u5B9A\u7EDF\u8BA1\u3002" : !statsKnown ? "\u5386\u53F2\u5185\u5BB9\u4E0D\u53EF\u9A8C\u8BC1\u6216\u975E\u6587\u672C\uFF1B\u884C\u6570\u672A\u77E5\uFF0C\u4E0D\u8BA1\u5165\u786E\u5B9A\u7EDF\u8BA1\u3002" : origin === "external" ? "Explicit external tool capture; read-only." : !verified ? "Snapshot content is verified when selected; read-only until loaded." : !writable ? "Capture incomplete, unsettled or project not authorized for restore." : void 0;
-    return { id: capture?.id ?? digest(value).slice(0, 24), path: value, origin, absolutePath: capture?.absolutePath, status: !before.exists ? "added" : !after.exists ? "deleted" : before.hash === after.hash ? "mode" : "modified", kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode])), ...counts, statsKnown, actions: kind === "text" && writable ? [reverted ? "reapply" : "revert"] : [], state: reverted ? "reverted" : "active", note: [change.note, reason, statsKnown && sameSnapshot(before, after) ? "\u53D1\u751F\u8FC7\u4FEE\u6539\u4E8B\u4EF6\uFF1B\u672C\u8F6E\u51C0\u53D8\u5316\u4E3A\u96F6\u3002" : void 0].filter(Boolean).join(" ") || void 0 };
+    const reason = segmentCount ? "\u4FEE\u6539\u94FE\u4E0D\u8FDE\u7EED\uFF1B\u53EF\u67E5\u770B\u72EC\u7ACB\u5206\u6BB5\uFF0C\u4F46\u51C0\u884C\u6570\u672A\u77E5\uFF0C\u4E0D\u8BA1\u5165\u672C\u4F1A\u8BDD\u786E\u5B9A\u7EDF\u8BA1\uFF0C\u7981\u6B62\u81EA\u52A8\u64A4\u9500\u3002" : change.ambiguous ? "\u5E76\u53D1\u4FEE\u6539\u5F52\u5C5E\u4E0D\u660E\uFF0C\u4E0D\u8BA1\u5165\u672C\u4F1A\u8BDD\u786E\u5B9A\u7EDF\u8BA1\u3002" : !statsKnown ? "\u5386\u53F2\u5185\u5BB9\u4E0D\u53EF\u9A8C\u8BC1\u6216\u975E\u6587\u672C\uFF1B\u884C\u6570\u672A\u77E5\uFF0C\u4E0D\u8BA1\u5165\u786E\u5B9A\u7EDF\u8BA1\u3002" : origin === "external" ? "Explicit external tool capture; read-only." : !verified ? "Snapshot content is verified when selected; read-only until loaded." : !writable ? "Capture incomplete, unsettled or project not authorized for restore." : void 0;
+    return { id: capture?.id ?? digest(value).slice(0, 24), path: value, origin, absolutePath: capture?.absolutePath, status: !before.exists ? "added" : !after.exists ? "deleted" : before.hash === after.hash ? "mode" : "modified", kind, before, after, fingerprint: digest(JSON.stringify([before.hash, after.hash, before.mode, after.mode, ...segmentCount ? [change.segments?.map((s) => [s.evidence, s.before.hash, s.after.hash, s.ambiguous])] : []])), ...counts, statsKnown, ...segmentCount ? { segmentCount } : {}, actions: kind === "text" && writable ? [reverted ? "reapply" : "revert"] : [], state: reverted ? "reverted" : "active", note: [change.note, reason, change.segmentsTruncated ? "\u4EC5\u4FDD\u7559\u6700\u8FD1 32 \u6B21\u6587\u4EF6\u4FEE\u6539\u5FEB\u7167\u3002" : void 0, statsKnown && sameSnapshot(before, after) ? "\u53D1\u751F\u8FC7\u4FEE\u6539\u4E8B\u4EF6\uFF1B\u672C\u8F6E\u51C0\u53D8\u5316\u4E3A\u96F6\u3002" : void 0].filter(Boolean).join(" ") || void 0 };
   }
   async turnSummary(args) {
     this.validateTurn(args);
@@ -2261,7 +2290,19 @@ var ReviewService = class {
     const cacheKey = `${file.id}:${context}`;
     let hunks = review.hunksCache.get(cacheKey);
     if (!hunks) {
-      hunks = file.kind === "text" ? buildHunks(file.before.text ?? "", file.after.text ?? "", context) : [];
+      if (file.segmentCount && review.run) {
+        hunks = [];
+        const started = Date.now();
+        const segments = review.run.changes[file.path].segments ?? [];
+        for (const [index, segment] of segments.entries()) {
+          if (Date.now() - started > 4e3) fail("DIFF_LIMIT", "Segment detail exceeds computation budget");
+          const header = `\u5206\u6BB5 ${index + 1} \xB7 ${segment.evidence} \xB7 \u53EA\u8BFB / Read-only`;
+          const [before, after] = await Promise.all([this.hydrateSnapshot(segment.before), this.hydrateSnapshot(segment.after)]);
+          const valid = !segment.ambiguous && before.kind === "text" && after.kind === "text" && (!before.exists || before.text !== null) && (!after.exists || after.text !== null);
+          hunks.push({ id: `segment:${index}:notice`, header, oldStart: 0, oldLines: 0, newStart: 0, newLines: 0, lines: [{ kind: "notice", text: valid ? "\u72EC\u7ACB\u5DE5\u5177\u4FEE\u6539\uFF1B\u4E2D\u95F4\u672A\u5F52\u5C5E\u53D8\u5316\u4E0D\u81EA\u52A8\u5408\u5E76\u3002" : "\u8BE5\u5206\u6BB5\u5185\u5BB9\u7F3A\u5931\u6216\u5B58\u5728\u5E76\u53D1\u5F52\u5C5E\u51B2\u7A81\uFF0C\u65E0\u6CD5\u5C55\u793A\u5DEE\u5F02\u3002", oldLine: null, newLine: null }] });
+          if (valid) hunks.push(...buildHunks(before.text ?? "", after.text ?? "", context).map((h) => ({ ...h, id: `segment:${index}:${h.id}`, header: `${header} ${h.header}` })));
+        }
+      } else hunks = file.kind === "text" ? buildHunks(file.before.text ?? "", file.after.text ?? "", context) : [];
       review.hunksCache.set(cacheKey, hunks);
       while (review.hunksCache.size > 50) review.hunksCache.delete(review.hunksCache.keys().next().value);
     }
@@ -2758,6 +2799,19 @@ var import_promises7 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs3 = require("node:fs");
 var import_node_path8 = __toESM(require("node:path"), 1);
 
+// src/core/explicit-file-tools.ts
+var explicitToolName = (name2) => String(name2).split(".").pop().toLowerCase();
+function isReplacementTool(name2) {
+  return ["mcp_fastctx_replace", "mcp__fastctx__replace"].includes(explicitToolName(name2));
+}
+function isExplicitFileTool(name2) {
+  return ["write", "edit"].includes(explicitToolName(name2)) || isReplacementTool(name2);
+}
+function isExplicitEvidence(ref) {
+  const separator = ref.indexOf(":");
+  return separator > 0 && isExplicitFileTool(ref.slice(0, separator));
+}
+
 // src/core/edit-replay.ts
 function replayRecordedEdit(before, args, expectedHash) {
   if (!/^[a-f0-9]{64}$/.test(expectedHash) || Buffer.byteLength(before) > MAX_TEXT_BYTES) return void 0;
@@ -3011,7 +3065,7 @@ var HostHistoryImporter = class {
       }
       const block = message.blocks.find((b) => b.type === "tool_call" && b.callId === meta.messageId) ?? (message.id === meta.messageId && message.blocks.filter((b) => b.type === "tool_call").length === 1 ? message.blocks.find((b) => b.type === "tool_call") : void 0);
       const tool = String(block?.name ?? "").split(".").pop().toLowerCase();
-      if (!block || !["write", "edit"].includes(tool)) {
+      if (!block || !isExplicitFileTool(tool)) {
         d.skipped++;
         return;
       }
@@ -3064,26 +3118,37 @@ var HostHistoryImporter = class {
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name2, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
       }
     }
+    await this.store.init();
+    const capturedEndpoints = /* @__PURE__ */ new Map();
+    const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
+    const endpoint = (source2, change, ref, side, snapshot) => {
+      const separator = ref.indexOf(":"), callId = ref.slice(separator + 1), message = aliases.get(callId);
+      if (!(ref.startsWith("native:") || isExplicitEvidence(ref)) || !message || owner(message) !== source2.userMessageId || !change.capture) return;
+      const block = message.blocks.find((b) => b.type === "tool_call" && b.callId === callId);
+      if (!block || !isExplicitFileTool(block.name) || !ref.startsWith("native:") && ref.slice(0, separator) !== explicitToolName(block.name)) return;
+      if (side === "before" && explicitToolName(block.name) === "edit" && !snapshot.exists) return;
+      const key = `${callId}\0${change.capture.identity}\0${side}`;
+      capturedEndpoints.set(key, [...capturedEndpoints.get(key) ?? [], snapshot]);
+      if (isReplacementTool(block.name) && block.status === "success" && !block.result?.isError && block.args?.dry_run !== true) {
+        try {
+          const target = block.args?.path ?? block.args?.file_path;
+          if (typeof target === "string" && capture(target).identity === change.capture.identity) add({ version: 1, sessionId, messageId: callId, path: change.capture.absolutePath, operation: explicitToolName(block.name) }, void 0, true);
+        } catch {
+        }
+      }
+    };
+    for (const source2 of sources) {
+      if (source2.sessionId !== sessionId || canonical(source2.root) !== canonical(root) || !source2.userMessageId) continue;
+      for (const change of Object.values(source2.changes)) {
+        if (!change.capture) continue;
+        if (!change.segments?.length && !change.ambiguous && change.evidence?.length) for (const side of ["before", "after"]) endpoint(source2, change, side === "before" ? change.evidence[0] : change.evidence.at(-1), side, change[side]);
+        for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ["before", "after"]) endpoint(source2, change, segment.evidence, side, segment[side]);
+      }
+    }
     events.sort((a, b) => a.message.order - b.message.order);
     if (events.length > 4096) {
       warn("Host event limit exceeded");
       return d;
-    }
-    await this.store.init();
-    const capturedEndpoints = /* @__PURE__ */ new Map();
-    const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
-    for (const source2 of sources) {
-      if (source2.sessionId !== sessionId || canonical(source2.root) !== canonical(root) || !source2.userMessageId) continue;
-      for (const change of Object.values(source2.changes)) {
-        if (change.ambiguous || !change.capture || !change.evidence?.length) continue;
-        for (const side of ["before", "after"]) {
-          const ref = side === "before" ? change.evidence[0] : change.evidence.at(-1);
-          const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
-          if (!/^(native|write|edit):/.test(ref) || !message || owner(message) !== source2.userMessageId) continue;
-          const key = `${callId}\0${change.capture.identity}\0${side}`;
-          capturedEndpoints.set(key, [...capturedEndpoints.get(key) ?? [], change[side]]);
-        }
-      }
     }
     let evidenceBytes = 0;
     for (const e of events) {
@@ -3092,16 +3157,31 @@ var HostHistoryImporter = class {
       for (const side of ["before", "after"]) {
         if (e[side].kind !== "unavailable") continue;
         const endpoints = capturedEndpoints.get(`${e.meta.messageId}\0${capture(e.meta.path).identity}\0${side}`) ?? [];
-        const unique = new Map(endpoints.map((snapshot2) => [JSON.stringify([snapshot2.hash, snapshot2.exists]), snapshot2]));
-        if (unique.size !== 1) continue;
-        const snapshot = unique.values().next().value;
-        if (HASH.test(e.meta[`${side}Hash`] ?? "") && snapshot.hash !== e.meta[`${side}Hash`]) continue;
-        if (typeof e.meta[`${side}Exists`] === "boolean" && snapshot.exists !== e.meta[`${side}Exists`]) continue;
-        const verified = await this.store.hydrate(snapshot);
-        if (verified.kind === "text") {
-          e[side] = verified;
-          if (side === "before") e.capturedBefore = true;
+        const unique = /* @__PURE__ */ new Map();
+        for (const snapshot of endpoints) {
+          if (snapshot.kind !== "text") continue;
+          if (HASH.test(e.meta[`${side}Hash`] ?? "") && snapshot.hash !== e.meta[`${side}Hash`]) continue;
+          if (typeof e.meta[`${side}Exists`] === "boolean" && snapshot.exists !== e.meta[`${side}Exists`]) continue;
+          const key = JSON.stringify([snapshot.hash, snapshot.exists]);
+          if (unique.has(key)) continue;
+          const verified = await this.store.hydrate(snapshot);
+          if (verified.kind === "text") {
+            evidenceBytes += verified.size;
+            if (evidenceBytes > 64 * 1024 * 1024) {
+              warn("Host candidate byte limit exceeded");
+              return d;
+            }
+            unique.set(key, verified);
+          }
         }
+        if (unique.size > 1) {
+          e.conflicted = true;
+          (e.alternatives ??= {})[side] = [...unique.values()].slice(0, Math.floor((MAX_CAPTURE_SEGMENTS - 1) / 2));
+          continue;
+        }
+        if (unique.size !== 1) continue;
+        e[side] = unique.values().next().value;
+        if (side === "before") e.capturedBefore = true;
       }
       evidenceBytes += e.before.size + e.after.size;
       if (evidenceBytes > 64 * 1024 * 1024) {
@@ -3184,6 +3264,17 @@ var HostHistoryImporter = class {
         remember(e.after);
       }
     }
+    const earlier = /* @__PURE__ */ new Map();
+    for (const e of events) {
+      const key = `${owner(e.message)}\0${capture(e.meta.path).identity}`, prior = earlier.get(key), b = e.block;
+      const tag = typeof b?.args?.tag === "string" ? b.args.tag.toUpperCase() : "";
+      const start = prior?.after, end = e.after;
+      if (e.toolOnly && !e.conflicted && !prior?.conflicted && e.before.kind === "unavailable" && b?.status === "success" && !b.result?.isError && explicitToolName(b.name) === "edit" && /^[A-F0-9]{4}$/.test(tag) && start?.kind === "text" && start.exists && start.text !== null && end.kind === "text" && end.exists && start.hash.slice(-4).toUpperCase() === tag && replayRecordedEdit(start.text, b.args, end.hash) !== void 0) {
+        e.before = start;
+        e.capturedBefore = true;
+      }
+      earlier.set(key, e);
+    }
     d.events = events.length;
     await this.store.init();
     await this.store.captureLock(async () => {
@@ -3196,9 +3287,9 @@ var HostHistoryImporter = class {
         const source2 = ref.slice(0, separator).toLowerCase(), id2 = ref.slice(separator + 1);
         if (source2 === "native") {
           const message = aliases.get(id2);
-          return !!message?.blocks.some((b) => b.type === "tool_call" && b.callId === id2 && ["write", "edit"].includes(String(b.name).split(".").pop().toLowerCase()));
+          return !!message?.blocks.some((b) => b.type === "tool_call" && b.callId === id2 && isExplicitFileTool(b.name));
         }
-        return ["write", "edit"].includes(source2);
+        return isExplicitEvidence(ref);
       };
       const refOwner = (ref) => {
         const callId = ref.slice(ref.indexOf(":") + 1), message = aliases.get(callId);
@@ -3273,12 +3364,18 @@ var HostHistoryImporter = class {
         for (const e of turnEvents) {
           const c = capture(e.meta.path), old = changes2[c.path];
           const recorded = saved?.changes[c.path];
-          if (e.toolOnly && recorded?.capture?.identity === c.identity && [`native:${e.block?.callId}`, `native:${e.message.id}`].includes(recorded.evidence?.at(-1) ?? "")) {
-            for (const side of ["before", "after"]) if (e[side].kind === "unavailable" && !HASH.test(e[side].hash)) e[side] = recorded[side];
+          if (!e.conflicted && e.toolOnly && recorded?.capture?.identity === c.identity) {
+            const refs = [`native:${e.block?.callId}`, `native:${e.message.id}`];
+            for (const side of ["before", "after"]) {
+              const ref = side === "before" ? recorded.evidence?.[0] : recorded.evidence?.at(-1);
+              if (refs.includes(ref ?? "") && e[side].kind === "unavailable" && !HASH.test(e[side].hash) && !(side === "before" && explicitToolName(e.block?.name) === "edit" && !recorded.before.exists)) e[side] = recorded[side];
+            }
           }
           const note = ["\u539F\u751F\u5386\u53F2\u4FEE\u6539\u4E8B\u4EF6\uFF1B\u672A\u8BFB\u53D6\u5F53\u524D\u6587\u4EF6\u3002", e.meta.state === "reverted" ? "\u4E3B\u7A0B\u5E8F\u5DF2\u6807\u8BB0\u64A4\u9500\uFF1B\u6B64\u5904\u4FDD\u7559\u539F\u4FEE\u6539\u8BC1\u636E\u3002" : "", e.meta.oldPath ? `\u91CD\u547D\u540D\u6765\u6E90\uFF1A${e.meta.oldPath}` : "", e.before.kind === "unavailable" || e.after.kind === "unavailable" ? "\u5386\u53F2\u5B8C\u6574\u5185\u5BB9\u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u53EF\u9760\u8BA1\u7B97\u5B8C\u6574\u5DEE\u5F02\u3002" : ""].filter(Boolean).join(" ");
-          const discontinuous = !!old && (old.ambiguous || (!e.toolOnly || e.capturedBefore) && old.after.kind === "text" && e.before.kind === "text" && (old.after.hash !== e.before.hash || old.after.exists !== e.before.exists));
-          changes2[c.path] = { capture: c, before: old?.before ?? e.before, after: e.after, note: discontinuous ? `${note} \u5E76\u53D1\u6216\u4E0D\u8FDE\u7EED\u7684\u6587\u4EF6\u5FEB\u7167\uFF0C\u4E0D\u80FD\u4F5C\u4E3A\u81EA\u52A8\u5408\u5E76\uFF1B\u884C\u6570\u672A\u77E5\u3002` : note, evidence: [...old?.evidence ?? [], `native:${e.meta.messageId}`].slice(-32), ...discontinuous ? { ambiguous: true } : {}, ...e.meta.oldPath ? { oldPath: e.meta.oldPath } : {} };
+          const discontinuous = !!e.conflicted || !!old && (old.ambiguous || (!e.toolOnly || e.capturedBefore) && old.after.kind === "text" && e.before.kind === "text" && (old.after.hash !== e.before.hash || old.after.exists !== e.before.exists));
+          const segments = [...old?.segments ?? [], { before: e.before, after: e.after, evidence: `native:${e.meta.messageId}`, ...e.conflicted ? { ambiguous: true } : {} }];
+          for (const side of ["before", "after"]) for (const alternative of e.alternatives?.[side] ?? []) segments.push({ before: e.before, after: e.after, [side]: alternative, evidence: `native:${e.meta.messageId}`, ambiguous: true, conflicted: true });
+          changes2[c.path] = { capture: c, before: old?.before ?? e.before, after: e.after, note: discontinuous ? `${note} \u5E76\u53D1\u6216\u4E0D\u8FDE\u7EED\u7684\u6587\u4EF6\u5FEB\u7167\uFF1B\u4EC5\u5C55\u793A\u53EF\u9A8C\u8BC1\u5206\u6BB5\uFF0C\u4E0D\u8BA1\u5165\u51C0\u884C\u6570\u3002` : note, evidence: [...old?.evidence ?? [], `native:${e.meta.messageId}`].slice(-32), segments: segments.slice(-MAX_CAPTURE_SEGMENTS), ...segments.length > MAX_CAPTURE_SEGMENTS || old?.segmentsTruncated ? { segmentsTruncated: true } : {}, ...discontinuous ? { ambiguous: true } : {}, ...e.meta.oldPath ? { oldPath: e.meta.oldPath } : {} };
         }
         if (previous && !migrating) {
           for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes2[value] && (change.evidence ?? []).every(standardEvidence)) changes2[value] = change;
@@ -3373,7 +3470,7 @@ var HostHistoryImporter = class {
           if (await this.store.getRun(duplicates[0].id)) await this.store.retireRun(id2, duplicates[0].id);
           continue;
         }
-        const signature = (r) => JSON.stringify({ ...r, contentVersion: void 0, cardPreview: void 0, changes: Object.fromEntries(Object.entries(r.changes).map(([p, c]) => [p, { ...c, diffStats: void 0, before: { ...c.before, text: null }, after: { ...c.after, text: null } }])) });
+        const signature = (r) => JSON.stringify({ ...r, contentVersion: void 0, cardPreview: void 0, changes: Object.fromEntries(Object.entries(r.changes).map(([p, c]) => [p, { ...c, diffStats: void 0, before: { ...c.before, text: null }, after: { ...c.after, text: null }, ...c.segments ? { segments: c.segments.map((s) => ({ ...s, before: { ...s.before, text: null }, after: { ...s.after, text: null } })) } : {} }])) });
         d.runIds.push(id2);
         if (previous && signature(previous) === signature(run2)) {
           d.unchanged++;

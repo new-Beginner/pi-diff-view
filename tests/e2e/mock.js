@@ -18,10 +18,12 @@
   const external = makeFile('external', 'D:/notes/review-summary.md', { origin: 'external', absolutePath: 'D:/notes/review-summary.md', actions: [], additions: 2, deletions: 1 });
   if (scenario === 'renderer') files.push(external);
   if (scenario === 'system-executable') files[0].path = 'scripts/run.CMD';
+  if (scenario === 'segmented') Object.assign(files[0], { kind: 'unavailable', statsKnown: false, segmentCount: 2, additions: 0, deletions: 0, actions: [], note: '修改链不连续；分段只读，净行数未知。' });
   const turnFiles = [files[0], files[1], files[3], external];
   const line = (kind, text, oldLine, newLine) => ({ kind, text, oldLine, newLine });
   const hunk = (id, oldStart, newStart, lines) => ({ id, oldStart, newStart, oldLines: lines.filter(l => l.oldLine != null).length, newLines: lines.filter(l => l.newLine != null).length, header: `@@ -${oldStart},3 +${newStart},4 @@`, lines });
   const hunksFor = (fileId, context) => {
+    if (scenario === 'segmented' && fileId === 'review') return [1, 2].map(index => ({ ...hunk(`segment:${index}`, 1, 1, [line('del', `before segment ${index}`, 1, null), line('add', `after segment ${index}`, null, 1)]), header: `分段 ${index} · 只读 / Read-only` }));
     if (fileId === 'long') {
       const lines = [];
       for (let i = 1; i <= 1000; i++) { lines.push(line('del', `const value${i} = "old";`, i, null), line('add', `const value${i} = "new";`, null, i)); }

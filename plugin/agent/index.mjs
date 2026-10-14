@@ -20,14 +20,15 @@ import path5 from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
+// src/core/contracts.ts
+var MAX_TEXT_BYTES = 2 * 1024 * 1024;
+var MAX_CAPTURE_SEGMENTS = 32;
+
 // src/core/path-policy.ts
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-
-// src/core/contracts.ts
-var MAX_TEXT_BYTES = 2 * 1024 * 1024;
 
 // src/core/public-path.ts
 function deny(code, message) {
@@ -601,7 +602,7 @@ var MAX_RUNS = 200;
 var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
 function captureCheckpoint(change) {
   const snapshot = (value) => [value.exists, value.kind, value.hash, value.size, value.mode];
-  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after)] : null));
+  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after), change.segments?.map((s) => [s.evidence, s.ambiguous, s.conflicted, snapshot(s.before), snapshot(s.after)]), change.segmentsTruncated] : null));
 }
 async function atomicJson(file, value) {
   await fs2.mkdir(path2.dirname(file), { recursive: true, mode: 448 });
@@ -642,7 +643,8 @@ function validRun(run, id3) {
   try {
     for (const [value, change] of Object.entries(run.changes)) {
       assertPublicPath(value);
-      for (const snapshot of [change.before, change.after]) if (!snapshot || typeof snapshot.exists !== "boolean" || typeof snapshot.hash !== "string" || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(snapshot.kind)) return false;
+      if (change.segments !== void 0 && (!Array.isArray(change.segments) || change.segments.length > MAX_CAPTURE_SEGMENTS || change.segments.some((s) => !s || typeof s.evidence !== "string" || s.evidence.length > 1024 || !s.evidence.includes(":") || s.ambiguous !== void 0 && typeof s.ambiguous !== "boolean" || s.conflicted !== void 0 && (s.conflicted !== true || s.ambiguous !== true)))) return false;
+      for (const snapshot of [change.before, change.after, ...(change.segments ?? []).flatMap((s) => [s.before, s.after])]) if (!snapshot || typeof snapshot.exists !== "boolean" || typeof snapshot.hash !== "string" || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(snapshot.kind)) return false;
       if (run.version === 1) {
         if (path2.isAbsolute(value) || !inside(run.root, path2.resolve(run.root, value))) return false;
       } else {
@@ -804,6 +806,15 @@ var SnapshotStore = class {
   }
   async writeRun(run, inbox = false) {
     const save = async () => {
+      const saved = /* @__PURE__ */ new Map();
+      const saveSnapshot = (snapshot) => {
+        let value = saved.get(snapshot);
+        if (!value) {
+          value = this.saveBlob(snapshot);
+          saved.set(snapshot, value);
+        }
+        return value;
+      };
       validId(run.id);
       const changes = /* @__PURE__ */ Object.create(null);
       if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
@@ -826,7 +837,9 @@ var SnapshotStore = class {
           } catch {
           }
         }
-        changes[p] = { ...c, diffStats, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+        if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail("STORE_LIMIT", "Too many capture segments");
+        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : void 0;
+        changes[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...segments ? { segments } : {} };
       }
       await atomicJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, fileCount, changes });
     };
@@ -851,7 +864,22 @@ var SnapshotStore = class {
     }
     const run = await readJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${id3}.json`), null);
     if (!run || !validRun(run, id3)) return null;
-    if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
+    if (hydrate) {
+      const loaded = /* @__PURE__ */ new Map();
+      const load = (snapshot) => {
+        const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
+        let pending = loaded.get(key);
+        if (!pending) {
+          pending = this.hydrate(snapshot);
+          loaded.set(key, pending);
+        }
+        return pending;
+      };
+      for (const [p, c] of Object.entries(run.changes)) {
+        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : void 0;
+        run.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...segments ? { segments } : {} };
+      }
+    }
     return run;
   }
   async importInbox(generation) {
@@ -1073,6 +1101,15 @@ function isImagePath(filePath) {
   return dot > 0 && dot < basename.length - 1 && IMAGE_EXTENSIONS.has(basename.slice(dot + 1).toLowerCase());
 }
 
+// src/core/explicit-file-tools.ts
+var explicitToolName = (name2) => String(name2).split(".").pop().toLowerCase();
+function isReplacementTool(name2) {
+  return ["mcp_fastctx_replace", "mcp__fastctx__replace"].includes(explicitToolName(name2));
+}
+function isExplicitFileTool(name2) {
+  return ["write", "edit"].includes(explicitToolName(name2)) || isReplacementTool(name2);
+}
+
 // src/agent/workspace-capture.ts
 import fs4 from "node:fs/promises";
 import path4 from "node:path";
@@ -1208,7 +1245,7 @@ async function endCaptureLease(store, id3) {
 }
 
 // src/agent/capture.ts
-var toolName = (name2) => String(name2).split(".").pop().toLowerCase();
+var toolName = explicitToolName;
 var MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
 function textContent(message) {
   if (typeof message?.content === "string") return message.content;
@@ -1216,7 +1253,7 @@ function textContent(message) {
 }
 function toolPaths(name2, input) {
   const p = input?.path ?? input?.file_path;
-  if (typeof p !== "string" || !["write", "edit"].includes(name2)) return { targets: [], hadTargets: false, truncated: false };
+  if (typeof p !== "string" || !isExplicitFileTool(name2) || isReplacementTool(name2) && input?.dry_run === true) return { targets: [], hadTargets: false, truncated: false };
   const targets = /* @__PURE__ */ new Set();
   let hadTargets = false, truncated = false;
   const add = (target) => {
@@ -1293,6 +1330,10 @@ function createCaptureExtension(options) {
       target.fileCount = Object.values(target.changes).filter((c) => !c.ambiguous && !sameSnapshot(c.before, c.after)).length;
       target.contentVersion = (target.contentVersion ?? 0) + 1;
       await store.writeRun(target, true);
+      for (const change of Object.values(target.changes)) for (const segment of change.segments ?? []) {
+        segment.before = { ...segment.before, text: null };
+        segment.after = { ...segment.after, text: null };
+      }
     };
     const bounded = (snapshot, extra = []) => {
       const retained = /* @__PURE__ */ new Set([...Object.values(run.changes).flatMap((c) => [c.before, c.after]), ...[...pending.values()].flatMap((p) => p.paths.map((e) => e.before)), ...extra]);
@@ -1374,6 +1415,13 @@ function createCaptureExtension(options) {
       await check(run);
       seen.add(event.toolCallId);
       const name2 = toolName(event.toolName), targetSet = toolPaths(name2, event.input ?? event.args), targets = targetSet.targets;
+      if (isReplacementTool(name2) && targets.length) {
+        try {
+          if (!(await fs5.lstat(path5.resolve(run.root, targets[0]))).isFile()) return;
+        } catch {
+          return;
+        }
+      }
       if (name2 === "task") {
         if ((run.delegations?.length ?? 0) >= 256) {
           run.incomplete = true;
@@ -1394,7 +1442,7 @@ function createCaptureExtension(options) {
       }
       if (targetSet.hadTargets && targets.length === 0 && !targetSet.truncated) return;
       if (!targets.length && !workspace) {
-        if (["write", "edit"].includes(name2) || name2.startsWith("plugin_")) {
+        if (["write", "edit"].includes(name2)) {
           run.incomplete = true;
           await persist(run);
         }
@@ -1463,8 +1511,14 @@ function createCaptureExtension(options) {
           target.incomplete = true;
           continue;
         }
-        const ambiguous = !!(overlap || uncertain || captured.task || prior?.ambiguous || prior && !sameSnapshot(prior.after, entry.before));
-        let before = prior?.before ?? entry.before, after = bounded(rawAfter, captured.paths.map((e) => e.before));
+        const intervalAmbiguous = !!(overlap || uncertain || captured.task || isError);
+        const ambiguous = !!(intervalAmbiguous || prior?.ambiguous || prior && !sameSnapshot(prior.after, entry.before));
+        const rawSegmentAfter = bounded(rawAfter, captured.paths.map((e) => e.before));
+        const segment = { before: entry.before, after: rawSegmentAfter, evidence: `${captured.name}:${id3}`, ...intervalAmbiguous ? { ambiguous: true } : {} };
+        const segments = [...prior?.segments ?? [], segment];
+        const segmentsTruncated = !!prior?.segmentsTruncated || segments.length > MAX_CAPTURE_SEGMENTS;
+        if (segmentsTruncated) target.incomplete = true;
+        let before = prior?.before ?? entry.before, after = rawSegmentAfter;
         if (ambiguous) {
           before = { ...before, text: null, kind: "unavailable" };
           after = { ...after, text: null, kind: "unavailable" };
@@ -1476,6 +1530,8 @@ function createCaptureExtension(options) {
           before,
           after,
           evidence: [...prior?.evidence ?? [], `${captured.name}:${id3}`].slice(-32),
+          segments: segments.slice(-MAX_CAPTURE_SEGMENTS),
+          ...segmentsTruncated ? { segmentsTruncated: true } : {},
           ...captured.workspace && !ambiguous ? { note: "Observed workspace endpoints during a tool interval, not authoritative process-level authorship evidence." } : {},
           ...ambiguous ? { ambiguous: true, note: "Overlapping, discontinuous or delegated capture interval: file ownership is uncertain; diff and line counts unavailable." } : {}
         };

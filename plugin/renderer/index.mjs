@@ -303,9 +303,9 @@ import React2, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 // src/view/FilePath.tsx
 import React from "react";
-function FilePath({ path }) {
+function FilePath({ path, external = false }) {
   const split = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1;
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "dv-path-directory" }, path.slice(0, split)), /* @__PURE__ */ React.createElement("span", { className: "dv-path-basename" }, path.slice(split)));
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "dv-path-directory" }, external ? "\u2026/" : path.slice(0, split)), /* @__PURE__ */ React.createElement("span", { className: "dv-path-basename" }, path.slice(split)));
 }
 
 // src/renderer/entry-extra-layout.ts

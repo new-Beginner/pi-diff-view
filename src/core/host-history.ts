@@ -2,9 +2,10 @@ import { collectDelegations } from './delegation-lifecycle';
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { MAX_TEXT_BYTES, type CaptureRun, type CapturedChange, type CaptureIdentity, type FileSnapshot } from './contracts';
+import { MAX_CAPTURE_SEGMENTS, MAX_TEXT_BYTES, type CaptureRun, type CapturedChange, type CaptureIdentity, type FileSnapshot } from './contracts';
 import { absentSnapshot, assertPublicPath, canonical, digest, inside, snapshotFromBytes } from './path-policy';
 import { isImagePath } from './review-file-policy';
+import { explicitToolName, isExplicitFileTool, isExplicitEvidence, isReplacementTool } from './explicit-file-tools';
 import { replayRecordedEdit } from './edit-replay';
 import { atomicJson, captureCheckpoint, type SnapshotStore } from './storage';
 
@@ -13,7 +14,7 @@ type HistoryChange = CapturedChange & { note?: string; oldPath?: string };
 export type HostHistoryRun = CaptureRun & { userMessageId?: string; replyMessageId?: string; source?: 'host-history'; notice?: string };
 export interface HostHistoryDiagnostics { imported: number; unchanged: number; skipped: number; events: number; runIds: string[]; warnings: string[] }
 interface Message { id: string; role: string; blocks: RecordValue[]; meta: RecordValue; createdAt: number; order: number; parent?: string }
-interface Event { meta: RecordValue; directory?: string; message: Message; block?: RecordValue; before?: FileSnapshot; after?: FileSnapshot; toolOnly?: boolean; capturedBefore?: boolean }
+interface Event { meta: RecordValue; directory?: string; message: Message; block?: RecordValue; before?: FileSnapshot; after?: FileSnapshot; toolOnly?: boolean; capturedBefore?: boolean; conflicted?: boolean; alternatives?: Partial<Record<'before' | 'after', FileSnapshot[]>> }
 const ID = /^[a-zA-Z0-9-]{1,80}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -161,7 +162,7 @@ export class HostHistoryImporter {
       const block = message.blocks.find(b => b.type === 'tool_call' && b.callId === meta.messageId)
         ?? (message.id === meta.messageId && message.blocks.filter(b => b.type === 'tool_call').length === 1 ? message.blocks.find(b => b.type === 'tool_call') : undefined);
       const tool = String(block?.name ?? '').split('.').pop()!.toLowerCase();
-      if (!block || !['write', 'edit'].includes(tool)) { d.skipped++; return; }
+      if (!block || !isExplicitFileTool(tool)) { d.skipped++; return; }
       let identity: string;
       try { identity = capture(meta.path).identity; if (meta.oldPath) capture(meta.oldPath); } catch { d.skipped++; return; }
       // Native evidence is accepted only when tied to an explicit standard
@@ -199,37 +200,64 @@ export class HostHistoryImporter {
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name, ...(text !== undefined ? { afterExists: true, afterHash: digest(text) } : {}) }, undefined, true);
       }
     }
-    events.sort((a, b) => a.message.order - b.message.order);
-    if (events.length > 4096) { warn('Host event limit exceeded'); return d; }
     await this.store.init();
     const capturedEndpoints = new Map<string, FileSnapshot[]>();
     const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
+    const endpoint = (source: CaptureRun, change: CapturedChange, ref: string, side: 'before' | 'after', snapshot: FileSnapshot) => {
+      const separator = ref.indexOf(':'), callId = ref.slice(separator + 1), message = aliases.get(callId);
+      if (!(ref.startsWith('native:') || isExplicitEvidence(ref)) || !message || owner(message) !== source.userMessageId || !change.capture) return;
+      const block = message.blocks.find(b => b.type === 'tool_call' && b.callId === callId);
+      if (!block || !isExplicitFileTool(block.name) || (!ref.startsWith('native:') && ref.slice(0, separator) !== explicitToolName(block.name))) return;
+      // Standard Edit requires an existing file; older aggregate fallback polluted this side.
+      if (side === 'before' && explicitToolName(block.name) === 'edit' && !snapshot.exists) return;
+      const key = `${callId}\0${change.capture.identity}\0${side}`;
+      capturedEndpoints.set(key, [...(capturedEndpoints.get(key) ?? []), snapshot]);
+      // Non-native adapters need an exact captured file, never just a directory/path tool argument.
+      if (isReplacementTool(block.name) && block.status === 'success' && !block.result?.isError && block.args?.dry_run !== true) {
+        try {
+          const target = block.args?.path ?? block.args?.file_path;
+          if (typeof target === 'string' && capture(target).identity === change.capture.identity) add({ version: 1, sessionId, messageId: callId, path: change.capture.absolutePath, operation: explicitToolName(block.name) }, undefined, true);
+        } catch { /* Invalid adapter identity is not an event. */ }
+      }
+    };
     for (const source of sources) {
       if (source.sessionId !== sessionId || canonical(source.root) !== canonical(root) || !source.userMessageId) continue;
       for (const change of Object.values(source.changes)) {
-        if (change.ambiguous || !change.capture || !change.evidence?.length) continue;
-        for (const side of ['before', 'after'] as const) {
-          const ref = side === 'before' ? change.evidence[0] : change.evidence.at(-1)!;
-          const callId = ref.slice(ref.indexOf(':') + 1), message = aliases.get(callId);
-          if (!/^(native|write|edit):/.test(ref) || !message || owner(message) !== source.userMessageId) continue;
-          const key = `${callId}\0${change.capture.identity}\0${side}`;
-          capturedEndpoints.set(key, [...(capturedEndpoints.get(key) ?? []), change[side]]);
-        }
+        if (!change.capture) continue;
+        if (!change.segments?.length && !change.ambiguous && change.evidence?.length) for (const side of ['before', 'after'] as const) endpoint(source, change, side === 'before' ? change.evidence[0] : change.evidence.at(-1)!, side, change[side]);
+        for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ['before', 'after'] as const) endpoint(source, change, segment.evidence, side, segment[side]);
       }
     }
+    events.sort((a, b) => a.message.order - b.message.order);
+    if (events.length > 4096) { warn('Host event limit exceeded'); return d; }
     let evidenceBytes = 0;
     for (const e of events) {
       e.before = await this.snapshot(e, 'before'); e.after = await this.snapshot(e, 'after');
       for (const side of ['before', 'after'] as const) {
         if (e[side]!.kind !== 'unavailable') continue;
         const endpoints = capturedEndpoints.get(`${e.meta.messageId}\0${capture(e.meta.path).identity}\0${side}`) ?? [];
-        const unique = new Map(endpoints.map(snapshot => [JSON.stringify([snapshot.hash, snapshot.exists]), snapshot]));
+        // Unknown placeholders are not alternative answers. Validate real bytes before deciding conflict.
+        const unique = new Map<string, FileSnapshot>();
+        for (const snapshot of endpoints) {
+          if (snapshot.kind !== 'text') continue;
+          if (HASH.test(e.meta[`${side}Hash`] ?? '') && snapshot.hash !== e.meta[`${side}Hash`]) continue;
+          if (typeof e.meta[`${side}Exists`] === 'boolean' && snapshot.exists !== e.meta[`${side}Exists`]) continue;
+          const key = JSON.stringify([snapshot.hash, snapshot.exists]);
+          if (unique.has(key)) continue;
+          const verified = await this.store.hydrate(snapshot);
+          if (verified.kind === 'text') {
+            evidenceBytes += verified.size;
+            if (evidenceBytes > 64 * 1024 * 1024) { warn('Host candidate byte limit exceeded'); return d; }
+            unique.set(key, verified);
+          }
+        }
+        if (unique.size > 1) {
+          e.conflicted = true; (e.alternatives ??= {})[side] = [...unique.values()].slice(0, Math.floor((MAX_CAPTURE_SEGMENTS - 1) / 2));
+          continue;
+        }
         if (unique.size !== 1) continue;
-        const snapshot = unique.values().next().value!;
-        if (HASH.test(e.meta[`${side}Hash`] ?? '') && snapshot.hash !== e.meta[`${side}Hash`]) continue;
-        if (typeof e.meta[`${side}Exists`] === 'boolean' && snapshot.exists !== e.meta[`${side}Exists`]) continue;
-        const verified = await this.store.hydrate(snapshot);
-        if (verified.kind === 'text') { e[side] = verified; if (side === 'before') e.capturedBefore = true; }
+        e[side] = unique.values().next().value!;
+        if (side === 'before') e.capturedBefore = true;
       }
       evidenceBytes += e.before.size + e.after.size;
       if (evidenceBytes > 64 * 1024 * 1024) { warn('Host snapshot byte limit exceeded'); return d; }
@@ -290,6 +318,17 @@ export class HostHistoryImporter {
         e.after = snapshotFromBytes(Buffer.from(text), 0); remember(e.after);
       }
     }
+    // Recover only a tagged Edit whose exact recorded result validates the preceding bytes.
+    const earlier = new Map<string, Event>();
+    for (const e of events) {
+      const key = `${owner(e.message)}\0${capture(e.meta.path).identity}`, prior = earlier.get(key), b = e.block;
+      const tag = typeof b?.args?.tag === 'string' ? b.args.tag.toUpperCase() : '';
+      const start = prior?.after, end = e.after!;
+      if (e.toolOnly && !e.conflicted && !prior?.conflicted && e.before!.kind === 'unavailable' && b?.status === 'success' && !b.result?.isError && explicitToolName(b.name) === 'edit' && /^[A-F0-9]{4}$/.test(tag) && start?.kind === 'text' && start.exists && start.text !== null && end.kind === 'text' && end.exists && start.hash.slice(-4).toUpperCase() === tag && replayRecordedEdit(start.text, b.args, end.hash) !== undefined) {
+        e.before = start; e.capturedBefore = true;
+      }
+      earlier.set(key, e);
+    }
     d.events = events.length;
     await this.store.init();
     await this.store.captureLock(async () => {
@@ -302,9 +341,9 @@ export class HostHistoryImporter {
         const source = ref.slice(0, separator).toLowerCase(), id = ref.slice(separator + 1);
         if (source === 'native') {
           const message = aliases.get(id);
-          return !!message?.blocks.some(b => b.type === 'tool_call' && b.callId === id && ['write', 'edit'].includes(String(b.name).split('.').pop()!.toLowerCase()));
+          return !!message?.blocks.some(b => b.type === 'tool_call' && b.callId === id && isExplicitFileTool(b.name));
         }
-        return ['write', 'edit'].includes(source);
+        return isExplicitEvidence(ref);
       };
       const refOwner = (ref: string) => {
         const callId = ref.slice(ref.indexOf(':') + 1), message = aliases.get(callId);
@@ -378,13 +417,20 @@ export class HostHistoryImporter {
         for (const e of turnEvents) {
           const c = capture(e.meta.path), old = changes[c.path];
           const recorded = saved?.changes[c.path];
-          // Cleanup must not discard already verified bytes for this exact final tool/file.
-          if (e.toolOnly && recorded?.capture?.identity === c.identity && [`native:${e.block?.callId}`, `native:${e.message.id}`].includes(recorded.evidence?.at(-1) ?? '')) {
-            for (const side of ['before', 'after'] as const) if (e[side]!.kind === 'unavailable' && !HASH.test(e[side]!.hash)) e[side] = recorded[side];
+          // Aggregate start/end belong to the first/last call, never both to the final call.
+          if (!e.conflicted && e.toolOnly && recorded?.capture?.identity === c.identity) {
+            const refs = [`native:${e.block?.callId}`, `native:${e.message.id}`];
+            for (const side of ['before', 'after'] as const) {
+              const ref = side === 'before' ? recorded.evidence?.[0] : recorded.evidence?.at(-1);
+              if (refs.includes(ref ?? '') && e[side]!.kind === 'unavailable' && !HASH.test(e[side]!.hash) && !(side === 'before' && explicitToolName(e.block?.name) === 'edit' && !recorded.before.exists)) e[side] = recorded[side];
+            }
           }
           const note = ['原生历史修改事件；未读取当前文件。', e.meta.state === 'reverted' ? '主程序已标记撤销；此处保留原修改证据。' : '', e.meta.oldPath ? `重命名来源：${e.meta.oldPath}` : '', e.before!.kind === 'unavailable' || e.after!.kind === 'unavailable' ? '历史完整内容不可用，无法可靠计算完整差异。' : ''].filter(Boolean).join(' ');
-          const discontinuous = !!old && (old.ambiguous || ((!e.toolOnly || e.capturedBefore) && old.after.kind === 'text' && e.before!.kind === 'text' && (old.after.hash !== e.before!.hash || old.after.exists !== e.before!.exists)));
-          changes[c.path] = { capture: c, before: old?.before ?? e.before!, after: e.after!, note: discontinuous ? `${note} 并发或不连续的文件快照，不能作为自动合并；行数未知。` : note, evidence: [...(old?.evidence ?? []), `native:${e.meta.messageId}`].slice(-32), ...(discontinuous ? { ambiguous: true } : {}), ...(e.meta.oldPath ? { oldPath: e.meta.oldPath } : {}) };
+          const discontinuous = !!e.conflicted || (!!old && (old.ambiguous || ((!e.toolOnly || e.capturedBefore) && old.after.kind === 'text' && e.before!.kind === 'text' && (old.after.hash !== e.before!.hash || old.after.exists !== e.before!.exists))));
+          const segments: NonNullable<CapturedChange['segments']> = [...(old?.segments ?? []), { before: e.before!, after: e.after!, evidence: `native:${e.meta.messageId}`, ...(e.conflicted ? { ambiguous: true } : {}) }];
+          // Retain conflicting answers off-screen, so retiring a source cannot erase the conflict on restart.
+          for (const side of ['before', 'after'] as const) for (const alternative of e.alternatives?.[side] ?? []) segments.push({ before: e.before!, after: e.after!, [side]: alternative, evidence: `native:${e.meta.messageId}`, ambiguous: true, conflicted: true });
+          changes[c.path] = { capture: c, before: old?.before ?? e.before!, after: e.after!, note: discontinuous ? `${note} 并发或不连续的文件快照；仅展示可验证分段，不计入净行数。` : note, evidence: [...(old?.evidence ?? []), `native:${e.meta.messageId}`].slice(-32), segments: segments.slice(-MAX_CAPTURE_SEGMENTS), ...(segments.length > MAX_CAPTURE_SEGMENTS || old?.segmentsTruncated ? { segmentsTruncated: true } : {}), ...(discontinuous ? { ambiguous: true } : {}), ...(e.meta.oldPath ? { oldPath: e.meta.oldPath } : {}) };
         }
         if (previous && !migrating) for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes[value] && (change.evidence ?? []).every(standardEvidence)) changes[value] = change;
         if (Object.keys(changes).length > 256) { warn('Turn exceeds 256 files; import skipped'); d.skipped++; continue; }
@@ -442,7 +488,7 @@ export class HostHistoryImporter {
           continue;
         }
         // Compare source-owned state only: storage may add stats/previews and strip blob text.
-        const signature = (r: HostHistoryRun) => JSON.stringify({ ...r, contentVersion: undefined, cardPreview: undefined, changes: Object.fromEntries(Object.entries(r.changes).map(([p, c]) => [p, { ...c, diffStats: undefined, before: { ...c.before, text: null }, after: { ...c.after, text: null } }])) });
+        const signature = (r: HostHistoryRun) => JSON.stringify({ ...r, contentVersion: undefined, cardPreview: undefined, changes: Object.fromEntries(Object.entries(r.changes).map(([p, c]) => [p, { ...c, diffStats: undefined, before: { ...c.before, text: null }, after: { ...c.after, text: null }, ...(c.segments ? { segments: c.segments.map(s => ({ ...s, before: { ...s.before, text: null }, after: { ...s.after, text: null } })) } : {}) }])) });
         d.runIds.push(id);
         if (previous && signature(previous) === signature(run)) { d.unchanged++; continue; }
         run.contentVersion = (previous?.contentVersion ?? 0) + 1;

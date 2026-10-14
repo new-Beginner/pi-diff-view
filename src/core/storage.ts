@@ -4,13 +4,13 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { assertPublicPath, canonical, digest, fail, inside, sameSnapshot } from './path-policy';
 import { stats } from './diff';
-import type { CaptureRun, CapturedChange, FileSnapshot, ReviewComment } from './contracts';
+import { MAX_CAPTURE_SEGMENTS, type CaptureRun, type CapturedChange, type FileSnapshot, type ReviewComment } from './contracts';
 export const MAX_RUNS = 200;
 export const MAX_HISTORY_BYTES = 128 * 1024 * 1024;
 /** Compare capture provenance, not derived stats or stripped blob text. */
 export function captureCheckpoint(change?: CapturedChange): string {
   const snapshot = (value: FileSnapshot) => [value.exists, value.kind, value.hash, value.size, value.mode];
-  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after)] : null));
+  return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after), change.segments?.map(s => [s.evidence, s.ambiguous, s.conflicted, snapshot(s.before), snapshot(s.after)]), change.segmentsTruncated] : null));
 }
 export async function atomicJson(file: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -38,7 +38,8 @@ function validRun(run: CaptureRun, id: string): boolean {
   try {
     for (const [value, change] of Object.entries(run.changes)) {
       assertPublicPath(value);
-      for (const snapshot of [change.before, change.after]) if (!snapshot || typeof snapshot.exists !== 'boolean' || typeof snapshot.hash !== 'string' || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !['text', 'binary', 'large', 'symlink', 'submodule', 'conflict', 'unavailable'].includes(snapshot.kind)) return false;
+      if (change.segments !== undefined && (!Array.isArray(change.segments) || change.segments.length > MAX_CAPTURE_SEGMENTS || change.segments.some(s => !s || typeof s.evidence !== 'string' || s.evidence.length > 1024 || !s.evidence.includes(':') || (s.ambiguous !== undefined && typeof s.ambiguous !== 'boolean') || (s.conflicted !== undefined && (s.conflicted !== true || s.ambiguous !== true))))) return false;
+      for (const snapshot of [change.before, change.after, ...(change.segments ?? []).flatMap(s => [s.before, s.after])]) if (!snapshot || typeof snapshot.exists !== 'boolean' || typeof snapshot.hash !== 'string' || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !['text', 'binary', 'large', 'symlink', 'submodule', 'conflict', 'unavailable'].includes(snapshot.kind)) return false;
       if (run.version === 1) { if (path.isAbsolute(value) || !inside(run.root, path.resolve(run.root, value))) return false; }
       else {
         const c = change.capture;
@@ -153,6 +154,13 @@ export class SnapshotStore {
   }
   async writeRun(run: CaptureRun, inbox = false): Promise<void> {
     const save = async () => {
+      // Shared aggregate/segment endpoints are persisted once per write; earlier segments are hash references.
+      const saved = new Map<FileSnapshot, Promise<FileSnapshot>>();
+      const saveSnapshot = (snapshot: FileSnapshot) => {
+        let value = saved.get(snapshot);
+        if (!value) { value = this.saveBlob(snapshot); saved.set(snapshot, value); }
+        return value;
+      };
       validId(run.id); const changes: CaptureRun['changes'] = Object.create(null);
       if (Object.keys(run.changes).length > 256) fail('STORE_LIMIT', 'Turn exceeds 256 captured files');
       const fileCount = Object.keys(run.changes).length;
@@ -172,7 +180,9 @@ export class SnapshotStore {
         if (!diffStats && c.before.kind === 'text' && c.after.kind === 'text' && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
           try { diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? '', c.after.text ?? '') }; } catch { /* Legacy/expensive diffs remain on-demand. */ }
         }
-        changes[p] = { ...c, diffStats, before: await this.saveBlob(c.before), after: await this.saveBlob(c.after) };
+        if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail('STORE_LIMIT', 'Too many capture segments');
+        const segments = c.segments ? await Promise.all(c.segments.map(async s => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : undefined;
+        changes[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...(segments ? { segments } : {}) };
       }
       await atomicJson(path.join(this.directory, inbox ? 'inbox' : 'runs', `${run.id}.json`), { ...run, fileCount, changes });
     };
@@ -191,7 +201,19 @@ export class SnapshotStore {
     }
     const run = await readJson<CaptureRun | null>(path.join(this.directory, inbox ? 'inbox' : 'runs', `${id}.json`), null);
     if (!run || !validRun(run, id)) return null;
-    if (hydrate) for (const [p, c] of Object.entries(run.changes)) run.changes[p] = { ...c, before: await this.hydrate(c.before), after: await this.hydrate(c.after) };
+    if (hydrate) {
+      const loaded = new Map<string, Promise<FileSnapshot>>();
+      const load = (snapshot: FileSnapshot) => {
+        const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
+        let pending = loaded.get(key);
+        if (!pending) { pending = this.hydrate(snapshot); loaded.set(key, pending); }
+        return pending;
+      };
+      for (const [p, c] of Object.entries(run.changes)) {
+        const segments = c.segments ? await Promise.all(c.segments.map(async s => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : undefined;
+        run.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...(segments ? { segments } : {}) };
+      }
+    }
     return run;
   }
   async importInbox(generation: string): Promise<void> {
