@@ -186,7 +186,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     </section> : <pre className="gm-error" role="alert">{error}</pre>)}
     {notice && <p className="gm-notice" role="status">{localizedNotice(notice)}{notice.startsWith('Commit 已创建') && <button className="gm-text-button" onClick={() => { setPage('history'); setOffset(0); }}>查看历史</button>}</p>}
     {status && !status.head && <p className="gm-hint">仓库尚无提交。勾选文件并填写摘要，即可创建首次 Commit。</p>}
-    <fieldset disabled={busy || !!confirmation || !status} className="gm-controls">
+    <fieldset disabled={busy || !!confirmation || !status} className="gm-controls" data-page={page}>
       {filePage && <>
         <div className="gm-selection-bar" role="group" aria-label="文件选择与批量操作">
           <input ref={selectAllRef} type="checkbox" aria-label="选择全部可操作文件" title="选择全部可操作文件" checked={actionable.length > 0 && selectedPaths.length === actionable.length} disabled={!actionable.length} onChange={event => setSelected(event.target.checked ? actionable.map(entry => entry.path) : [])} />
@@ -222,7 +222,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         <div className="gm-toolbar"><label>新分支名 <input value={name} onChange={e => setName(e.target.value)} /></label>
           <button disabled={!name.trim() || !status?.head} onClick={() => void execute({ operation: 'branchCreate', name }, true)}>从 HEAD 创建</button></div>
         <label className="gm-field">重命名目标<input value={newName} onChange={e => setNewName(e.target.value)} /></label>
-        <ul className="gm-list">{branches.map(branch => <li key={branch.name}><strong className="gm-path">{branch.name}{branch.current ? ' · 当前' : ''}</strong>
+        <ul className="gm-list gm-records gm-branches">{branches.map(branch => <li key={branch.name}><strong className="gm-path" title={`${branch.name}${branch.current ? ' · 当前' : ''}`}>{branch.name}{branch.current ? ' · 当前' : ''}</strong>
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchSwitch', name: branch.name }, `切换到 ${branch.name}？本地改动会保留；若切换会覆盖改动，Git 将拒绝执行。不会强制覆盖，也不会自动创建或恢复 Stash。`)}>切换</button>
           <button disabled={!newName.trim()} onClick={() => ask({ operation: 'branchRename', name: branch.name, newName }, `将 ${branch.name} 重命名为 ${newName}？`)}>重命名</button>
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchDelete', name: branch.name }, `安全删除 ${branch.name}？只允许删除已合入 HEAD 的非当前分支，不支持强制删除。`)}>安全删除</button>
@@ -241,7 +241,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         <label className="gm-field">Stash 说明<input maxLength={1000} value={stashMessage} onChange={e => setStashMessage(e.target.value)} /></label>
         <label><input type="checkbox" checked={includeUntracked} onChange={e => setIncludeUntracked(e.target.checked)} /> 包含未跟踪文件（不包含忽略文件）</label>
         <button disabled={!status?.head} onClick={() => ask({ operation: 'stashCreate', message: stashMessage, includeUntracked }, '保存仓库改动为 stash，并从工作区移除这些改动。是否继续？')}>创建 Stash</button>
-        <ul className="gm-list">{stashes.map(stash => <li key={stash.ref}><button className="gm-path" onClick={() => void execute(stashArgs('stashShow', stash))}>{stash.ref} · {stash.subject}</button>
+        <ul className="gm-list gm-records gm-stashes">{stashes.map(stash => <li key={stash.ref}><button className="gm-path" title={`${stash.ref} · ${stash.subject}`} onClick={() => void execute(stashArgs('stashShow', stash))}>{stash.ref} · {stash.subject}</button>
           <button onClick={() => ask(stashArgs('stashApply', stash), `应用 ${stash.ref}，保留 stash；需要干净工作区。如发生冲突，请手动解决。`)}>Apply</button>
           <button onClick={() => ask(stashArgs('stashPop', stash), `应用并在成功后删除 ${stash.ref}？冲突时保留 stash，请手动解决。`)}>Pop</button>
           <button onClick={() => ask(stashArgs('stashDrop', stash), `永久删除 ${stash.ref}？这不会恢复其中的改动。`)}>Drop</button>

@@ -218,3 +218,70 @@ for (const width of [360, 600, 1100]) for (const base of ['light', 'dark'] as co
   await expect(sessionButton).toHaveAttribute('aria-pressed', 'true'); await expect(page.locator('.dv-file').first()).toBeVisible();
   await noHorizontalOverflow(page);
 });
+
+async function uniformCapture(page: Page, name: string) {
+  if (process.env.UNIFORM_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.PI_SCRATCH_DIR!, `uniform-${name}.png`), animations: 'disabled' });
+}
+async function popupStyle(dialog: Locator) {
+  return dialog.evaluate(node => {
+    const css = getComputedStyle(node);
+    return { radius: css.borderRadius, border: css.borderColor, padding: css.padding, shadow: css.boxShadow, font: css.fontFamily, background: css.backgroundColor };
+  });
+}
+for (const width of [360, 600]) for (const base of ['light', 'dark']) test(`uniform controls and dialogs across every Git page (${width}px ${base})`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 800 }); await open(page, `base=${base}&${session}`);
+  await expect(page.locator('.dv-file').first()).toBeVisible();
+  await page.getByTitle('显示设置', { exact: true }).click();
+  const menu = page.locator('.dv-settings-menu > .dv-menu-body');
+  await expect(menu).toHaveCSS('border-radius', '16px');
+  await expect(menu.locator('select').first()).toHaveCSS('border-radius', '8px');
+  const shadow = await menu.evaluate(node => getComputedStyle(node).boxShadow);
+  await uniformCapture(page, `settings-${width}-${base}`);
+  await page.getByRole('button', { name: '清空记录历史', exact: true }).click();
+  const reviewDialog = page.getByRole('dialog'); await expect(reviewDialog).toBeVisible();
+  const reviewStyle = await popupStyle(reviewDialog);
+  expect(reviewStyle.radius).toBe('16px'); expect(reviewStyle.shadow).toBe(shadow);
+  await expect(reviewDialog.getByRole('button').first()).toHaveCSS('border-radius', '8px');
+  await noHorizontalOverflow(page); await uniformCapture(page, `review-confirm-${width}-${base}`);
+  await page.keyboard.press('Escape'); await expect(reviewDialog).toHaveCount(0);
+  await page.getByRole('button', { name: '本地 Git', exact: true }).click();
+  const git = page.locator('.git-management');
+  await expect(page.getByLabel('提交摘要')).toHaveCSS('border-radius', '8px');
+  await expect(git.locator('.gm-icon-button').first()).toHaveCSS('border-radius', '8px');
+  await expect(git.locator('.gm-protected')).toHaveCSS('border-radius', '12px');
+  for (const [label, key] of [['工作区', 'workspace'], ['暂存区', 'staged'], ['分支', 'branches'], ['历史', 'history'], ['Blame', 'blame'], ['Stash', 'stash']]) {
+    await git.getByRole('button', { name: label, exact: true }).click();
+    await expect(git.locator('.gm-controls')).toHaveAttribute('data-page', key);
+    await expect(git.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+    for (const input of await git.locator('input:not([type="checkbox"]), textarea').all()) if (await input.isVisible()) await expect(input).toHaveCSS('border-radius', '8px');
+    if (key === 'history') {
+      await expect(git.locator('.gm-commit')).toHaveCSS('border-width', '0px');
+      await git.locator('.gm-commit').click(); await expect(git.getByRole('region', { name: 'Git 详情' })).toBeVisible();
+      await git.getByRole('button', { name: '关闭详情', exact: true }).click();
+    }
+    if (key === 'blame') { await git.getByLabel('仓库相对文件路径').fill('src/second.ts'); await git.getByRole('button', { name: '查看 HEAD 行归属' }).click(); await expect(git.getByRole('region', { name: 'Git 详情' })).toBeVisible(); await git.getByRole('button', { name: '关闭详情' }).click(); }
+    await noHorizontalOverflow(page); await uniformCapture(page, `${key}-${width}-${base}`);
+    if (key === 'branches' || key === 'stash') {
+      const title = git.locator('.gm-records .gm-path').last();
+      await expect(title).toHaveCSS('text-overflow', 'ellipsis');
+      await expect(title).toHaveCSS('white-space', 'nowrap');
+      expect(await title.getAttribute('title')).toBe(await title.textContent());
+      await git.getByRole('button', { name: key === 'branches' ? '切换' : 'Apply', exact: true }).last().click();
+      const dialog = page.getByRole('dialog'); await expect(dialog).toBeVisible();
+      expect(await popupStyle(dialog)).toEqual(reviewStyle);
+      await uniformCapture(page, `${key}-confirm-${width}-${base}`); await page.keyboard.press('Escape');
+    }
+  }
+  await git.getByRole('button', { name: '工作区', exact: true }).click();
+  await page.getByRole('checkbox', { name: '选择全部可操作文件', exact: true }).check();
+  await page.getByLabel('提交摘要').fill('仅检查外观，不执行提交');
+  await page.getByRole('button', { name: 'Commit', exact: true }).click();
+  const dialog = page.getByRole('dialog'); await expect(dialog).toBeVisible();
+  expect(await popupStyle(dialog)).toEqual(reviewStyle);
+  await uniformCapture(page, `commit-confirm-${width}-${base}`); await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as any).__themeDemo.calls.some((call: any) => ['branchSwitch', 'stashApply', 'commit'].includes(call.operation)))).toBe(false);
+  await page.evaluate(() => (window as any).__themeDemo.failNext = true);
+  await git.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(git.getByRole('alert')).toHaveCSS('border-radius', '12px');
+  await uniformCapture(page, `git-error-${width}-${base}`); await noHorizontalOverflow(page);
+});

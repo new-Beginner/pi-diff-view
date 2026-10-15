@@ -10,7 +10,7 @@
   --dv-bg: var(--ds-bg-dock, var(--dv-fallback-bg));
   --dv-ink: var(--ds-text-primary, var(--dv-fallback-ink));
   --dv-muted: var(--ds-text-muted, color-mix(in srgb, var(--dv-ink) 68%, var(--dv-bg)));
-  --dv-border: var(--ds-border-default, color-mix(in srgb, var(--dv-ink) 22%, var(--dv-bg)));
+  --dv-border: var(--ds-border-default, color-mix(in srgb, var(--dv-ink) 9%, var(--dv-bg)));
   --dv-focus: var(--ds-focus, var(--dv-ink));
   --dv-surface: var(--ds-bg-elevated-opaque, color-mix(in srgb, var(--dv-ink) 4%, var(--dv-bg)));
   --dv-hover: var(--ds-bg-hover, color-mix(in srgb, var(--dv-ink) 7%, var(--dv-bg)));
@@ -23,6 +23,13 @@
   --dv-del-word: color-mix(in srgb, var(--dv-red) 23%, var(--dv-bg));
   --dv-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --dv-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --dv-control-border: var(--ds-border-default, color-mix(in srgb, var(--dv-ink) 14%, var(--dv-bg)));
+  --dv-radius-control: 8px;
+  --dv-radius-surface: 12px;
+  --dv-radius-popup: 16px;
+  --dv-radius-pill: 20px;
+  --dv-popup-shadow: 0 8px 24px rgb(0 0 0 / .08), 0 2px 6px rgb(0 0 0 / .04);
+  --dv-backdrop: rgb(0 0 0 / .28);
 }
 :root[data-base='dark'], .dv-theme[data-base='dark'], .dv-app[data-base='dark'], .git-management[data-base='dark'] {
   color-scheme: dark;
@@ -30,17 +37,19 @@
   --dv-fallback-ink: #eeeeee;
   --dv-fallback-green: #40c977;
   --dv-fallback-red: #ff6764;
+  --dv-popup-shadow: 0 8px 24px rgb(0 0 0 / .24), 0 2px 6px rgb(0 0 0 / .12);
+  --dv-backdrop: rgb(0 0 0 / .48);
 }
 html, body { margin: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13px/1.5 var(--dv-font); }
 #root { min-width: 0; }
 .dv-panel { height: calc(100dvh - var(--pi-plugin-titlebar-height, 0px)); min-height: 240px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13px/1.45 var(--dv-font); }
 .dv-panel *, .dv-panel *::before, .dv-panel *::after { box-sizing: border-box; }
 .dv-panel-nav { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: 8px; padding: 6px 12px 0; background: transparent; }
-.dv-panel-nav button, .dv-panel-nav select, .dv-panel-message button { font: inherit; color: inherit; background: var(--dv-bg); border: 1px solid var(--dv-border); border-radius: 4px; padding: 4px 8px; min-height: 32px; }
+.dv-panel-nav button, .dv-panel-nav select, .dv-panel-message button { font: inherit; color: inherit; background: var(--dv-bg); border: 1px solid var(--dv-control-border); border-radius: var(--dv-radius-control); padding: 5px 10px; min-height: 32px; }
 .dv-panel-nav button, .dv-panel-message button { cursor: pointer; }
 .dv-panel-nav button:hover:not(:disabled), .dv-panel-message button:hover:not(:disabled) { background: var(--dv-hover); }
 .dv-panel-nav button:active:not(:disabled), .dv-panel-message button:active:not(:disabled) { background: var(--dv-selected); }
-.dv-panel-modes { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ds-border-default, color-mix(in srgb, var(--dv-ink) 9%, var(--dv-bg))); border-radius: 20px; }
+.dv-panel-modes { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--dv-border); border-radius: var(--dv-radius-pill); }
 .dv-panel-modes button { min-height: 28px; padding: 4px 12px; border: 0; border-radius: 16px; background: transparent; color: var(--dv-muted); font-size: 12px; line-height: 20px; font-weight: 500; }
 .dv-panel-modes button[aria-pressed='true'] { background: var(--dv-selected); color: var(--dv-ink); font-weight: 600; }
 .dv-panel-nav .dv-panel-modes button:focus-visible { outline-offset: -2px; }
@@ -51,7 +60,7 @@ html, body { margin: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13
 .dv-panel-page { height: 100%; min-height: 0; min-width: 0; }
 .dv-panel-page[hidden] { display: none; }
 .dv-panel-page > .dv-app { height: 100%; min-height: 0; }
-.dv-panel-message { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; padding: 24px 16px; overflow-wrap: anywhere; color: var(--dv-muted); }
-.dv-panel-message[role='alert'] { color: var(--dv-red); }
+.dv-panel-message { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; padding: 24px 16px; overflow-wrap: anywhere; color: var(--dv-muted); line-height: 1.6; }
+.dv-panel-message[role='alert'] { color: var(--dv-red); background: var(--dv-del-bg); border-left: 3px solid var(--dv-red); padding: 12px 16px; }
 @keyframes dv-state-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .dv-state-enter { animation: none !important; } }

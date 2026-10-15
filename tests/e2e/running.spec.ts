@@ -64,11 +64,22 @@ async function stop(page: Page) { await page.evaluate(() => (window as any).__li
 for (const width of [360, 600, 1100]) for (const theme of ['light', 'dark'] as const) test(`running pill centered above its composer at ${width}px ${theme}`, async ({ page }, info) => {
   base = theme; await page.setViewportSize({ width, height: 820 }); await setup(page);
   const pill = page.locator('.dv-running-pill'); await expect(pill).toHaveCount(1); await expect(pill).toBeVisible(); await expect(pill).toHaveText('1 个文件已更改+11-0');
+  await expect(pill).toHaveCSS('border-radius', '20px');
+  expect(await pill.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe('none');
+  await expect(pill).toHaveCSS('font-size', '13px');
   const layout = async () => { const p = await pill.boundingBox(), c = await page.locator('.composer-shell').boundingBox(); expect(p).not.toBeNull(); expect(c).not.toBeNull(); expect(Math.abs(p!.x + p!.width / 2 - c!.x - c!.width / 2)).toBeLessThan(2); expect(p!.y + p!.height).toBeLessThanOrEqual(c!.y - 7); expect(p!.x).toBeGreaterThanOrEqual(0); expect(p!.x + p!.width).toBeLessThanOrEqual(width); };
   await layout(); await expect(page.getByRole('button', { name: '停止当前任务' })).toBeVisible(); await expect(page.locator('.dv-running-float')).toHaveAttribute('data-base', theme);
   expect(await pill.locator('.dv-running-add').evaluate(node => getComputedStyle(node).color)).not.toBe(await pill.locator('.dv-running-del').evaluate(node => getComputedStyle(node).color));
   await pill.focus(); expect(await pill.evaluate(node => getComputedStyle(node).outlineStyle)).toBe('solid');
   const screenshot = info.outputPath(`running-pill-${width}-${theme}.png`); await page.screenshot({ path: screenshot }); await info.attach('running-pill', { path: screenshot, contentType: 'image/png' });
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--ds-bg-elevated-opaque', '#f1f2f3');
+    document.documentElement.style.setProperty('--ds-text-muted', '#667788');
+    document.documentElement.style.setProperty('--ds-border-default', '#a1b2c3');
+  });
+  await expect(pill).toHaveCSS('background-color', 'rgb(241, 242, 243)');
+  await expect(pill).toHaveCSS('color', 'rgb(102, 119, 136)');
+  await expect(pill).toHaveCSS('border-color', 'rgb(161, 178, 195)');
   await page.locator('.composer-input').evaluate(node => (node as HTMLElement).style.minHeight = '110px'); await page.waitForTimeout(100); await layout();
   await page.locator('#live-chat').evaluate(node => (node as HTMLElement).style.width = '90%'); await page.waitForTimeout(100); await layout();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width); await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);

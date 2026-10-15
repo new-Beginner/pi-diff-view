@@ -439,3 +439,27 @@ test('does not show a separate child reply change card even if its message ID ha
   await expect(page.locator('.dv-turn-card, .dv-turn-file')).toHaveCount(0);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
+
+for (const base of ['light', 'dark']) test(`host cards share the control scale and honor live theme tokens (${base})`, async ({ page }, info) => {
+  await page.setViewportSize({ width: 900, height: 800 }); await setup(page, 'zh-CN', `&base=${base}&scopedStyles=true`);
+  const card = page.locator('.dv-turn-card').first(), openButton = card.locator('.dv-turn-open');
+  await expect(card).toHaveCSS('border-radius', '12px');
+  await expect(openButton).toHaveCSS('border-radius', '8px');
+  await expect(card.locator('.dv-turn-file').first()).toHaveCSS('border-radius', '0px');
+  await expect(card).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  expect(await card.evaluate(node => getComputedStyle(node).getPropertyValue('--dv-radius-popup').trim())).toBe('16px');
+  await page.screenshot({ path: info.outputPath(`uniform-host-card-${base}.png`) });
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--ds-border-default', '#a1b2c3');
+    document.documentElement.style.setProperty('--ds-text-muted', '#667788');
+    document.documentElement.style.setProperty('--ds-bg-hover', '#e1e2e3');
+    document.body.insertAdjacentHTML('beforeend', '<button id="unrelated-host-control">宿主原有按钮</button>');
+  });
+  await expect(card).toHaveCSS('border-color', 'rgb(161, 178, 195)');
+  await expect(card.locator('.dv-path-directory').first()).toHaveCSS('color', 'rgb(102, 119, 136)');
+  await openButton.hover(); await expect(openButton).toHaveCSS('background-color', 'rgb(225, 226, 227)');
+  expect(await page.locator('#unrelated-host-control').evaluate(node => getComputedStyle(node).getPropertyValue('--dv-radius-control').trim())).toBe('');
+  await openButton.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+  await expect(openButton).toBeFocused(); await expect(openButton).toHaveCSS('outline-width', '2px');
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
