@@ -11,8 +11,9 @@ export interface DiffLine { kind: 'context' | 'add' | 'del' | 'notice'; text: st
 export interface DiffHunk { id: string; header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLine[]; }
 export interface ReviewFile { id: string; path: string; origin?: 'workspace' | 'external'; absolutePath?: string; oldPath?: string; status: 'added' | 'modified' | 'deleted' | 'renamed' | 'mode'; kind: FileKind; additions: number; deletions: number; statsKnown?: boolean; segmentCount?: number; fingerprint: string; actions: Action[]; note?: string; state?: 'active' | 'reverted'; }
 export interface InternalFile extends ReviewFile { before: FileSnapshot; after: FileSnapshot; indexFingerprint?: string; }
-export interface ReviewRequest { scope: Scope; root?: string; ref?: string; sessionId?: string; runId?: string; focusFileId?: string; }
-export interface ReviewSummary { id: string; scope: Scope; root: string; files: ReviewFile[]; nextFileOffset?: number | null; notice?: string; sessionId?: string; runId?: string; run?: RunSummary; }
+export interface ReviewRequest { scope: Scope; root?: string; ref?: string; sessionId?: string; runId?: string; focusFileId?: string; retrySync?: boolean; }
+export interface ReviewSync { state: 'ready' | 'pending' | 'unavailable'; }
+export interface ReviewSummary { id: string; scope: Scope; root: string; files: ReviewFile[]; nextFileOffset?: number | null; notice?: string; sessionId?: string; runId?: string; run?: RunSummary; sync?: ReviewSync; }
 export interface ReviewFilesPage { reviewId: string; files: ReviewFile[]; offset: number; nextOffset: number | null; }
 export interface ReviewDetail { file: ReviewFile; hunks: DiffHunk[]; offset: number; totalRows: number; nextOffset: number | null; }
 export interface TurnSummary { runId: string; sessionId: string; fileCount: number; additions: number; deletions: number; unknownFileCount?: number; incomplete: boolean; files: ReviewFile[]; offset: number; nextOffset: number | null; notice?: string; }

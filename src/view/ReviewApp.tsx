@@ -54,6 +54,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const [reviewError, setReviewError] = useState('');
   const [loadingReview, setLoadingReview] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<{ scope: string; state: 'ready' | 'pending' | 'unavailable' }>();
+  const syncWait = useRef<{ scope: string; at: number }>();
+  const retrySync = useRef(false);
+  const retryReview = () => { retrySync.current = true; syncWait.current = undefined; setRefreshTick(value => value + 1); };
   const [selected, setSelected] = useState('');
   const [query, setQuery] = useState('');
   const [context, setContext] = useState(3);
@@ -79,6 +83,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const live = useRef(true);
   const sessionKey = initialRequest.sessionId ?? request.sessionId;
   const scopeKey = `${request.scope}|${request.root}|${request.ref}|${request.sessionId}|${request.runId}`;
+  const reviewSync = syncStatus?.scope === scopeKey ? syncStatus.state : 'ready';
   const scopeRef = useRef(scopeKey); scopeRef.current = scopeKey;
   useEffect(() => { setConfirmation(value => value?.kind === 'systemOpen' && value.scope !== scopeKey ? null : value); }, [scopeKey]);
   const diffPane = useRef<HTMLDivElement>(null);
@@ -188,9 +193,17 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     if ((request.scope === 'commit' || request.scope === 'branch') && !request.ref?.trim()) { setLoadingReview(false); setReviewError(t.emptyRef); return; }
     // Background updates never clear existing content or disable its read-only controls.
     reviewPending.current = true; setLoadingReview(changedScope || !matchingReview);
-    transport.invoke<ReviewSummary>('review', { ...request, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(async response => {
+    const restartSync = retrySync.current; retrySync.current = false;
+    transport.invoke<ReviewSummary>('review', { ...request, retrySync: restartSync || undefined, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(async response => {
       if (!active) return;
       if (response.scope !== request.scope || response.sessionId !== request.sessionId || (request.scope === 'turn' && response.runId !== request.runId) || (request.root && response.root !== request.root)) throw new Error('审查结果与当前会话或轮次不匹配，请刷新。');
+      if (response.sync?.state === 'pending') {
+        if (syncWait.current?.scope !== scopeKey) syncWait.current = { scope: scopeKey, at: Date.now() };
+        setSyncStatus({ scope: scopeKey, state: Date.now() - syncWait.current.at < 15000 ? 'pending' : 'unavailable' });
+        return; // Keep verified content; pending metadata is not an unknown historical result.
+      }
+      syncWait.current = undefined;
+      setSyncStatus({ scope: scopeKey, state: response.sync?.state ?? 'ready' });
       if (review?.id === response.id && review.nextFileOffset == null) return;
       let data: ReviewSummary = { ...response, files: response.files.filter(file => !isImagePath(file.path)), nextFileOffset: response.nextFileOffset ?? null };
       const targetId = (id: string) => data.files.some(file => file.id === id) ? id : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.nextFileOffset != null ? initialFileId ?? id : data.files[0]?.id ?? '';
@@ -240,10 +253,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   }, [transport, scopeKey, refreshTick, panelActive]);
   const resetPage = () => { setCollapsed(new Set()); };
   useEffect(() => {
-    if (!panelActive || (request.scope !== 'lastTurn' && matchingReview?.run?.state !== 'running')) return;
+    if (!panelActive || reviewSync === 'unavailable' || (reviewSync !== 'pending' && request.scope !== 'lastTurn' && matchingReview?.run?.state !== 'running')) return;
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden' && !reviewPending.current) setRefreshTick(value => value + 1); }, 750);
     return () => clearInterval(timer);
-  }, [panelActive, request.scope, scopeKey, matchingReview?.runId, matchingReview?.run?.state]);
+  }, [panelActive, request.scope, scopeKey, matchingReview?.runId, matchingReview?.run?.state, reviewSync]);
   const currentFile = detail?.file.id === selected ? detail.file : matchingReview?.files.find(file => file.id === selected);
   const visibleFiles = useMemo(() => {
     const needle = query.toLowerCase();
@@ -277,6 +290,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   }, []);
   const confirmOperation = () => perform(async () => {
     const target = confirmation; if (!target) return;
+    if ((target.kind === 'action' || target.kind === 'batch') && reviewSync !== 'ready') throw new Error(locale.startsWith('zh') ? '修改记录仍在同步，请完成同步后重试。' : 'Change history is still syncing; retry after synchronization.');
     const key = scopeRef.current;
     if (target.kind === 'action') {
       const args: ReviewActionRequest = { reviewId: target.review.id, fileId: target.file.id, action: target.action, hunkId: target.hunk?.id, fingerprint: target.file.fingerprint, confirmed: true };
@@ -357,7 +371,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     menu.dataset.placement = upward ? 'above' : 'below';
     body.style.maxHeight = `${Math.max(60, upward ? above : below)}px`;
   };
-  const actionButtons = (file: ReviewFile, hunk?: DiffHunk) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || loadingDetail} onClick={() => { setError(''); if (review) setConfirmation({ kind: 'action', action, file, hunk, review }); }}>{t[action]}</button>);
+  const actionButtons = (file: ReviewFile, hunk?: DiffHunk) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || loadingDetail || reviewSync !== 'ready'} onClick={() => { setError(''); if (review) { setConfirmation({ kind: 'action', action, file, hunk, review }); } }}>{t[action]}</button>);
   const selectedIndex = visibleFiles.findIndex(file => file.id === selected);
   const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id} data-expanded={file.id === selected && !fileCollapsed}>
     <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) { if (fileCollapsed) setFileCollapsed(false); else collapseFile(); } else openFile(file); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
@@ -384,7 +398,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         <div className="dv-top-actions">
           <button className="dv-icon-button" aria-label={t.search} title={t.search} aria-pressed={searchOpen} onClick={() => setSearchOpen(value => !value)}><ReviewIcon name="search" /></button>
           <details className="dv-menu dv-settings-menu"><summary aria-label={t.settings} title={t.settings}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
-            <button disabled={busy || loadingReview} onClick={() => setBootTick(value => value + 1)}>{t.refresh}</button>
+            <button disabled={busy || loadingReview} onClick={() => { retrySync.current = true; syncWait.current = undefined; setBootTick(value => value + 1); }}>{t.refresh}</button>
             <label className="dv-check"><input type="checkbox" checked={wrap} onChange={event => saveSettings({ wordWrap: event.target.checked })} />{t.wrap}</label>
             <div className="dv-segment" role="group" aria-label={t.settings}><button aria-pressed={layout === 'unified'} onClick={() => saveSettings({ layout: 'unified' })}>{t.unified}</button><button aria-pressed={layout === 'split'} onClick={() => saveSettings({ layout: 'split' })}>{t.split}</button></div>
             <label>{t.context}<select aria-label={t.context} value={context} disabled={busy} onChange={event => { resetPage(); setContext(Number(event.target.value)); }}><option value={1}>1</option><option value={3}>3</option><option value={20}>20</option><option value={-1}>{t.full}</option></select></label>
@@ -393,7 +407,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
             <hr />
             <label className="dv-repository">{t.repository}<select aria-label={t.repository} value={request.root ?? ''} disabled={!boot || busy} onChange={event => { const root = event.target.value || undefined; if (request.scope === 'lastTurn') latestRoot.current = root; setFileCollapsed(false); setRequest(value => ({ ...value, root, runId: undefined, sessionId: initialRequest.sessionId })); setQuery(''); }}><option value="" disabled={request.scope !== 'lastTurn'}>{request.scope === 'lastTurn' ? locale.startsWith('zh') ? '本会话全部项目' : 'All projects in this session' : '—'}</option>{roots.map(root => <option key={root} value={root}>{boot?.repositories.find(repo => repo.root === root)?.name ?? root}</option>)}</select></label>
             <label>{t.language}<select aria-label={t.language} value={locale.startsWith('zh') ? 'zh-CN' : 'en'} onChange={event => setLocale(event.target.value)}><option value="zh-CN">中文</option><option value="en">English</option></select></label>
-            <div className="dv-toolbar" aria-label={t.batch}>{(['stage', 'unstage', 'revert', 'reapply'] as Action[]).map(action => { const files = visibleFiles.filter(file => file.actions.includes(action)).slice(0, 20); return files.length > 1 && <button key={action} disabled={busy || loadingReview} onClick={() => { if (review) { setError(''); setBatchResults([]); setConfirmation({ kind: 'batch', action, files, review }); } }}>{t[action]} · {files.length}</button>; })}</div>
+            <div className="dv-toolbar" aria-label={t.batch}>{(['stage', 'unstage', 'revert', 'reapply'] as Action[]).map(action => { const files = visibleFiles.filter(file => file.actions.includes(action)).slice(0, 20); return files.length > 1 && <button key={action} disabled={busy || loadingReview || reviewSync !== 'ready'} onClick={() => { if (review) { setError(''); setBatchResults([]); setConfirmation({ kind: 'batch', action, files, review }); } }}>{t[action]} · {files.length}</button>; })}</div>
             <button disabled={!boot?.runs.length || busy} onClick={() => { setError(''); setConfirmation({ kind: 'history' }); }}>{t.clearHistory}</button>
             {review?.notice && <p className="dv-muted">{review.notice}</p>}
             {context !== 3 && <p className="dv-muted">{t.expandedHint}</p>}
@@ -408,18 +422,19 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         {searchOpen && <input autoFocus type="search" aria-label={t.search} placeholder={t.search} value={query} onChange={event => setQuery(event.target.value)} />}
       </div>
     </header>
+    {reviewSync !== 'ready' && <div className="dv-message" role={reviewSync === 'pending' ? 'status' : 'alert'} aria-live="polite"><span>{reviewSync === 'pending' ? locale.startsWith('zh') ? '正在同步修改记录…' : 'Syncing change history…' : locale.startsWith('zh') ? '修改记录同步未完成；当前仅展示已保存记录，可重试。' : 'Change history sync is incomplete; showing saved records only. Retry to sync.'}</span>{reviewSync === 'unavailable' && <button disabled={busy || loadingReview} onClick={retryReview}>{t.retry}</button>}</div>}
     {unknownFiles > 0 && <details className="dv-stats-note"><summary>{unknownFiles} 个文件暂无法显示行数</summary><p>仅统计有完整快照的文本文件。缺失历史内容的文件仍保留记录，但无法重建差异。</p></details>}
-    {reviewError && matchingReview && <div className="dv-message dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div>}
+    {reviewError && matchingReview && <div className="dv-message dv-error" role="alert">{reviewError}<button onClick={retryReview}>{t.retry}</button></div>}
     {error && <div className="dv-message dv-error" role="alert">{error}</div>}
     {status && <div className="dv-toast" role="status">{status}</div>}
     {batchResults.length > 0 && <details className="dv-message" open><summary>{t.batch}</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{batchResults.map(result => `${result.ok ? '✓' : '✗'} ${result.path}: ${result.message}`).join('\n')}</pre></details>}
     {bootError ? <div className="dv-empty dv-error" role="alert">{bootError}<button onClick={() => setBootTick(value => value + 1)}>{t.retry}</button></div> : !boot && !review ? <div className="dv-empty" role="status">{t.loading}</div> : <div className="dv-workspace" ref={workspaceRef}>
       <nav className="dv-file-list" aria-label={t.files}>{(selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex)).map(fileRow)}</nav>
-      {!visibleFiles.length && !loadingReview && !reviewError && !bootError && <p className="dv-rail-empty">{query ? t.noMatches : matchingReview?.run?.state === 'running' ? locale.startsWith('zh') ? '本轮正在运行，尚未记录文件修改。' : 'This turn is running; no file changes recorded yet.' : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
+      {!visibleFiles.length && !loadingReview && !reviewError && !bootError && reviewSync === 'ready' && <p className="dv-rail-empty">{query ? t.noMatches : matchingReview?.run?.state === 'running' ? locale.startsWith('zh') ? '本轮正在运行，尚未记录文件修改。' : 'This turn is running; no file changes recorded yet.' : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
       <section className="dv-file-section">
       {selectedIndex >= 0 && fileRow(visibleFiles[selectedIndex])}
-      <main className="dv-review" hidden={fileCollapsed || Boolean(query && selectedIndex < 0) || (!currentFile && review?.nextFileOffset == null && !loadingReview && !reviewError && !bootError && Boolean(review))} aria-busy={loadingReview || loadingDetail}>
-        {loadingReview && !matchingReview ? <div className="dv-empty" role="status">{t.loading}</div> : reviewError && !matchingReview ? <div className="dv-empty dv-error" role="alert">{reviewError}<button onClick={() => setRefreshTick(value => value + 1)}>{t.retry}</button></div> : !review ? <div className="dv-empty">{t.noRoots}</div> : !currentFile ? review.files.length || review.nextFileOffset != null ? <div className="dv-empty">{review.nextFileOffset != null ? t.loading : t.chooseFile}</div> : null : <>
+      <main className="dv-review" hidden={fileCollapsed || (!review && reviewSync !== 'ready') || Boolean(query && selectedIndex < 0) || (!currentFile && review?.nextFileOffset == null && !loadingReview && !reviewError && !bootError && Boolean(review))} aria-busy={loadingReview || loadingDetail || reviewSync === 'pending'}>
+        {loadingReview && !matchingReview ? <div className="dv-empty" role="status">{t.loading}</div> : reviewError && !matchingReview ? <div className="dv-empty dv-error" role="alert">{reviewError}<button onClick={retryReview}>{t.retry}</button></div> : !review ? <div className="dv-empty">{t.noRoots}</div> : !currentFile ? review.files.length || review.nextFileOffset != null ? <div className="dv-empty">{review.nextFileOffset != null ? t.loading : t.chooseFile}</div> : null : <>
           <h2 className="dv-sr-only">{currentFile.path}</h2>
           <div className={`dv-diff-pane ${wrap ? 'dv-wrap' : 'dv-nowrap'}`} ref={diffPane} tabIndex={0} aria-label={`${currentFile.path} ${t.title}`}>
             {loadingDetail && !detail ? <div className="dv-empty" role="status">{t.loading}</div> : detailError && !detail ? <div className="dv-empty dv-error" role="alert">{detailError}<button onClick={() => setDetailTick(value => value + 1)}>{t.retry}</button></div> : currentFile.kind !== 'text' && !currentFile.segmentCount ? <div className="dv-empty">{t[currentFile.kind]}</div> : detail && !detail.hunks.length ? <div className="dv-empty">{currentFile.status === 'mode' ? t.mode : t.noHunks}</div> : viewHunks.map(({ key, hunk }) => <section className="dv-hunk" key={key}>
@@ -438,7 +453,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       {confirmation.kind === 'systemOpen' && <p>{confirmation.file.absolutePath ?? `${confirmation.review.root}/${confirmation.file.path}`}</p>}
       {confirmation.kind === 'batch' && <><p>{confirmation.review.root} · {t[confirmation.review.scope]}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{confirmation.files.map(file => file.path).join('\n')}</pre></>}
       {confirmation.kind === 'action' ? <dl className="dv-target"><dt>{t.repository}</dt><dd>{confirmation.review.root}</dd><dt>{t.scope}</dt><dd>{t[confirmation.review.scope]}</dd><dt>{t.target}</dt><dd>{confirmation.file.path}{confirmation.file.oldPath && <> ← {confirmation.file.oldPath}</>}</dd><dt>{t.action}</dt><dd>{t[confirmation.action]} · {confirmation.hunk ? `${t.hunk} ${confirmation.hunk.header}` : t.wholeFile}</dd></dl> : confirmation.kind === 'history' ? <p>{t.history}: {boot?.runs.length ?? 0}</p> : null}
-      {error && <p className="dv-error" role="alert">{error}</p>}<div className="dv-dialog-actions"><button disabled={busy} onClick={() => setConfirmation(null)} autoFocus>{t.cancel}</button><button className="dv-primary" disabled={busy} onClick={confirmOperation}>{busy ? t.loading : t.confirm}</button></div>
+      {error && <p className="dv-error" role="alert">{error}</p>}<div className="dv-dialog-actions"><button disabled={busy} onClick={() => setConfirmation(null)} autoFocus>{t.cancel}</button><button className="dv-primary" disabled={busy || ((confirmation.kind === 'action' || confirmation.kind === 'batch') && reviewSync !== 'ready')} onClick={confirmOperation}>{busy ? t.loading : t.confirm}</button></div>
     </Modal>}
   </section>;
 }

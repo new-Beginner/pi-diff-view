@@ -198,6 +198,83 @@ function evidenceRevision(text) {
   return `${text.length}-${hash >>> 0}`;
 }
 
+// src/renderer/session-context-publisher.ts
+var retryDelays = [500, 1e3, 2e3];
+function createSessionContextPublisher(options) {
+  let sessionId, generation = 0, disposed = false, publishing = false;
+  let pending, uploaded;
+  let retryTimer;
+  const alive = () => !disposed && options.isCurrent();
+  const cancelRetry = () => {
+    if (retryTimer !== void 0) clearTimeout(retryTimer);
+    retryTimer = void 0;
+  };
+  const publish = async () => {
+    if (publishing || !alive()) return;
+    publishing = true;
+    try {
+      while (pending && alive()) {
+        const work = pending, version = generation;
+        const currentSession = () => alive() && generation === version;
+        const latest = () => currentSession() && pending === work;
+        try {
+          const { evidence, ...metadata } = work.context;
+          const key = JSON.stringify([metadata.sessionId, metadata.root, metadata.evidenceRevision]);
+          if (evidence && key !== uploaded) {
+            if (new TextEncoder().encode(evidence).length > 8 * 1024 * 1024) throw new Error("Host evidence exceeds 8 MiB");
+            const chunks = evidenceChunks(evidence);
+            for (const [index, chunk] of chunks.entries()) {
+              if (!latest()) break;
+              await options.transport.invoke("sessionEvidence", { sessionId: metadata.sessionId, root: metadata.root, revision: metadata.evidenceRevision, index, chunk, final: index === chunks.length - 1 });
+              if (!currentSession()) break;
+              if (index === chunks.length - 1) uploaded = key;
+            }
+          }
+          if (!latest()) continue;
+          const result = await options.transport.invoke("sessionContext", metadata);
+          if (!latest()) continue;
+          if (result?.ok === false) throw new Error("Session context was not accepted");
+          pending = void 0;
+          options.wake();
+        } catch {
+          if (!latest()) continue;
+          options.report();
+          const delay = retryDelays[work.failures++];
+          if (delay !== void 0) retryTimer = setTimeout(() => {
+            retryTimer = void 0;
+            void publish();
+          }, delay);
+          return;
+        }
+      }
+    } finally {
+      publishing = false;
+    }
+  };
+  return {
+    update(nextSessionId, context) {
+      if (!alive()) return;
+      if (sessionId !== nextSessionId) {
+        sessionId = nextSessionId;
+        generation++;
+        pending = void 0;
+        cancelRetry();
+      }
+      if (!context || !nextSessionId || context.sessionId !== nextSessionId) return;
+      cancelRetry();
+      pending = { context: { ...context }, failures: 0 };
+      void publish();
+    },
+    dispose() {
+      disposed = true;
+      generation++;
+      pending = void 0;
+      uploaded = void 0;
+      cancelRetry();
+    }
+  };
+}
+
 // src/renderer/index.tsx
 import React5, { useEffect as useEffect3, useState as useState3 } from "react";
 
@@ -1014,35 +1091,12 @@ function report(current, stage) {
   });
 }
 function trackSession(current) {
-  let queued, publishing = false, uploaded;
-  const publish = async () => {
-    if (publishing) return;
-    publishing = true;
-    try {
-      while (queued && same(current)) {
-        const context = queued;
-        queued = void 0;
-        const { evidence, ...metadata } = context;
-        const key = JSON.stringify([context.sessionId, context.root, context.evidenceRevision]);
-        if (evidence && key !== uploaded) {
-          if (new TextEncoder().encode(evidence).length > 8 * 1024 * 1024) throw new Error("Host evidence exceeds 8 MiB");
-          const chunks = evidenceChunks(evidence);
-          for (const [index, chunk] of chunks.entries()) {
-            if (!same(current)) return;
-            await current.transport.invoke("sessionEvidence", { sessionId: context.sessionId, root: context.root, revision: context.evidenceRevision, index, chunk, final: index === chunks.length - 1 });
-          }
-          uploaded = key;
-        }
-        await current.transport.invoke("sessionContext", metadata);
-        wake(current);
-      }
-    } catch {
-      report(current, "session-source-error");
-    } finally {
-      publishing = false;
-      if (queued && same(current)) void publish();
-    }
-  };
+  const publisher = current.sessionPublisher ??= createSessionContextPublisher({
+    transport: current.transport,
+    isCurrent: () => same(current),
+    wake: () => wake(current),
+    report: () => report(current, "session-source-error")
+  });
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
     if (current.activeSession !== sessionId) {
@@ -1051,12 +1105,8 @@ function trackSession(current) {
       current.sessionVersion++;
       const version = current.sessionVersion;
       current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id2, path, guard) => current.adapter.openFile(id2, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : void 0;
-      wake(current);
     }
-    if (context) {
-      queued = context;
-      void publish();
-    }
+    publisher.update(sessionId, context);
     void current.transport.invoke("activeReviewSession", { sessionId }).catch(() => {
     });
   }).then((dispose) => {
@@ -1261,6 +1311,7 @@ function onLoad(pi, options = {}) {
 function onUnload() {
   const current = hub;
   if (current) {
+    current.sessionPublisher?.dispose();
     current.stopFileOpen?.();
     current.disposed = true;
     if (current.timer) clearTimeout(current.timer);

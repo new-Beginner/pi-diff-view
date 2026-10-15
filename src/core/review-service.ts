@@ -251,6 +251,11 @@ export class ReviewService {
     if (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > review.files.length) fail('INVALID_OFFSET', 'Invalid file-list offset');
     return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
   }
+  /** All metadata pages were verified by review(); never infer readiness from just page one. */
+  hasVerifiedReviewFiles(reviewId: string): boolean {
+    const { files } = this.get(reviewId);
+    return files.length > 0 && files.every(file => file.kind === 'text' && file.statsKnown !== false);
+  }
   private get(id: string): CachedReview { const r = this.reviews.get(id); if (!r || Date.now() - r.createdAt > 30 * 60 * 1000) fail('REVIEW_EXPIRED', 'Review expired; refresh'); return r; }
   async fileOpenTarget(args: { reviewId: string; fileId: string; sessionId: string }) {
     const review = this.get(args.reviewId), file = review.files.find(file => file.id === args.fileId);

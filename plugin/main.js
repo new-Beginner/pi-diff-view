@@ -2449,6 +2449,11 @@ var ReviewService = class {
     if (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > review.files.length) fail("INVALID_OFFSET", "Invalid file-list offset");
     return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
   }
+  /** All metadata pages were verified by review(); never infer readiness from just page one. */
+  hasVerifiedReviewFiles(reviewId) {
+    const { files } = this.get(reviewId);
+    return files.length > 0 && files.every((file) => file.kind === "text" && file.statsKnown !== false);
+  }
   get(id2) {
     const r = this.reviews.get(id2);
     if (!r || Date.now() - r.createdAt > 30 * 60 * 1e3) fail("REVIEW_EXPIRED", "Review expired; refresh");
@@ -4639,6 +4644,7 @@ var fileOpens = new FileOpenRequests();
 var evidence = new HostEvidenceBuffer();
 var history = null;
 var contexts = /* @__PURE__ */ new Map();
+var reviewPreparations = /* @__PURE__ */ new Map();
 var sessionRoots = /* @__PURE__ */ new Map();
 var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 var service = null;
@@ -4713,6 +4719,7 @@ async function onLoad() {
   history = import_node_path14.default.basename(parent) === "data" && import_node_path14.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path14.default.dirname(plugins)) : null;
   contexts.clear();
   evidence.clear();
+  reviewPreparations.clear();
   sessionRoots.clear();
   const savedRoots = await readJson(import_node_path14.default.join(store.directory, "session-roots.json"), {});
   for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path14.default.isAbsolute(root)) sessionRoots.set(id2, root);
@@ -4777,6 +4784,7 @@ async function onUnload() {
   await Promise.allSettled([...repositoryTasks]);
   evidence.clear();
   contexts.clear();
+  reviewPreparations.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
   if (current?.generation === generation) await import_promises12.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
@@ -4838,6 +4846,52 @@ async function sessionRoot(args) {
   if (history && store && (await store.listRuns(false, true)).some((r) => r.sessionId === args.sessionId && canonical(r.root) !== canonical(history.scratchRoot(args.sessionId)))) return void 0;
   return history?.scratchRoot(args.sessionId);
 }
+async function recordedReview(s, args, context) {
+  if (!history) return s.review(args);
+  if (typeof args.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId)) fail("SESSION_REQUIRED", "Invalid session identity");
+  if (args.scope === "turn" && (typeof args.runId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.runId))) fail("INVALID_ID", "A valid runId is required");
+  await store.importInbox(generation);
+  const recorded = args.runId ? await store.getRun(args.runId, false, false) : (await store.listRuns(false, true)).find((run2) => run2.sessionId === args.sessionId && (!args.root || canonical(run2.root) === canonical(args.root)));
+  const owned = recorded?.sessionId === args.sessionId ? recorded : void 0;
+  const candidate = args.root ?? context?.root ?? sessionRoots.get(args.sessionId) ?? owned?.root;
+  const root = await sessionRoot({ sessionId: args.sessionId, root: candidate }) ?? (owned && candidate && canonical(owned.root) === canonical(candidate) ? owned.root : void 0);
+  if (!root && args.root) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
+  if (context && (!root || canonical(context.root) !== canonical(root))) context = void 0;
+  const key = JSON.stringify([args.sessionId, root ? canonical(root) : ""]);
+  const now = Date.now();
+  let preparation = reviewPreparations.get(key);
+  if (!preparation || args.retrySync === true) {
+    preparation = { startedAt: now, attemptedAt: 0, prepared: false };
+    reviewPreparations.delete(key);
+    reviewPreparations.set(key, preparation);
+    while (reviewPreparations.size > 200) reviewPreparations.delete(reviewPreparations.keys().next().value);
+  }
+  if (root && (args.retrySync === true || store.needsRecovery(args.sessionId) || now - (context?.syncedAt || preparation.attemptedAt) > 2e3)) {
+    preparation.attemptedAt = now;
+    try {
+      await evidenceStore.restore(evidence, args.sessionId, root);
+      const result = await history.syncSession(args.sessionId, root, context ? freshHistoryContext(context) : { statusKnown: false, messages: evidence.messages(args.sessionId, canonical(root)) });
+      preparation.prepared = result.warnings.length === 0;
+      if (context) {
+        context.syncedAt = now;
+        context.prepared = preparation.prepared;
+      }
+    } catch {
+      preparation.prepared = false;
+      if (context) {
+        context.syncedAt = now;
+        context.prepared = false;
+      }
+    }
+    store.acknowledgeRecovery(args.sessionId);
+  }
+  const ready = context?.prepared === true;
+  const summary = await s.review({ ...args, ...ready ? {} : { focusFileId: void 0 } }, true, context);
+  const savedReady = preparation.prepared && s.hasVerifiedReviewFiles(summary.id);
+  if (ready || savedReady) return { ...summary, sync: { state: "ready" } };
+  if (now - preparation.startedAt >= 15e3) return { ...summary, sync: { state: "unavailable" } };
+  return { ...summary, id: `${summary.id}:pending`, files: [], nextFileOffset: null, sync: { state: "pending" } };
+}
 async function execute(s, method, args) {
   if (method === "openSystemFile") {
     const controller = systemOpenController;
@@ -4872,7 +4926,16 @@ async function execute(s, method, args) {
     if (!root) fail("ROOT_DENIED", "Unauthorized evidence project");
     if (args.index === 0) await evidenceStore.restore(evidence, args.sessionId, root);
     evidence.append({ ...args, root: canonical(root) });
-    if (args.final === true) await evidenceStore.save(evidence, args.sessionId, root);
+    if (args.final === true) {
+      await evidenceStore.save(evidence, args.sessionId, root);
+      const preparation = reviewPreparations.get(JSON.stringify([args.sessionId, canonical(root)]));
+      if (preparation) preparation.attemptedAt = 0;
+      const current = contexts.get(args.sessionId);
+      if (current && canonical(current.root) === canonical(root)) {
+        current.syncedAt = 0;
+        current.prepared = false;
+      }
+    }
     return { ok: true };
   }
   if (method === "gitManage") {
@@ -4895,26 +4958,31 @@ async function execute(s, method, args) {
     const taskId = typeof args.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : void 0;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : void 0;
     contexts.delete(args.sessionId);
-    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === "boolean" ? args.mainRunning : void 0, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: now, updatedAt: now });
+    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === "boolean" ? args.mainRunning : void 0, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: 0, prepared: false, updatedAt: now });
     while (contexts.size > 200) contexts.delete(contexts.keys().next().value);
     await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
     await evidenceStore.restore(evidence, args.sessionId, root);
     if (!history) return { ok: false, warning: "\u5BBF\u4E3B\u5386\u53F2\u8DEF\u5F84\u5951\u7EA6\u4E0D\u5339\u914D\uFF0C\u672A\u5BFC\u5165\u5386\u53F2\u3002" };
-    return history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)));
+    await store.importInbox(generation);
+    const current = contexts.get(args.sessionId);
+    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(current));
+    current.syncedAt = Date.now();
+    current.prepared = result.warnings.length === 0;
+    store.acknowledgeRecovery(args.sessionId);
+    return result;
   }
   const context = typeof args?.sessionId === "string" ? contexts.get(args.sessionId) : void 0;
   if (method === "runningChanges" && context?.running && context.taskId === args.taskId && context.since === args.since) {
     context.updatedAt = Date.now();
     await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
   }
-  const preparedReview = method === "review" && history && context && (args.scope === "turn" || args.scope === "lastTurn");
-  if (preparedReview) await store.importInbox(generation);
-  if (history && context && ["runningChanges", "replyCards", "bootstrap", "review", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
-    await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
+  if (method === "review" && (args.scope === "turn" || args.scope === "lastTurn")) return recordedReview(s, args, context);
+  if (history && context && ["runningChanges", "replyCards", "bootstrap", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
+    const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
+    context.prepared = result.warnings.length === 0;
     context.syncedAt = Date.now();
     store.acknowledgeRecovery(args.sessionId);
   }
-  if (method === "review" && (args.scope === "turn" || args.scope === "lastTurn")) return s.review(args, Boolean(preparedReview), context);
   if (method === "runningChanges") {
     const result = await s.runningChanges(args);
     let reason = "summary-available";
@@ -4967,6 +5035,7 @@ async function execute(s, method, args) {
       await navigationTail;
       const result = await s.invoke(method, args);
       evidence.clear();
+      reviewPreparations.clear();
       navigation.clear();
       fileOpens.clear();
       await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), []);

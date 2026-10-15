@@ -1,5 +1,4 @@
-import { evidenceChunks } from '../core/host-transcript';
-import type { SessionContext } from './plugin-review-adapter';
+import { createSessionContextPublisher } from './session-context-publisher';
 import React, { useEffect, useState } from 'react';
 import { ensureBounded } from '../view/transport';
 import type { ReplyCard, ReplyCardsPage, RunSummary, TurnSummary, UiTransport } from '../core/contracts';
@@ -21,7 +20,7 @@ interface Hub {
   appearance: { locale: string; base: 'light' | 'dark' }; listeners: Set<() => void>;
   cards: Map<string, CardItem>; cache: JsonCache<string, ReplyCard>; feeds: Map<string, Feed>;
   activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; sessionRetry?: ReturnType<typeof setTimeout>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
-  stopFileOpen?: Disposer;
+  stopFileOpen?: Disposer; sessionPublisher?: ReturnType<typeof createSessionContextPublisher>;
   reported: Set<string>;
 }
 let hub: Hub | null = null;
@@ -38,38 +37,18 @@ function report(current: Hub, stage: string): void {
   void current.transport.invoke('rendererReport', { stage }).catch(() => {});
 }
 function trackSession(current: Hub): Promise<void> {
-  let queued: SessionContext | undefined, publishing = false, uploaded: string | undefined;
-  const publish = async () => {
-    if (publishing) return;
-    publishing = true;
-    try {
-      while (queued && same(current)) {
-        const context = queued; queued = undefined;
-        const { evidence, ...metadata } = context;
-        const key = JSON.stringify([context.sessionId, context.root, context.evidenceRevision]);
-        if (evidence && key !== uploaded) {
-          if (new TextEncoder().encode(evidence).length > 8 * 1024 * 1024) throw new Error('Host evidence exceeds 8 MiB');
-          const chunks = evidenceChunks(evidence);
-          for (const [index, chunk] of chunks.entries()) {
-            if (!same(current)) return;
-            await current.transport.invoke('sessionEvidence', { sessionId: context.sessionId, root: context.root, revision: context.evidenceRevision, index, chunk, final: index === chunks.length - 1 });
-          }
-          uploaded = key;
-        }
-        await current.transport.invoke('sessionContext', metadata); wake(current);
-      }
-    } catch { report(current, 'session-source-error'); }
-    finally { publishing = false; if (queued && same(current)) void publish(); }
-  };
+  const publisher = current.sessionPublisher ??= createSessionContextPublisher({
+    transport: current.transport, isCurrent: () => same(current),
+    wake: () => wake(current), report: () => report(current, 'session-source-error')
+  });
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
     if (current.activeSession !== sessionId) {
       current.stopFileOpen?.(); current.activeSession = sessionId; current.sessionVersion++;
       const version = current.sessionVersion;
       current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id, path, guard) => current.adapter.openFile(id, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : undefined;
-      wake(current);
     }
-    if (context) { queued = context; void publish(); }
+    publisher.update(sessionId, context);
     void current.transport.invoke('activeReviewSession', { sessionId }).catch(() => {});
   }).then(dispose => {
     if (same(current)) { current.unsubscribeSession = dispose; report(current, 'session-ready'); } else dispose();
@@ -212,7 +191,7 @@ export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapte
 }
 export function onUnload() {
   const current = hub;
-  if (current) { current.stopFileOpen?.(); current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
+  if (current) { current.sessionPublisher?.dispose(); current.stopFileOpen?.(); current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
   for (const dispose of disposers.splice(0).reverse()) dispose();
   if (realm.__piDiffRenderer?.hub === current) delete realm.__piDiffRenderer;
   hub = null;

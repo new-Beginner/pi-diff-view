@@ -2,6 +2,7 @@ import { ReadWriteQueue } from './core/read-write-queue';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { ReviewRequest, ReviewSummary } from './core/contracts';
 import { SnapshotStore, atomicJson, locatorPath, readJson, type Locator } from './core/storage';
 import { ReviewService } from './core/review-service';
 import { fail } from './core/path-policy';
@@ -21,7 +22,10 @@ let systemOpenController = new AbortController();
 const fileOpens = new FileOpenRequests();
 const evidence = new HostEvidenceBuffer();
 let history: HostHistoryImporter | null = null;
-const contexts = new Map<string, CaptureContext & { syncedAt: number }>();
+type SessionContext = CaptureContext & { syncedAt: number; prepared?: boolean };
+const contexts = new Map<string, SessionContext>();
+// Generation-local and bounded: never wait here for renderer work queued behind review.
+const reviewPreparations = new Map<string, { startedAt: number; attemptedAt: number; prepared: boolean }>();
 const sessionRoots = new Map<string, string>();
 const freshHistoryContext = (context: CaptureContext) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 declare const pi: any;
@@ -77,7 +81,7 @@ export async function onLoad(): Promise<void> {
   // Native getDataPath contract: <host-data>/plugins/data/<plugin-id>.
   const parent = path.dirname(dataPath), plugins = path.dirname(parent);
   history = path.basename(parent) === 'data' && path.basename(plugins) === 'plugins' ? new HostHistoryImporter(store, path.dirname(plugins)) : null;
-  contexts.clear(); evidence.clear();
+  contexts.clear(); evidence.clear(); reviewPreparations.clear();
   sessionRoots.clear();
   const savedRoots = await readJson<Record<string, string>>(path.join(store.directory, 'session-roots.json'), {});
   for (const [id, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id) && typeof root === 'string' && path.isAbsolute(root)) sessionRoots.set(id, root);
@@ -123,7 +127,7 @@ export async function onUnload(): Promise<void> {
   await tail;
   await navigationTail;
   await Promise.allSettled([...repositoryTasks]);
-  evidence.clear(); contexts.clear();
+  evidence.clear(); contexts.clear(); reviewPreparations.clear();
   const current = await readJson<Locator | null>(locatorFile, null).catch(() => null);
   if (current?.generation === generation) await fs.rm(locatorFile, { force: true });
   await pi.commands.unregister('diff-view.open'); service = null; store = null;
@@ -171,6 +175,48 @@ async function sessionRoot(args: any): Promise<string | undefined> {
   // Only genuinely rootless sessions may use the host-owned scratch leaf.
   return history?.scratchRoot(args.sessionId);
 }
+async function recordedReview(s: ReviewService, args: ReviewRequest, context?: SessionContext): Promise<ReviewSummary> {
+  if (!history) return s.review(args);
+  if (typeof args.sessionId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId)) fail('SESSION_REQUIRED', 'Invalid session identity');
+  if (args.scope === 'turn' && (typeof args.runId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(args.runId))) fail('INVALID_ID', 'A valid runId is required');
+  await store!.importInbox(generation);
+  const recorded = args.runId ? await store!.getRun(args.runId, false, false) : (await store!.listRuns(false, true)).find(run => run.sessionId === args.sessionId && (!args.root || canonical(run.root) === canonical(args.root)));
+  const owned = recorded?.sessionId === args.sessionId ? recorded : undefined;
+  const candidate = args.root ?? context?.root ?? sessionRoots.get(args.sessionId) ?? owned?.root;
+  // Exact stored session ownership grants historical reads only, never disk mutation rights.
+  const root = await sessionRoot({ sessionId: args.sessionId, root: candidate }) ?? (owned && candidate && canonical(owned.root) === canonical(candidate) ? owned.root : undefined);
+  if (!root && args.root) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
+  if (context && (!root || canonical(context.root) !== canonical(root))) context = undefined;
+  const key = JSON.stringify([args.sessionId, root ? canonical(root) : '']);
+  const now = Date.now();
+  let preparation = reviewPreparations.get(key);
+  if (!preparation || args.retrySync === true) {
+    preparation = { startedAt: now, attemptedAt: 0, prepared: false };
+    reviewPreparations.delete(key); reviewPreparations.set(key, preparation);
+    while (reviewPreparations.size > 200) reviewPreparations.delete(reviewPreparations.keys().next().value!);
+  }
+  if (root && (args.retrySync === true || store!.needsRecovery(args.sessionId) || now - (context?.syncedAt || preparation.attemptedAt) > 2000)) {
+    preparation.attemptedAt = now;
+    try {
+      await evidenceStore!.restore(evidence, args.sessionId, root);
+      const result = await history.syncSession(args.sessionId, root, context ? freshHistoryContext(context) : { statusKnown: false, messages: evidence.messages(args.sessionId, canonical(root)) });
+      preparation.prepared = result.warnings.length === 0;
+      if (context) { context.syncedAt = now; context.prepared = preparation.prepared; }
+    } catch {
+      // Retry bounded preparation; do not expose raw errors/paths or manufacture endpoints.
+      preparation.prepared = false;
+      if (context) { context.syncedAt = now; context.prepared = false; }
+    }
+    store!.acknowledgeRecovery(args.sessionId);
+  }
+  const ready = context?.prepared === true;
+  const summary = await s.review({ ...args, ...(ready ? {} : { focusFileId: undefined }) }, true, context);
+  // File evidence readiness is independent of lifecycle certainty. Preserve unknown task state.
+  const savedReady = preparation.prepared && s.hasVerifiedReviewFiles(summary.id);
+  if (ready || savedReady) return { ...summary, sync: { state: 'ready' } };
+  if (now - preparation.startedAt >= 15000) return { ...summary, sync: { state: 'unavailable' } };
+  return { ...summary, id: `${summary.id}:pending`, files: [], nextFileOffset: null, sync: { state: 'pending' } };
+}
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
   if (method === 'openSystemFile') {
     const controller = systemOpenController;
@@ -204,7 +250,13 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     if (!root) fail('ROOT_DENIED', 'Unauthorized evidence project');
     if (args.index === 0) await evidenceStore!.restore(evidence, args.sessionId, root);
     evidence.append({ ...args, root: canonical(root) });
-    if (args.final === true) await evidenceStore!.save(evidence, args.sessionId, root);
+    if (args.final === true) {
+      await evidenceStore!.save(evidence, args.sessionId, root);
+      const preparation = reviewPreparations.get(JSON.stringify([args.sessionId, canonical(root)]));
+      if (preparation) preparation.attemptedAt = 0;
+      const current = contexts.get(args.sessionId);
+      if (current && canonical(current.root) === canonical(root)) { current.syncedAt = 0; current.prepared = false; }
+    }
     return { ok: true };
   }
   if (method === 'gitManage') {
@@ -222,24 +274,28 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
     const taskId = typeof args.taskId === 'string' && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : undefined;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : undefined;
     contexts.delete(args.sessionId);
-    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === 'boolean' ? args.mainRunning : undefined, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: now, updatedAt: now });
+    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === 'boolean' ? args.mainRunning : undefined, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: 0, prepared: false, updatedAt: now });
     while (contexts.size > 200) contexts.delete(contexts.keys().next().value!);
     await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
     await evidenceStore!.restore(evidence, args.sessionId, root);
     if (!history) return { ok: false, warning: '宿主历史路径契约不匹配，未导入历史。' };
-    return history.syncSession(args.sessionId, root, freshHistoryContext(contexts.get(args.sessionId)!));
+    await store!.importInbox(generation);
+    const current = contexts.get(args.sessionId)!;
+    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(current));
+    current.syncedAt = Date.now(); current.prepared = result.warnings.length === 0;
+    store!.acknowledgeRecovery(args.sessionId);
+    return result;
   }
   const context = typeof args?.sessionId === 'string' ? contexts.get(args.sessionId) : undefined;
   if (method === 'runningChanges' && context?.running && context.taskId === args.taskId && context.since === args.since) {
     context.updatedAt = Date.now(); await writeCaptureContexts(store!.directory, generation, [...contexts.values()]);
   }
-  const preparedReview = method === 'review' && history && context && (args.scope === 'turn' || args.scope === 'lastTurn');
-  if (preparedReview) await store!.importInbox(generation);
-  if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'review', 'turnSummary'].includes(method) && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) {
-    await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
+  if (method === 'review' && (args.scope === 'turn' || args.scope === 'lastTurn')) return recordedReview(s, args, context);
+  if (history && context && ['runningChanges', 'replyCards', 'bootstrap', 'turnSummary'].includes(method) && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) {
+    const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
+    context.prepared = result.warnings.length === 0;
     context.syncedAt = Date.now(); store!.acknowledgeRecovery(args.sessionId);
   }
-  if (method === 'review' && (args.scope === 'turn' || args.scope === 'lastTurn')) return s.review(args, Boolean(preparedReview), context);
   if (method === 'runningChanges') {
     const result = await s.runningChanges(args);
     let reason = 'summary-available';
@@ -286,7 +342,7 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   }
   if (method === 'clearHistory' && args?.confirmed === true) {
     navigationClearing = true; navigationVersion++;
-    try { await navigationTail; const result = await s.invoke(method, args); evidence.clear(); navigation.clear(); fileOpens.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
+    try { await navigationTail; const result = await s.invoke(method, args); evidence.clear(); reviewPreparations.clear(); navigation.clear(); fileOpens.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
     finally { navigationClearing = false; }
   }
   return s.invoke(method, args);
