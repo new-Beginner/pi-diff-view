@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { UiTransport } from '../core/contracts';
-import type { ManagementArgs, ManagementBranch, ManagementCommit, ManagementEntry, ManagementStash, ManagementStatus, ManagementText } from '../git/local-management';
+import type { ManagementArgs, ManagementBranch, ManagementCommit, ManagementEntry, ManagementRepository, ManagementStash, ManagementStatus, ManagementText } from '../git/local-management';
 import FileIcon from './FileIcon';
 import FilePath from './FilePath';
 import ReviewIcon from './ReviewIcon';
@@ -39,7 +39,9 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [switchFailure, setSwitchFailure] = useState<{ name: string; overwrite: boolean }>();
   const [selectedCommit, setSelectedCommit] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true);
+  const [loadedPage, setLoadedPage] = useState<Page>();
+  const source = useRef({ root, transport });
   const [message, setMessage] = useState(''), [name, setName] = useState(''), [newName, setNewName] = useState('');
   const [description, setDescription] = useState(''), [stashMessage, setStashMessage] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
@@ -61,7 +63,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const invoke = <T,>(args: ManagementArgs) => transport.invoke<T>('gitManage', { ...args, root });
   const fileScope = page === 'staged' ? 'staged' : 'workspace';
   const preview = useGitPreview(transport, root, fileScope);
-  const stats = useGitStats(transport, root, fileScope, filePage ? status : undefined);
+  const stats = useGitStats(transport, root, fileScope, filePage && loadedPage === page && !loading ? status : undefined);
   const readDetail = async (args: ManagementArgs) => {
     const id = ++detailTicket.current, current = generation.current;
     preview.collapse(); setDetailLoading(true); setError(''); setSwitchFailure(undefined);
@@ -72,49 +74,53 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     finally { if (id === detailTicket.current && current === generation.current) setDetailLoading(false); }
   };
   const refreshData = async (current: number, target: Page, skip: number, retainSelection = false) => {
-    const statusTask = invoke<ManagementStatus>({ operation: 'status' }).then(next => {
-      if (current !== generation.current || (retainSelection && running.current)) return;
+    const valid = () => current === generation.current;
+    if (target === 'workspace' || target === 'staged' || target === 'blame') {
+      const next = await invoke<ManagementStatus>({ operation: 'status', ...(target === 'blame' ? { summaryOnly: true } : {}) });
+      if (!valid()) return;
       setStatus(next);
       const paths = new Set(next.entries.map(entry => entry.path));
       setSelected(previous => retainSelection ? previous.filter(value => paths.has(value)) : []);
-    });
-    const pageTask = target === 'branches'
-      ? invoke<{ branches: ManagementBranch[]; truncated: boolean }>({ operation: 'branches' }).then(result => {
-        if (current === generation.current) { setBranches(result.branches); if (result.truncated) setNotice('仅显示前 200 个分支。'); }
-      })
-      : target === 'history'
-        ? invoke<{ commits: ManagementCommit[]; hasMore: boolean; notice?: string }>({ operation: 'history', skip, limit: 30 }).then(result => {
-          if (current === generation.current) { setCommits(result.commits); setHasMore(result.hasMore); if (result.notice) setNotice(result.notice); }
-        })
-        : target === 'stash'
-          ? invoke<{ stashes: ManagementStash[]; notice?: string }>({ operation: 'stashList' }).then(result => {
-            if (current === generation.current) { setStashes(result.stashes); if (result.notice) setNotice(result.notice); }
-          }) : Promise.resolve();
-    // Wait for both even on failure: never re-enable mutations while a read is still pending.
-    const results = await Promise.allSettled([statusTask, pageTask]);
-    for (const result of results) if (result.status === 'rejected') throw result.reason;
+    } else {
+      // One job per page: repository header and list share authorization and polling.
+      const args: ManagementArgs = target === 'history' ? { operation: 'history', skip, limit: 30 } : { operation: target === 'branches' ? 'branches' : 'stashList' };
+      const result = await invoke<{ repository?: ManagementRepository; branches?: ManagementBranch[]; truncated?: boolean; commits?: ManagementCommit[]; hasMore?: boolean; stashes?: ManagementStash[]; notice?: string }>({ ...args, includeRepository: true });
+      if (!valid()) return;
+      if (result.repository) setStatus(previous => ({ ...result.repository!, entries: previous?.entries ?? [] }));
+      if (target === 'branches') { setBranches(result.branches ?? []); if (result.truncated) setNotice('仅显示前 200 个分支。'); }
+      if (target === 'history') { setCommits(result.commits ?? []); setHasMore(!!result.hasMore); }
+      if (target === 'stash') setStashes(result.stashes ?? []);
+      if (result.notice) setNotice(result.notice);
+      if (!retainSelection) setSelected([]);
+    }
+    setLoadedPage(target);
   };
   useEffect(() => {
     const current = ++generation.current;
     detailTicket.current++; preview.invalidate(); setDetailLoading(false);
-    running.current = true; setBusy(true); setError(''); setSwitchFailure(undefined); setNotice(''); setDetail(undefined); setStatus(undefined); setSelected([]); setConfirmation(undefined);
-    setBranches([]); setCommits([]); setStashes([]);
+    if (source.current.root !== root || source.current.transport !== transport) {
+      source.current = { root, transport }; setBusy(false);
+      setStatus(undefined); setBranches([]); setCommits([]); setStashes([]); setLoadedPage(undefined);
+    }
+    running.current = true; setLoading(true); setLoadedPage(undefined); setError(''); setSwitchFailure(undefined); setNotice(''); setDetail(undefined); setSelected([]); setConfirmation(undefined);
     void refreshData(current, page, offset).catch(cause => { if (current === generation.current) setError(String(cause?.message ?? cause)); })
-      .finally(() => { if (current === generation.current) { running.current = false; setBusy(false); } });
+      .finally(() => { if (current === generation.current) { running.current = false; setLoading(false); } });
     return () => { generation.current++; };
-    // All requests are invalidated when the project, transport or selected page changes.
+    // Old responses cannot overwrite a newer project, page or pagination request.
   }, [root, transport, page, offset]);
   useEffect(() => {
     if (!active || !status || running.current) return;
-    const current = generation.current;
-    void refreshData(current, page, offset, true).catch(cause => { if (current === generation.current) setError(String(cause?.message ?? cause)); });
+    const current = ++generation.current;
+    running.current = true; setLoading(true); setLoadedPage(undefined);
+    void refreshData(current, page, offset, true).catch(cause => { if (current === generation.current) setError(String(cause?.message ?? cause)); })
+      .finally(() => { if (current === generation.current) { running.current = false; setLoading(false); } });
   }, [active]);
   const execute = async (args?: ManagementArgs, mutation = false) => {
     if (running.current) return;
     if (args && !mutation) { await readDetail(args); return; }
     const current = ++generation.current;
     detailTicket.current++; preview.invalidate(); setDetailLoading(false);
-    running.current = true; setBusy(true); setError(''); setSwitchFailure(undefined); setNotice(''); setDetail(undefined);
+    running.current = true; setBusy(mutation); setLoading(!mutation); setLoadedPage(undefined); setError(''); setSwitchFailure(undefined); setNotice(''); setDetail(undefined);
     try {
       if (args) {
         const result = await invoke<ManagementText & { ok?: boolean; oid?: string }>(args);
@@ -136,7 +142,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           try { await refreshData(current, page, offset); } catch { /* Preserve the actionable original error. */ }
         }
       }
-    } finally { if (current === generation.current) { running.current = false; setBusy(false); } }
+    } finally { if (current === generation.current) { running.current = false; setBusy(false); setLoading(false); } }
   };
   const ask = (args: ManagementArgs, description: string) => { openerRef.current = document.activeElement as HTMLElement | null; setConfirmation({ args, description }); };
   const changeFiles = (operation: 'stage' | 'unstage', paths: string[]) => void execute({ operation, paths }, true);
@@ -167,17 +173,18 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     finally { if (current === generation.current) { running.current = false; setBusy(false); } }
   };
   const stashArgs = (operation: string, stash: ManagementStash): ManagementArgs => ({ operation, ref: stash.ref, oid: stash.oid });
-  return <section className="git-management" data-base={base ?? (document.documentElement.dataset.base === 'dark' ? 'dark' : 'light')} aria-label="本地 Git 管理" aria-busy={busy}>
+  return <section className="git-management" data-base={base ?? (document.documentElement.dataset.base === 'dark' ? 'dark' : 'light')} aria-label="本地 Git 管理" aria-busy={busy || loading}>
     <div className="gm-top">
     <header className="gm-header"><div><h2>本地 Git</h2></div>
       <div className="gm-top-actions">{filePage && <button className="gm-icon-button" disabled={busy || !!confirmation || !preview.preview.path} aria-label="折叠全部文件" title="折叠全部文件" onClick={preview.collapse}><ReviewIcon name="collapse" /></button>}
-      <button className="gm-icon-button" disabled={busy || !!confirmation} aria-label="刷新" title="刷新" onClick={() => void execute()}><ReviewIcon name="refresh" /></button></div></header>
-    <p className="gm-root" title={status?.root ?? root}>{status?.root ?? root ?? '当前授权项目'}<span className="gm-branch">{status?.branch ?? (status?.head ? '分离 HEAD' : '尚无提交')}</span></p>
+      <button className="gm-icon-button" disabled={busy || loading || !!confirmation} aria-label="刷新" title="刷新" onClick={() => void execute()}><ReviewIcon name="refresh" /></button></div></header>
+    <p className="gm-root" title={status?.root ?? root}>{status?.root ?? root ?? '当前授权项目'}<span className="gm-branch">{status ? status.branch ?? (status.head ? '分离 HEAD' : '尚无提交') : '正在读取…'}</span></p>
     <nav aria-label="Git 功能">{(Object.keys(labels) as Page[]).map(item => <button key={item} disabled={busy || !!confirmation} aria-pressed={item === page}
       onClick={() => { setPage(item); setOffset(0); }}>{labels[item]}</button>)}</nav>
     </div>
     <div className="gm-scroll" tabIndex={0} aria-label="Git 内容">
     {busy && <p role="status">正在执行 Git，请勿重复操作…</p>}
+    {loading && <p role="status">正在读取 Git 数据…</p>}
     {error && (switchFailure ? <section className="gm-error gm-switch-error" role="alert">
       <strong>无法切换到 {switchFailure.name}</strong>
       <p>{switchFailure.overwrite ? '切换会覆盖本地改动。请先提交，或将改动保存到 Stash。' : 'Git 未能完成切换。请查看原始信息，处理后再手动尝试。'}</p>
@@ -186,7 +193,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     </section> : <pre className="gm-error" role="alert">{error}</pre>)}
     {notice && <p className="gm-notice" role="status">{localizedNotice(notice)}{notice.startsWith('Commit 已创建') && <button className="gm-text-button" onClick={() => { setPage('history'); setOffset(0); }}>查看历史</button>}</p>}
     {status && !status.head && <p className="gm-hint">仓库尚无提交。勾选文件并填写摘要，即可创建首次 Commit。</p>}
-    <fieldset disabled={busy || !!confirmation || !status} className="gm-controls" data-page={page}>
+    <fieldset disabled={busy || loading || loadedPage !== page || !!confirmation || !status} className="gm-controls" data-page={page}>
       {filePage && <>
         <div className="gm-selection-bar" role="group" aria-label="文件选择与批量操作">
           <input ref={selectAllRef} type="checkbox" aria-label="选择全部可操作文件" title="选择全部可操作文件" checked={actionable.length > 0 && selectedPaths.length === actionable.length} disabled={!actionable.length} onChange={event => setSelected(event.target.checked ? actionable.map(entry => entry.path) : [])} />
@@ -209,7 +216,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           </div>
           {preview.preview.path === entry.path && <section className="gm-inline-diff" aria-label={`${entry.path} 差异`} aria-busy={!!preview.preview.pending}>{preview.preview.data ? <GitPatch detail={preview.preview.data} /> : preview.preview.error ? <p role="alert">{preview.preview.error}<button onClick={() => { preview.collapse(); preview.toggle(entry.path); }}>重试</button></p> : <div className="gm-preview-placeholder">{preview.preview.slow && <span role="status">正在读取差异…</span>}</div>}</section>}
         </li>)}</ul>
-        {!visible.length && !busy && <p className="gm-hint">没有{page === 'staged' ? '已暂存' : '工作区'}改动。</p>}
+        {!visible.length && !busy && !loading && <p className="gm-hint">没有{page === 'staged' ? '已暂存' : '工作区'}改动。</p>}
         {protectedFiles.length > 0 && <details className="gm-protected"><summary>已排除 {protectedFiles.length} 个受保护文件（不可操作）</summary>
           <p className="gm-hint">安全规则未改变；这些文件不能选择、查看差异或暂存。</p>
           {blockedGroups.map(reason => <section key={reason}><h3>{reason}</h3><ul className="gm-list gm-files" aria-label={reason}>{protectedFiles.filter(entry => blockedReason(entry.blocked) === reason).map(entry => <li key={entry.path}>
@@ -226,13 +233,13 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchSwitch', name: branch.name }, `切换到 ${branch.name}？本地改动会保留；若切换会覆盖改动，Git 将拒绝执行。不会强制覆盖，也不会自动创建或恢复 Stash。`)}>切换</button>
           <button disabled={!newName.trim()} onClick={() => ask({ operation: 'branchRename', name: branch.name, newName }, `将 ${branch.name} 重命名为 ${newName}？`)}>重命名</button>
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchDelete', name: branch.name }, `安全删除 ${branch.name}？只允许删除已合入 HEAD 的非当前分支，不支持强制删除。`)}>安全删除</button>
-        </li>)}</ul>{!branches.length && <p>暂无本地分支。</p>}
+        </li>)}</ul>{!branches.length && !loading && <p>暂无本地分支。</p>}
       </>}
       {page === 'history' && <>
         <ul className="gm-list gm-history">{commits.map(commit => <li key={commit.oid}><button className="gm-commit" title={commit.subject} aria-pressed={!!detail && selectedCommit === commit.oid} onClick={() => void execute({ operation: 'commitDiff', ref: commit.oid })}>
           <span className="gm-commit-main"><span className="gm-commit-subject">{commit.subject}</span><code title={commit.oid}>{commit.oid.slice(0, 10)}</code></span>
           <span className="gm-commit-meta"><span title={commit.author}>{commit.author}</span><time dateTime={commit.date} title={commit.date}>{new Date(commit.date).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span></button></li>)}</ul>
-        {!commits.length && <p>暂无提交。</p>}
+        {!commits.length && !loading && <p>暂无提交。</p>}
         <div className="gm-toolbar"><button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一页</button><span>{commits.length ? `${offset + 1}–${offset + commits.length}` : '0 条提交'}</span><button disabled={!hasMore} onClick={() => setOffset(offset + 30)}>下一页</button></div>
       </>}
       {page === 'blame' && <><label className="gm-field">仓库相对文件路径<input value={blamePath} onChange={e => setBlamePath(e.target.value)} placeholder="src/example.ts" /></label>
@@ -245,13 +252,13 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           <button onClick={() => ask(stashArgs('stashApply', stash), `应用 ${stash.ref}，保留 stash；需要干净工作区。如发生冲突，请手动解决。`)}>Apply</button>
           <button onClick={() => ask(stashArgs('stashPop', stash), `应用并在成功后删除 ${stash.ref}？冲突时保留 stash，请手动解决。`)}>Pop</button>
           <button onClick={() => ask(stashArgs('stashDrop', stash), `永久删除 ${stash.ref}？这不会恢复其中的改动。`)}>Drop</button>
-        </li>)}</ul>{!stashes.length && <p>暂无 stash。</p>}
+        </li>)}</ul>{!stashes.length && !loading && <p>暂无 stash。</p>}
       </>}
     </fieldset>
     {(detail || detailLoading) && <section className="gm-detail" aria-label="Git 详情" aria-busy={detailLoading}><div className="gm-toolbar"><strong>详情</strong><button onClick={() => { detailTicket.current++; setDetailLoading(false); setDetail(undefined); }}>关闭详情</button></div>
       {detail ? <GitPatch detail={detail} /> : <p role="status">正在读取详情…</p>}</section>}
     </div>
-    {filePage && <fieldset className="gm-composer" disabled={busy || !!confirmation} aria-label="创建 Commit">
+    {filePage && <fieldset className="gm-composer" disabled={busy || loading || loadedPage !== page || !!confirmation} aria-label="创建 Commit">
       <label className="gm-field"><span>摘要 <span className="gm-required">必填</span></span><input aria-label="提交摘要" required value={message} maxLength={240} onChange={e => setMessage(e.target.value)} placeholder="简要说明这次改动" /></label>
       <details className="gm-description"><summary>描述（可选）</summary><textarea aria-label="提交描述" rows={2} maxLength={4500} value={description} onChange={e => setDescription(e.target.value)} placeholder="补充改动原因或实现细节" /></details>
       <div className="gm-composer-actions"><span className="gm-hint">已选择 {selectedPaths.length} 个文件 · {page === 'staged' ? '提交暂存内容' : '直接提交工作区内容'}</span>

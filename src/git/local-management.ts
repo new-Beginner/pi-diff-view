@@ -13,7 +13,8 @@ import { ReadWriteQueue } from '../core/read-write-queue';
  * not the third-party IDEA Git plugin. This implementation does not copy its source.
  */
 export interface ManagementEntry { path: string; index: string; working: string; blocked?: string; }
-export interface ManagementStatus { root: string; branch: string | null; head: string | null; entries: ManagementEntry[]; }
+export interface ManagementRepository { root: string; branch: string | null; head: string | null; }
+export interface ManagementStatus extends ManagementRepository { entries: ManagementEntry[]; }
 export interface ManagementBranch { name: string; oid: string; current: boolean; }
 export interface ManagementCommit { oid: string; author: string; date: string; subject: string; }
 export interface ManagementStash { ref: string; oid: string; subject: string; }
@@ -23,7 +24,7 @@ export interface ManagementArgs {
   operation: string; root?: string; paths?: string[]; path?: string; scope?: 'workspace' | 'staged';
   message?: string; summary?: string; description?: string; name?: string; newName?: string; ref?: string; oid?: string;
   confirmed?: boolean; includeUntracked?: boolean; skip?: number; limit?: number;
-  fingerprint?: string;
+  fingerprint?: string; includeRepository?: boolean; summaryOnly?: boolean;
 }
 const mutations = new Set(['stage', 'unstage', 'discard', 'commit', 'branchCreate', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
 const confirmation = new Set(['discard', 'commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
@@ -89,6 +90,13 @@ async function filePath(root: string, value: unknown): Promise<string> {
 async function selected(root: string, values: unknown): Promise<string[]> {
   if (!Array.isArray(values) || !values.length || values.length > 500) fail('INVALID_PATH', 'Select between 1 and 500 explicit file paths.');
   return [...new Set(await Promise.all(values.map(value => filePath(root, value))))];
+}
+/** Header-only information: list pages must not scan or validate working files. */
+async function repositorySummary(root: string): Promise<ManagementRepository> {
+  const [head, branch] = await Promise.all([
+    headCommit(root), git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }),
+  ]);
+  return { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null };
 }
 async function status(root: string): Promise<ManagementStatus> {
   const [raw, head, branch] = await Promise.all([
@@ -282,9 +290,16 @@ export class LocalGitManagement {
     }, mutations.has(args.operation));
     try { return await pending; } finally { if (queue.pending === 0 && queues.get(key) === queue) queues.delete(key); }
   }
-  private async perform(root: string, args: ManagementArgs): Promise<unknown> {
+  private async perform(root: string, args: ManagementArgs, repository?: Promise<ManagementRepository>): Promise<unknown> {
     const op = args.operation;
-    if (op === 'status') return status(root);
+    if (args.includeRepository === true && ['branches', 'history', 'stashList'].includes(op)) {
+      const summary = repositorySummary(root);
+      // Keep the repository fence until every child read has settled, even on failure.
+      const results = await Promise.allSettled([summary, this.perform(root, { ...args, includeRepository: false }, summary)]);
+      for (const result of results) if (result.status === 'rejected') throw result.reason;
+      return { ...(results[1] as PromiseFulfilledResult<object>).value, repository: (results[0] as PromiseFulfilledResult<ManagementRepository>).value };
+    }
+    if (op === 'status') return args.summaryOnly === true ? { ...await repositorySummary(root), entries: [] } : status(root);
     if (op === 'discardPreview' || op === 'discard') {
       const target = await discardTarget(root, args.paths);
       if (op === 'discardPreview') return { fingerprint: target.fingerprint, untracked: target.untracked };
@@ -359,7 +374,7 @@ export class LocalGitManagement {
       return { ok: true };
     }
     if (op === 'history') {
-      if (!await headCommit(root)) return { commits: [], hasMore: false, notice: 'No commits yet. Stage files and create the first commit.' };
+      if (!(repository ? (await repository).head : await headCommit(root))) return { commits: [], hasMore: false, notice: 'No commits yet. Stage files and create the first commit.' };
       const skip = args.skip ?? 0, limit = args.limit ?? 30;
       if (!Number.isInteger(skip) || skip < 0 || skip > 100000 || !Number.isInteger(limit) || limit < 1 || limit > 100) fail('INVALID_ARGUMENT', 'History requires skip 0–100000 and limit 1–100.');
       const raw = await run(root, ['log', `--skip=${skip}`, `--max-count=${limit + 1}`, '--format=%H%x00%an%x00%aI%x00%s%x00', 'HEAD', '--']);

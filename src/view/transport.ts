@@ -45,7 +45,9 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
     if (started.state === 'done') return started.result as T;
     if (started.state === 'error') throw Object.assign(new Error(started.error?.message ?? 'Review failed'), { code: started.error?.code });
     const deadline = Date.now() + 120000;
-    let delay = 40;
+    // Git process startup is rarely below 100ms on Windows. Avoid spending all six
+    // admissions on premature polls when two independent reads are pending.
+    let delay = method === 'gitManage' ? 120 : 40;
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, delay));
       const job = await wire<JobResult<T>>('jobPoll', { jobId: started.jobId }, navigation);

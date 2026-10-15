@@ -165,7 +165,7 @@ test('loading, error retry, empty, disabled, success, protected index and reduce
   await page.evaluate(() => { (window as any).__themeDemo.delay = 250; (window as any).__themeDemo.failNext = true; });
   await refresh.click();
   await expect(refresh).toBeDisabled();
-  await expect(git.getByText('正在执行 Git，请勿重复操作…')).toBeVisible();
+  await expect(git.getByText('正在读取 Git 数据…')).toBeVisible();
   await expect(git.getByRole('alert')).toContainText('演示错误');
   await expect(refresh).toBeEnabled();
   await page.evaluate(() => (window as any).__themeDemo.delay = 0);

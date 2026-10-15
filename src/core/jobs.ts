@@ -18,8 +18,9 @@ export class JobQueue {
       try { const result = await this.execute(method, args); if (!this.closed) { job.result = result ?? null; job.state = 'done'; job.at = Date.now(); } }
       catch (e) { if (!this.closed) { job.error = { code: String((e as any).code ?? 'REVIEW_FAILED'), message: String((e as Error).message) }; job.state = 'error'; job.at = Date.now(); } }
     };
-    // Target navigation and OS launch do not occupy the history/mutation lane.
-    if (navigation || systemOpen) void work(); else this.tail = this.tail.then(work);
+    // Git management already has bounded reads and exclusive writes in schedule()/dispatch().
+    // Do not serialize it again behind session history or other independent Git reads.
+    if (navigation || systemOpen || method === 'gitManage') void work(); else this.tail = this.tail.then(work);
     return { jobId: id };
   }
   poll(id: string): Job { const j = this.jobs.get(id); if (!j || this.closed) fail('JOB_EXPIRED', 'Review operation expired'); return { ...j }; }

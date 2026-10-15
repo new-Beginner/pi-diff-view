@@ -13,6 +13,7 @@ test.beforeAll(async () => {
     const entries = Array.from({length: 80}, (_, i) => ({path: 'src/very-long-directory/components/file-' + i + '.tsx', index: 'M', working: 'M'}));
     window.calls = []; window.failCommit = false; window.diffDelay = 0; window.failDiff = false; window.diffRevision = 1; window.failStats = false;
     window.historyCommits = [{oid:'abc123',subject:'created commit',author:'fixture',date:'2026-01-01'}];
+    window.pageDelays = {}; window.failHistory = false;
     window.pluginBridge = { on() {}, async invoke(method, args = {}) {
       window.calls.push({method, args});
       if (method === 'app.getAppearance') return {base, locale:'zh-CN'};
@@ -34,7 +35,13 @@ test.beforeAll(async () => {
         return {text:'diff --git a/file b/file\\n--- a/file\\n+++ b/file\\n@@ -1,1 +1,1 @@\\n-old\\n+new-' + revision + '-' + args.paths[0] + '\\n',truncated:false};
       }
       if (args.operation === 'branches') return {branches:[{name:'main',current:true,oid:'head'}]};
-      if (args.operation === 'history') return {commits:window.historyCommits,hasMore:false};
+      if (args.operation === 'history') {
+        const result = {commits:window.historyCommits,hasMore:!!window.historyHasMore};
+        const fail = window.failHistory;
+        if (window.pageDelays.history) await new Promise(resolve => setTimeout(resolve, window.pageDelays.history));
+        if (fail) throw Error('obsolete history error');
+        return result;
+      }
       if (args.operation === 'commitDiff') return {text:'commit patch',truncated:false};
       if (args.operation === 'stashList') return {stashes:[]};
       if (args.operation === 'discardPreview') return {fingerprint:'snapshot',untracked:false};
@@ -226,4 +233,41 @@ for (const width of [560, 380]) for (const base of ['light', 'dark']) test(`hist
   await page.getByRole('button', { name: '关闭详情', exact: true }).click();
   await expect(first).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('.gm-scroll')!.scrollWidth <= document.querySelector('.gm-scroll')!.clientWidth)).toBe(true);
+});
+
+test('history and branches skip full status; loading never locks navigation or publishes obsolete errors', async ({ page }) => {
+  await open(page);
+  const statusCount = () => page.evaluate(() => (window as any).calls.filter((c: any) => c.args.operation === 'status').length);
+  const before = await statusCount();
+  await page.evaluate(() => { (window as any).pageDelays.history = 900; (window as any).failHistory = true; });
+  await page.getByRole('button', { name: '历史', exact: true }).click();
+  await expect(page.getByRole('button', { name: '分支', exact: true })).toBeEnabled({ timeout: 300 });
+  await expect(page.locator('.gm-branch')).toHaveText('main');
+  await expect(page.getByText('暂无提交。', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '分支', exact: true }).click();
+  await expect(page.locator('.gm-branches')).toContainText('main');
+  await expect(page.locator('.git-management')).toHaveAttribute('aria-busy', 'false');
+  await page.waitForTimeout(1100); // Deliberately let the obsolete history failure arrive.
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await statusCount()).toBe(before);
+});
+
+test('history refresh retains rows, blocks mutations only locally and pagination never reads status', async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => { (window as any).historyHasMore = true; });
+  await page.getByRole('button', { name: '历史', exact: true }).click();
+  await expect(page.locator('.gm-commit')).toContainText('created commit');
+  await expect(page.locator('.git-management')).toHaveAttribute('aria-busy', 'false');
+  const before = await page.evaluate(() => (window as any).calls.filter((c: any) => c.args.operation === 'status').length);
+  await page.evaluate(() => { (window as any).pageDelays.history = 700; });
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(page.locator('.git-management')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('.gm-commit')).toContainText('created commit');
+  await expect(page.locator('.gm-commit')).toBeDisabled();
+  await expect(page.getByRole('button', { name: '分支', exact: true })).toBeEnabled();
+  await expect(page.locator('.git-management')).toHaveAttribute('aria-busy', 'false');
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(page.locator('.git-management')).toHaveAttribute('aria-busy', 'false');
+  expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.args.operation === 'status').length)).toBe(before);
+  expect(await page.evaluate(() => (window as any).calls.some((c: any) => c.args.operation === 'history' && c.args.skip === 30))).toBe(true);
 });

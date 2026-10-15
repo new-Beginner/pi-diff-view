@@ -249,7 +249,7 @@ function boundedTransport(invoke) {
     if (started.state === "done") return started.result;
     if (started.state === "error") throw Object.assign(new Error(started.error?.message ?? "Review failed"), { code: started.error?.code });
     const deadline = Date.now() + 12e4;
-    let delay = 40;
+    let delay = method === "gitManage" ? 120 : 40;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, delay));
       const job = await wire("jobPoll", { jobId: started.jobId }, navigation);
