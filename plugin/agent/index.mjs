@@ -1,34 +1,22 @@
-// src/core/delegation-lifecycle.ts
-var name = (value) => String(value).split(".").pop().toLowerCase();
-var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
-function safeDelegation(value) {
-  if (!value || !id(value.delegationId) || !["running", "completed", "failed", "aborted", "stopped"].includes(value.status) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0) return void 0;
-  return { delegationId: value.delegationId, status: value.status, startedAt: value.startedAt, ...Number.isSafeInteger(value.completedAt) && value.completedAt >= value.startedAt ? { completedAt: value.completedAt } : {} };
-}
-function safeTaskDetails(tool, details) {
-  if (!details || typeof details !== "object") return void 0;
-  if (name(tool) === "task") return safeDelegation(details);
-  if (!["taskwait", "task_wait", "tasklist", "taskstop"].includes(name(tool))) return void 0;
-  const output = {};
-  for (const key of ["delegations", "stopped", "stopPending", "settled"]) if (Array.isArray(details[key])) output[key] = details[key].slice(0, 256).map(safeDelegation).filter(Boolean);
-  return Object.keys(output).length ? output : void 0;
-}
-
-// src/agent/capture.ts
-import fs5 from "node:fs/promises";
-import path5 from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomUUID as randomUUID3 } from "node:crypto";
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name2 in all)
+    __defProp(target, name2, { get: all[name2], enumerable: true });
+};
 
 // src/core/contracts.ts
-var MAX_TEXT_BYTES = 2 * 1024 * 1024;
-var MAX_CAPTURE_SEGMENTS = 32;
-
-// src/core/path-policy.ts
-import fs from "node:fs/promises";
-import { constants } from "node:fs";
-import path from "node:path";
-import { createHash } from "node:crypto";
+var MAX_TEXT_BYTES, MAX_CAPTURE_SEGMENTS;
+var init_contracts = __esm({
+  "src/core/contracts.ts"() {
+    "use strict";
+    MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    MAX_CAPTURE_SEGMENTS = 32;
+  }
+});
 
 // src/core/public-path.ts
 function deny(code, message) {
@@ -57,8 +45,17 @@ function assertPublicPath(value) {
     if (s === ".." || /[. ]$/.test(s) && s !== "." || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi", ".claude", ".codex", ".pi-desktoooop", ".pi-desktop", ".pi-diff-view", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) deny("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
   }
 }
+var init_public_path = __esm({
+  "src/core/public-path.ts"() {
+    "use strict";
+  }
+});
 
 // src/core/path-policy.ts
+import fs from "node:fs/promises";
+import { constants } from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
 }
@@ -198,241 +195,223 @@ async function readRegularSnapshot(target, resolve) {
     await handle?.close();
   }
 }
-
-// src/core/storage.ts
-import fs2 from "node:fs/promises";
-import path2 from "node:path";
-import os from "node:os";
-import { randomUUID } from "node:crypto";
+var init_path_policy = __esm({
+  "src/core/path-policy.ts"() {
+    "use strict";
+    init_contracts();
+    init_public_path();
+    init_public_path();
+  }
+});
 
 // node_modules/diff/libesm/diff/base.js
-var Diff = class {
-  diff(oldStr, newStr, options = {}) {
-    let callback;
-    if (typeof options === "function") {
-      callback = options;
-      options = {};
-    } else if ("callback" in options) {
-      callback = options.callback;
-    }
-    const oldString = this.castInput(oldStr, options);
-    const newString = this.castInput(newStr, options);
-    const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
-    const newTokens = this.removeEmpty(this.tokenize(newString, options));
-    return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
-  }
-  diffWithOptionsObj(oldTokens, newTokens, options, callback) {
-    var _a;
-    const done = (value) => {
-      value = this.postProcess(value, options);
-      if (callback) {
-        setTimeout(function() {
-          callback(value);
-        }, 0);
-        return void 0;
-      } else {
+var Diff;
+var init_base = __esm({
+  "node_modules/diff/libesm/diff/base.js"() {
+    Diff = class {
+      diff(oldStr, newStr, options = {}) {
+        let callback;
+        if (typeof options === "function") {
+          callback = options;
+          options = {};
+        } else if ("callback" in options) {
+          callback = options.callback;
+        }
+        const oldString = this.castInput(oldStr, options);
+        const newString = this.castInput(newStr, options);
+        const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
+        const newTokens = this.removeEmpty(this.tokenize(newString, options));
+        return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
+      }
+      diffWithOptionsObj(oldTokens, newTokens, options, callback) {
+        var _a;
+        const done = (value) => {
+          value = this.postProcess(value, options);
+          if (callback) {
+            setTimeout(function() {
+              callback(value);
+            }, 0);
+            return void 0;
+          } else {
+            return value;
+          }
+        };
+        const newLen = newTokens.length, oldLen = oldTokens.length;
+        let editLength = 1;
+        let maxEditLength = newLen + oldLen;
+        if (options.maxEditLength != null) {
+          maxEditLength = Math.min(maxEditLength, options.maxEditLength);
+        }
+        const maxExecutionTime = (_a = options.timeout) !== null && _a !== void 0 ? _a : Infinity;
+        const abortAfterTimestamp = Date.now() + maxExecutionTime;
+        const bestPath = [{ oldPos: -1, lastComponent: void 0 }];
+        let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
+        if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+          return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
+        }
+        let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
+        const execEditLength = () => {
+          for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
+            let basePath;
+            const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
+            if (removePath) {
+              bestPath[diagonalPath - 1] = void 0;
+            }
+            let canAdd = false;
+            if (addPath) {
+              const addPathNewPos = addPath.oldPos - diagonalPath;
+              canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
+            }
+            const canRemove = removePath && removePath.oldPos + 1 < oldLen;
+            if (!canAdd && !canRemove) {
+              bestPath[diagonalPath] = void 0;
+              continue;
+            }
+            if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
+              basePath = this.addToPath(addPath, true, false, 0, options);
+            } else {
+              basePath = this.addToPath(removePath, false, true, 1, options);
+            }
+            newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
+            if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+              return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
+            } else {
+              bestPath[diagonalPath] = basePath;
+              if (basePath.oldPos + 1 >= oldLen) {
+                maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
+              }
+              if (newPos + 1 >= newLen) {
+                minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
+              }
+            }
+          }
+          editLength++;
+        };
+        if (callback) {
+          (function exec() {
+            setTimeout(function() {
+              if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
+                return callback(void 0);
+              }
+              if (!execEditLength()) {
+                exec();
+              }
+            }, 0);
+          })();
+        } else {
+          while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
+            const ret = execEditLength();
+            if (ret) {
+              return ret;
+            }
+          }
+        }
+      }
+      addToPath(path7, added, removed, oldPosInc, options) {
+        const last = path7.lastComponent;
+        if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
+          return {
+            oldPos: path7.oldPos + oldPosInc,
+            lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
+          };
+        } else {
+          return {
+            oldPos: path7.oldPos + oldPosInc,
+            lastComponent: { count: 1, added, removed, previousComponent: last }
+          };
+        }
+      }
+      extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
+        const newLen = newTokens.length, oldLen = oldTokens.length;
+        let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
+        while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
+          newPos++;
+          oldPos++;
+          commonCount++;
+          if (options.oneChangePerToken) {
+            basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
+          }
+        }
+        if (commonCount && !options.oneChangePerToken) {
+          basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
+        }
+        basePath.oldPos = oldPos;
+        return newPos;
+      }
+      equals(left, right, options) {
+        if (options.comparator) {
+          return options.comparator(left, right);
+        } else {
+          return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
+        }
+      }
+      removeEmpty(array) {
+        const ret = [];
+        for (let i = 0; i < array.length; i++) {
+          if (array[i]) {
+            ret.push(array[i]);
+          }
+        }
+        return ret;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      castInput(value, options) {
         return value;
       }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      tokenize(value, options) {
+        return Array.from(value);
+      }
+      join(chars) {
+        return chars.join("");
+      }
+      postProcess(changeObjects, options) {
+        return changeObjects;
+      }
+      get useLongestToken() {
+        return false;
+      }
+      buildValues(lastComponent, newTokens, oldTokens) {
+        const components = [];
+        let nextComponent;
+        while (lastComponent) {
+          components.push(lastComponent);
+          nextComponent = lastComponent.previousComponent;
+          delete lastComponent.previousComponent;
+          lastComponent = nextComponent;
+        }
+        components.reverse();
+        const componentLen = components.length;
+        let componentPos = 0, newPos = 0, oldPos = 0;
+        for (; componentPos < componentLen; componentPos++) {
+          const component = components[componentPos];
+          if (!component.removed) {
+            if (!component.added && this.useLongestToken) {
+              let value = newTokens.slice(newPos, newPos + component.count);
+              value = value.map(function(value2, i) {
+                const oldValue = oldTokens[oldPos + i];
+                return oldValue.length > value2.length ? oldValue : value2;
+              });
+              component.value = this.join(value);
+            } else {
+              component.value = this.join(newTokens.slice(newPos, newPos + component.count));
+            }
+            newPos += component.count;
+            if (!component.added) {
+              oldPos += component.count;
+            }
+          } else {
+            component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
+            oldPos += component.count;
+          }
+        }
+        return components;
+      }
     };
-    const newLen = newTokens.length, oldLen = oldTokens.length;
-    let editLength = 1;
-    let maxEditLength = newLen + oldLen;
-    if (options.maxEditLength != null) {
-      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
-    }
-    const maxExecutionTime = (_a = options.timeout) !== null && _a !== void 0 ? _a : Infinity;
-    const abortAfterTimestamp = Date.now() + maxExecutionTime;
-    const bestPath = [{ oldPos: -1, lastComponent: void 0 }];
-    let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
-    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
-      return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
-    }
-    let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
-    const execEditLength = () => {
-      for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
-        let basePath;
-        const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
-        if (removePath) {
-          bestPath[diagonalPath - 1] = void 0;
-        }
-        let canAdd = false;
-        if (addPath) {
-          const addPathNewPos = addPath.oldPos - diagonalPath;
-          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
-        }
-        const canRemove = removePath && removePath.oldPos + 1 < oldLen;
-        if (!canAdd && !canRemove) {
-          bestPath[diagonalPath] = void 0;
-          continue;
-        }
-        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
-          basePath = this.addToPath(addPath, true, false, 0, options);
-        } else {
-          basePath = this.addToPath(removePath, false, true, 1, options);
-        }
-        newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
-        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
-          return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
-        } else {
-          bestPath[diagonalPath] = basePath;
-          if (basePath.oldPos + 1 >= oldLen) {
-            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
-          }
-          if (newPos + 1 >= newLen) {
-            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
-          }
-        }
-      }
-      editLength++;
-    };
-    if (callback) {
-      (function exec() {
-        setTimeout(function() {
-          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
-            return callback(void 0);
-          }
-          if (!execEditLength()) {
-            exec();
-          }
-        }, 0);
-      })();
-    } else {
-      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
-        const ret = execEditLength();
-        if (ret) {
-          return ret;
-        }
-      }
-    }
   }
-  addToPath(path6, added, removed, oldPosInc, options) {
-    const last = path6.lastComponent;
-    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
-      return {
-        oldPos: path6.oldPos + oldPosInc,
-        lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
-      };
-    } else {
-      return {
-        oldPos: path6.oldPos + oldPosInc,
-        lastComponent: { count: 1, added, removed, previousComponent: last }
-      };
-    }
-  }
-  extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
-    const newLen = newTokens.length, oldLen = oldTokens.length;
-    let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
-    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
-      newPos++;
-      oldPos++;
-      commonCount++;
-      if (options.oneChangePerToken) {
-        basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
-      }
-    }
-    if (commonCount && !options.oneChangePerToken) {
-      basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
-    }
-    basePath.oldPos = oldPos;
-    return newPos;
-  }
-  equals(left, right, options) {
-    if (options.comparator) {
-      return options.comparator(left, right);
-    } else {
-      return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
-    }
-  }
-  removeEmpty(array) {
-    const ret = [];
-    for (let i = 0; i < array.length; i++) {
-      if (array[i]) {
-        ret.push(array[i]);
-      }
-    }
-    return ret;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  castInput(value, options) {
-    return value;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  tokenize(value, options) {
-    return Array.from(value);
-  }
-  join(chars) {
-    return chars.join("");
-  }
-  postProcess(changeObjects, options) {
-    return changeObjects;
-  }
-  get useLongestToken() {
-    return false;
-  }
-  buildValues(lastComponent, newTokens, oldTokens) {
-    const components = [];
-    let nextComponent;
-    while (lastComponent) {
-      components.push(lastComponent);
-      nextComponent = lastComponent.previousComponent;
-      delete lastComponent.previousComponent;
-      lastComponent = nextComponent;
-    }
-    components.reverse();
-    const componentLen = components.length;
-    let componentPos = 0, newPos = 0, oldPos = 0;
-    for (; componentPos < componentLen; componentPos++) {
-      const component = components[componentPos];
-      if (!component.removed) {
-        if (!component.added && this.useLongestToken) {
-          let value = newTokens.slice(newPos, newPos + component.count);
-          value = value.map(function(value2, i) {
-            const oldValue = oldTokens[oldPos + i];
-            return oldValue.length > value2.length ? oldValue : value2;
-          });
-          component.value = this.join(value);
-        } else {
-          component.value = this.join(newTokens.slice(newPos, newPos + component.count));
-        }
-        newPos += component.count;
-        if (!component.added) {
-          oldPos += component.count;
-        }
-      } else {
-        component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
-        oldPos += component.count;
-      }
-    }
-    return components;
-  }
-};
+});
 
 // node_modules/diff/libesm/diff/line.js
-var LineDiff = class extends Diff {
-  constructor() {
-    super(...arguments);
-    this.tokenize = tokenize;
-  }
-  equals(left, right, options) {
-    if (options.ignoreWhitespace) {
-      if (!options.newlineIsToken || !left.includes("\n")) {
-        left = left.trim();
-      }
-      if (!options.newlineIsToken || !right.includes("\n")) {
-        right = right.trim();
-      }
-    } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
-      if (left.endsWith("\n")) {
-        left = left.slice(0, -1);
-      }
-      if (right.endsWith("\n")) {
-        right = right.slice(0, -1);
-      }
-    }
-    return super.equals(left, right, options);
-  }
-};
-var lineDiff = new LineDiff();
 function diffLines(oldStr, newStr, options) {
   return lineDiff.diff(oldStr, newStr, options);
 }
@@ -454,6 +433,37 @@ function tokenize(value, options) {
   }
   return retLines;
 }
+var LineDiff, lineDiff;
+var init_line = __esm({
+  "node_modules/diff/libesm/diff/line.js"() {
+    init_base();
+    LineDiff = class extends Diff {
+      constructor() {
+        super(...arguments);
+        this.tokenize = tokenize;
+      }
+      equals(left, right, options) {
+        if (options.ignoreWhitespace) {
+          if (!options.newlineIsToken || !left.includes("\n")) {
+            left = left.trim();
+          }
+          if (!options.newlineIsToken || !right.includes("\n")) {
+            right = right.trim();
+          }
+        } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
+          if (left.endsWith("\n")) {
+            left = left.slice(0, -1);
+          }
+          if (right.endsWith("\n")) {
+            right = right.slice(0, -1);
+          }
+        }
+        return super.equals(left, right, options);
+      }
+    };
+    lineDiff = new LineDiff();
+  }
+});
 
 // node_modules/diff/libesm/patch/create.js
 function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
@@ -572,6 +582,18 @@ function splitLines(text) {
   }
   return result;
 }
+var init_create = __esm({
+  "node_modules/diff/libesm/patch/create.js"() {
+    init_line();
+  }
+});
+
+// node_modules/diff/libesm/index.js
+var init_libesm = __esm({
+  "node_modules/diff/libesm/index.js"() {
+    init_create();
+  }
+});
 
 // src/core/diff.ts
 function buildHunks(before, after, context = 3) {
@@ -596,62 +618,181 @@ function stats(before, after) {
   }
   return { additions, deletions };
 }
+var init_diff = __esm({
+  "src/core/diff.ts"() {
+    "use strict";
+    init_libesm();
+  }
+});
+
+// src/core/capture-leases.ts
+var capture_leases_exports = {};
+__export(capture_leases_exports, {
+  beginCaptureLease: () => beginCaptureLease,
+  closeCaptureLease: () => closeCaptureLease,
+  endCaptureLease: () => endCaptureLease,
+  inspectCaptureLeases: () => inspectCaptureLeases,
+  prepareCaptureLease: () => prepareCaptureLease,
+  retireLegacyCaptureLeases: () => retireLegacyCaptureLeases,
+  writeCaptureLeases: () => writeCaptureLeases
+});
+import fs2 from "node:fs/promises";
+import path2 from "node:path";
+import { randomUUID } from "node:crypto";
+function validate(data) {
+  if (data.version !== 1 || !Array.isArray(data.leases) || data.leases.length > 256 || new Set(data.leases.map((l) => l.id)).size !== data.leases.length) throw new Error("Invalid capture lease journal");
+  for (const l of data.leases) {
+    if (typeof l.id !== "string" || typeof l.root !== "string" || typeof l.ambiguous !== "boolean" || l.closed !== void 0 && typeof l.closed !== "boolean") throw new Error("Invalid capture lease");
+    const p = l.prepared;
+    if (!p) continue;
+    if (![l.owner, l.sessionId, l.executionId].every((id3) => typeof id3 === "string" && /^[a-zA-Z0-9-]{1,80}$/.test(id3)) || typeof l.toolCallId !== "string" || !l.toolCallId.length || l.toolCallId.length > 256 || !path2.isAbsolute(l.root) || typeof p.name !== "string" || p.name.length > 100 || p.userMessageId !== void 0 && (typeof p.userMessageId !== "string" || p.userMessageId.length > 256) || !Array.isArray(p.paths) || p.paths.length > 256) throw new Error("Invalid preparation identity");
+    for (const { capture: c, before: s } of p.paths) {
+      if (!c || !s || typeof c.absolutePath !== "string" || !path2.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) throw new Error("Invalid preparation path");
+      assertPublicPath(c.path);
+      assertPublicPath(c.absolutePath);
+      if (c.origin === "workspace" ? path2.isAbsolute(c.path) || !inside(l.root, c.absolutePath) || canonical(path2.resolve(l.root, c.path)) !== c.identity : c.origin !== "external" || inside(l.root, c.absolutePath) || canonical(c.path) !== c.identity) throw new Error("Invalid preparation scope");
+      if (!(l.scopes ?? []).some((scope) => canonical(scope) === c.identity) || s.text !== null || typeof s.exists !== "boolean" || typeof s.hash !== "string" || !Number.isFinite(s.size) || s.size < 0 || !Number.isFinite(s.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(s.kind)) throw new Error("Invalid preparation endpoint");
+      if (s.kind === "text" && (s.exists ? !/^[a-f0-9]{64}$/.test(s.hash) || s.size > 2 * 1024 * 1024 : s.hash !== "absent" || s.size !== 0)) throw new Error("Invalid preparation text");
+    }
+  }
+}
+async function inspectCaptureLeases(store) {
+  const file = path2.join(store.directory, "capture-leases.json");
+  const stat = await fs2.lstat(file).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!stat) return { fingerprint: digest("absent"), leases: [] };
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_JOURNAL_BYTES) throw new Error("Unsafe lease journal");
+  const text = await fs2.readFile(file, "utf8"), data = JSON.parse(text);
+  validate(data);
+  return { fingerprint: digest(text), leases: data.leases };
+}
+async function writeCaptureLeases(store, leases) {
+  const data = { version: 1, leases };
+  validate(data);
+  if (Buffer.byteLength(JSON.stringify(data)) > MAX_JOURNAL_BYTES) throw new Error("Capture lease journal exceeds limit");
+  await atomicJson(path2.join(store.directory, "capture-leases.json"), data);
+}
+async function journal(store, work) {
+  return store.captureLock(async () => {
+    const { leases } = await inspectCaptureLeases(store);
+    const result = work(leases);
+    await writeCaptureLeases(store, leases);
+    return result;
+  });
+}
+async function beginCaptureLease(store, root, owner, scopes = [], lifecycle = {}) {
+  return journal(store, (leases) => {
+    if (leases.length >= 256) throw new Error("Capture lease limit reached; verify unresolved writers before retiring leases");
+    const lease = { id: randomUUID(), root, scopes: scopes.length ? [...new Set(scopes)] : [root], owner, ambiguous: false, ...lifecycle };
+    for (const other of leases) if (!other.closed && (other.scopes ?? [other.root]).some((a) => lease.scopes.some((b) => inside(a, b) || inside(b, a)))) other.ambiguous = lease.ambiguous = true;
+    leases.push(lease);
+    return lease.id;
+  });
+}
+async function prepareCaptureLease(store, id3, preparation) {
+  await store.captureLock(async () => {
+    const { leases } = await inspectCaptureLeases(store), lease = leases.find((l) => l.id === id3);
+    if (!lease || lease.prepared) throw new Error("Missing or already prepared capture lease");
+    const paths = [];
+    for (const entry of preparation.paths) paths.push({ capture: entry.capture, before: await store.saveBlob(entry.before) });
+    lease.prepared = { ...preparation, paths };
+    await writeCaptureLeases(store, leases);
+  });
+}
+async function closeCaptureLease(store, id3) {
+  return journal(store, (leases) => {
+    const lease = leases.find((l) => l.id === id3);
+    if (lease) lease.closed = true;
+    return !lease || lease.ambiguous;
+  });
+}
+async function endCaptureLease(store, id3) {
+  return journal(store, (leases) => {
+    const index = leases.findIndex((l) => l.id === id3), lease = leases[index];
+    if (index >= 0) leases.splice(index, 1);
+    return !lease || lease.ambiguous;
+  });
+}
+async function retireLegacyCaptureLeases(store, root, ids, fingerprint, writersStopped) {
+  if (!writersStopped || !ids.length || new Set(ids).size !== ids.length) throw new Error("Explicit confirmation of stopped legacy writers is required");
+  await store.captureLock(async () => {
+    const current = await inspectCaptureLeases(store);
+    if (current.fingerprint !== fingerprint) throw new Error("Lease journal changed; inspect again");
+    const selected = current.leases.filter((l) => ids.includes(l.id));
+    if (selected.length !== ids.length || selected.some((l) => canonical(l.root) !== canonical(root) || l.sessionId || l.toolCallId)) throw new Error("Unverified or non-legacy lease selection");
+    await atomicJson(path2.join(store.directory, "backups", `leases-${fingerprint}.json`), { version: 1, leases: current.leases });
+    await writeCaptureLeases(store, current.leases.filter((l) => !ids.includes(l.id)));
+  });
+}
+var MAX_JOURNAL_BYTES;
+var init_capture_leases = __esm({
+  "src/core/capture-leases.ts"() {
+    "use strict";
+    init_path_policy();
+    init_storage();
+    MAX_JOURNAL_BYTES = 1024 * 1024;
+  }
+});
 
 // src/core/storage.ts
-var MAX_RUNS = 200;
-var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+import fs3 from "node:fs/promises";
+import path3 from "node:path";
+import os from "node:os";
+import { randomUUID as randomUUID2 } from "node:crypto";
 function captureCheckpoint(change) {
   const snapshot = (value) => [value.exists, value.kind, value.hash, value.size, value.mode];
   return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after), change.segments?.map((s) => [s.evidence, s.ambiguous, s.conflicted, snapshot(s.before), snapshot(s.after)]), change.segmentsTruncated] : null));
 }
 async function atomicJson(file, value) {
-  await fs2.mkdir(path2.dirname(file), { recursive: true, mode: 448 });
-  const temp = `${file}.${randomUUID()}.tmp`;
+  await fs3.mkdir(path3.dirname(file), { recursive: true, mode: 448 });
+  const temp = `${file}.${randomUUID2()}.tmp`;
   try {
-    await fs2.writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 384 });
-    await fs2.rename(temp, file);
+    await fs3.writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 384 });
+    await fs3.rename(temp, file);
   } finally {
-    await fs2.rm(temp, { force: true });
+    await fs3.rm(temp, { force: true });
   }
 }
 async function readJson(file, fallback) {
   try {
-    const s = await fs2.stat(file);
+    const s = await fs3.stat(file);
     if (s.size > 16 * 1024 * 1024) fail("STORE_LIMIT", "Store record too large");
-    return JSON.parse(await fs2.readFile(file, "utf8"));
+    return JSON.parse(await fs3.readFile(file, "utf8"));
   } catch (error) {
     if (error.code === "ENOENT" && fallback !== void 0) return fallback;
     throw error;
   }
 }
 async function locatorPath(pluginRoot2) {
-  return path2.join(os.homedir(), ".pi-diff-view", "locators", `${digest(canonical(await fs2.realpath(pluginRoot2)))}.json`);
+  return path3.join(os.homedir(), ".pi-diff-view", "locators", `${digest(canonical(await fs3.realpath(pluginRoot2)))}.json`);
 }
 async function resolveLocator(file, pluginRoot2) {
   const locator = await readJson(file);
-  if (locator.version !== 1 || typeof locator.generation !== "string" || !/^[\w-]{20,80}$/.test(locator.generation) || locator.expiresAt < Date.now() || locator.expiresAt > Date.now() + 9e4 || canonical(locator.pluginRoot) !== canonical(await fs2.realpath(pluginRoot2))) fail("BRIDGE_UNAVAILABLE", "Diff view capture bridge is missing or expired; reload the plugin");
-  if (!path2.isAbsolute(locator.dataPath)) fail("BRIDGE_INVALID", "Invalid plugin storage path");
-  const stat = await fs2.lstat(locator.dataPath);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(await fs2.realpath(locator.dataPath)) !== canonical(locator.dataPath)) fail("BRIDGE_INVALID", "Unsafe plugin storage root");
+  if (locator.version !== 1 || typeof locator.generation !== "string" || !/^[\w-]{20,80}$/.test(locator.generation) || locator.expiresAt < Date.now() || locator.expiresAt > Date.now() + 9e4 || canonical(locator.pluginRoot) !== canonical(await fs3.realpath(pluginRoot2))) fail("BRIDGE_UNAVAILABLE", "Diff view capture bridge is missing or expired; reload the plugin");
+  if (!path3.isAbsolute(locator.dataPath)) fail("BRIDGE_INVALID", "Invalid plugin storage path");
+  const stat = await fs3.lstat(locator.dataPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(await fs3.realpath(locator.dataPath)) !== canonical(locator.dataPath)) fail("BRIDGE_INVALID", "Unsafe plugin storage root");
   return locator;
 }
 function validId(id3) {
   if (!/^[a-zA-Z0-9-]{1,80}$/.test(id3)) fail("INVALID_ID", "Invalid record identifier");
 }
 function validRun(run, id3) {
-  if (!run || ![1, 2].includes(run.version) || run.id !== id3 || typeof run.sessionId !== "string" || !path2.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
+  if (!run || ![1, 2].includes(run.version) || run.id !== id3 || typeof run.sessionId !== "string" || !path3.isAbsolute(run.root) || !run.changes || Array.isArray(run.changes) || Object.keys(run.changes).length > 256 || !Array.isArray(run.replies) || !run.bindings) return false;
   try {
     for (const [value, change] of Object.entries(run.changes)) {
       assertPublicPath(value);
       if (change.segments !== void 0 && (!Array.isArray(change.segments) || change.segments.length > MAX_CAPTURE_SEGMENTS || change.segments.some((s) => !s || typeof s.evidence !== "string" || s.evidence.length > 1024 || !s.evidence.includes(":") || s.ambiguous !== void 0 && typeof s.ambiguous !== "boolean" || s.conflicted !== void 0 && (s.conflicted !== true || s.ambiguous !== true)))) return false;
       for (const snapshot of [change.before, change.after, ...(change.segments ?? []).flatMap((s) => [s.before, s.after])]) if (!snapshot || typeof snapshot.exists !== "boolean" || typeof snapshot.hash !== "string" || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(snapshot.kind)) return false;
       if (run.version === 1) {
-        if (path2.isAbsolute(value) || !inside(run.root, path2.resolve(run.root, value))) return false;
+        if (path3.isAbsolute(value) || !inside(run.root, path3.resolve(run.root, value))) return false;
       } else {
         const c = change.capture;
-        if (!c || c.path !== value || !path2.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) return false;
+        if (!c || c.path !== value || !path3.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) return false;
         if (c.origin === "workspace") {
-          if (path2.isAbsolute(value) || !inside(run.root, c.absolutePath) || canonical(path2.resolve(run.root, value)) !== c.identity) return false;
+          if (path3.isAbsolute(value) || !inside(run.root, c.absolutePath) || canonical(path3.resolve(run.root, value)) !== c.identity) return false;
         } else if (c.origin !== "external" || inside(run.root, c.absolutePath) || canonical(value) !== c.identity) return false;
       }
     }
@@ -660,386 +801,426 @@ function validRun(run, id3) {
     return false;
   }
 }
-var SnapshotStore = class {
-  constructor(directory) {
-    this.directory = directory;
-  }
-  pendingRecovery = /* @__PURE__ */ new Set();
-  needsRecovery(sessionId) {
-    return this.pendingRecovery.has(sessionId);
-  }
-  acknowledgeRecovery(sessionId) {
-    this.pendingRecovery.delete(sessionId);
-  }
-  async init() {
-    for (const sub of ["blobs", "inbox", "runs", "contributions", "backups", "evidence"]) await fs2.mkdir(path2.join(this.directory, sub), { recursive: true, mode: 448 });
-  }
-  /** Called under captureLock after the destination has been durably written. */
-  async retireRun(from, to) {
-    validId(from);
-    validId(to);
-    if (from === to) return;
-    const target = await this.getRun(to, false, false);
-    const recorded = await this.getRun(from, false, false);
-    const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
-    const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
-    if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail("REPAIR_IDENTITY", "Cannot retire unverified run identity");
-    const fileAliases = await readJson(path2.join(this.directory, "file-aliases.json"), {});
-    const paths = /* @__PURE__ */ new Map();
-    for (const [value, change] of Object.entries(source.changes)) {
-      const match = target.changes[value] ? value : Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === change.capture?.identity);
-      if (!match) continue;
-      paths.set(value, match);
-      if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture.id;
-    }
-    await atomicJson(path2.join(this.directory, "file-aliases.json"), fileAliases);
-    const comments = await this.comments();
-    for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
-      comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path) };
-      comment.stale = true;
-    }
-    await this.saveComments(comments);
-    const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {});
-    aliases[from] = to;
-    await atomicJson(path2.join(this.directory, "run-aliases.json"), aliases);
-    if (recorded) await atomicJson(path2.join(this.directory, "contributions", `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
-    for (const sub of ["runs", "inbox"]) await fs2.rm(path2.join(this.directory, sub, `${from}.json`), { force: true });
-  }
-  async resolveFileId(runId, fileId) {
-    if (!fileId) return fileId;
-    const aliases = await readJson(path2.join(this.directory, "file-aliases.json"), {});
-    return aliases[`${runId}:${fileId}`] ?? fileId;
-  }
-  async captureLock(work) {
-    const lock = path2.join(this.directory, "capture.lock");
-    let handle;
-    for (let attempt = 0; attempt < 80 && !handle; attempt++) {
-      try {
-        handle = await fs2.open(lock, "wx", 384);
-        await handle.writeFile(JSON.stringify({ pid: process.pid }));
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        const owner = await readJson(lock, null).catch(() => null);
-        if (owner?.pid && owner.pid !== process.pid) {
-          try {
-            process.kill(owner.pid, 0);
-          } catch (e) {
-            if (e.code === "ESRCH") await fs2.rm(lock, { force: true });
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+var MAX_RUNS, MAX_HISTORY_BYTES, SnapshotStore;
+var init_storage = __esm({
+  "src/core/storage.ts"() {
+    "use strict";
+    init_path_policy();
+    init_diff();
+    init_contracts();
+    MAX_RUNS = 200;
+    MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+    SnapshotStore = class {
+      constructor(directory) {
+        this.directory = directory;
       }
-    }
-    if (!handle) fail("STORE_BUSY", "Capture store is busy; retry after active Agents stop");
-    try {
-      return await work();
-    } finally {
-      await handle.close();
-      await fs2.rm(lock, { force: true });
-    }
-  }
-  async saveBlob(snapshot) {
-    if (snapshot.kind === "text" && snapshot.exists && snapshot.text !== null) {
-      if (!/^[a-f0-9]{64}$/.test(snapshot.hash) || digest(snapshot.text) !== snapshot.hash) fail("SNAPSHOT_INVALID", "Snapshot content hash does not match");
-      const file = path2.join(this.directory, "blobs", snapshot.hash);
-      if (!await fs2.stat(file).catch(() => null)) {
-        const lock = path2.join(this.directory, "quota.lock");
+      pendingRecovery = /* @__PURE__ */ new Set();
+      needsRecovery(sessionId) {
+        return this.pendingRecovery.has(sessionId);
+      }
+      acknowledgeRecovery(sessionId) {
+        this.pendingRecovery.delete(sessionId);
+      }
+      async init() {
+        for (const sub of ["blobs", "inbox", "runs", "contributions", "backups", "evidence"]) await fs3.mkdir(path3.join(this.directory, sub), { recursive: true, mode: 448 });
+      }
+      /** Called under captureLock after the destination has been durably written. */
+      async retireRun(from, to) {
+        validId(from);
+        validId(to);
+        if (from === to) return;
+        const target = await this.getRun(to, false, false);
+        const recorded = await this.getRun(from, false, false);
+        const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
+        const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
+        if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail("REPAIR_IDENTITY", "Cannot retire unverified run identity");
+        const fileAliases = await readJson(path3.join(this.directory, "file-aliases.json"), {});
+        const paths = /* @__PURE__ */ new Map();
+        for (const [value, change] of Object.entries(source.changes)) {
+          const match = target.changes[value] ? value : Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === change.capture?.identity);
+          if (!match) continue;
+          paths.set(value, match);
+          if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture.id;
+        }
+        await atomicJson(path3.join(this.directory, "file-aliases.json"), fileAliases);
+        const comments = await this.comments();
+        for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
+          comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path) };
+          comment.stale = true;
+        }
+        await this.saveComments(comments);
+        const aliases = await readJson(path3.join(this.directory, "run-aliases.json"), {});
+        aliases[from] = to;
+        await atomicJson(path3.join(this.directory, "run-aliases.json"), aliases);
+        if (recorded) await atomicJson(path3.join(this.directory, "contributions", `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
+        for (const sub of ["runs", "inbox"]) await fs3.rm(path3.join(this.directory, sub, `${from}.json`), { force: true });
+      }
+      async resolveFileId(runId, fileId) {
+        if (!fileId) return fileId;
+        const aliases = await readJson(path3.join(this.directory, "file-aliases.json"), {});
+        return aliases[`${runId}:${fileId}`] ?? fileId;
+      }
+      async captureLock(work) {
+        const lock = path3.join(this.directory, "capture.lock");
         let handle;
-        for (let attempt = 0; attempt < 40 && !handle; attempt++) {
+        for (let attempt = 0; attempt < 80 && !handle; attempt++) {
           try {
-            handle = await fs2.open(lock, "wx", 384);
+            handle = await fs3.open(lock, "wx", 384);
+            await handle.writeFile(JSON.stringify({ pid: process.pid }));
           } catch (error) {
             if (error.code !== "EEXIST") throw error;
-            const s = await fs2.stat(lock).catch(() => null);
-            if (s && Date.now() - s.mtimeMs > 6e4) await fs2.rm(lock, { force: true });
-            else await new Promise((r) => setTimeout(r, 25));
+            const owner = await readJson(lock, null).catch(() => null);
+            if (owner?.pid && owner.pid !== process.pid) {
+              try {
+                process.kill(owner.pid, 0);
+              } catch (e) {
+                if (e.code === "ESRCH") await fs3.rm(lock, { force: true });
+              }
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
           }
         }
-        if (!handle) fail("STORE_BUSY", "Snapshot store is busy; capture marked incomplete");
+        if (!handle) fail("STORE_BUSY", "Capture store is busy; retry after active Agents stop");
         try {
-          const entries = await fs2.readdir(path2.dirname(file));
-          if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
-          let size = 0;
-          for (let offset = 0; offset < entries.length; offset += 16) {
-            const batch = entries.slice(offset, offset + 16);
-            const sizes = await Promise.all(batch.map((entry) => fs2.stat(path2.join(path2.dirname(file), entry)).then((stat) => stat.size)));
-            size += sizes.reduce((total, value) => total + value, 0);
-          }
-          if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
-          try {
-            await fs2.writeFile(file, snapshot.text, { flag: "wx", mode: 384 });
-          } catch (error) {
-            if (error.code !== "EEXIST") throw error;
-          }
+          return await work();
         } finally {
           await handle.close();
-          await fs2.rm(lock, { force: true });
+          await fs3.rm(lock, { force: true });
         }
       }
-    }
-    return { ...snapshot, text: null };
-  }
-  async inspect(snapshot) {
-    if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
-    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
-    try {
-      const stat = await fs2.lstat(path2.join(this.directory, "blobs", snapshot.hash));
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024 || stat.size !== snapshot.size) throw new Error("Unsafe blob");
-      return { ...snapshot, text: null };
-    } catch {
-      return { ...snapshot, kind: "unavailable", text: null };
-    }
-  }
-  async hydrate(snapshot) {
-    if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
-    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
-    try {
-      const file = path2.join(this.directory, "blobs", snapshot.hash);
-      const stat = await fs2.lstat(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("Unsafe blob");
-      const bytes = await fs2.readFile(file);
-      if (digest(bytes) !== snapshot.hash) throw new Error("Corrupt blob");
-      return { ...snapshot, text: bytes.toString("utf8") };
-    } catch {
-      return { ...snapshot, kind: "unavailable", text: null };
-    }
-  }
-  async writeRun(run, inbox = false) {
-    const save = async () => {
-      const saved = /* @__PURE__ */ new Map();
-      const saveSnapshot = (snapshot) => {
-        let value = saved.get(snapshot);
-        if (!value) {
-          value = this.saveBlob(snapshot);
-          saved.set(snapshot, value);
-        }
-        return value;
-      };
-      validId(run.id);
-      const changes = /* @__PURE__ */ Object.create(null);
-      if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
-      const fileCount = Object.keys(run.changes).length;
-      if (!fileCount) {
-        if (run.state === "running") {
-          const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run;
-          await atomicJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
-        } else {
-          for (const sub of ["runs", "inbox"]) await fs2.rm(path2.join(this.directory, sub, `${run.id}.json`), { force: true });
-        }
-        return;
-      }
-      for (const [p, c] of Object.entries(run.changes)) {
-        let diffStats = c.diffStats;
-        if (diffStats?.beforeHash !== c.before.hash || diffStats?.afterHash !== c.after.hash) diffStats = void 0;
-        if (!diffStats && c.before.kind === "text" && c.after.kind === "text" && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
-          try {
-            diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? "", c.after.text ?? "") };
-          } catch {
+      async saveBlob(snapshot) {
+        if (snapshot.kind === "text" && snapshot.exists && snapshot.text !== null) {
+          if (!/^[a-f0-9]{64}$/.test(snapshot.hash) || digest(snapshot.text) !== snapshot.hash) fail("SNAPSHOT_INVALID", "Snapshot content hash does not match");
+          const file = path3.join(this.directory, "blobs", snapshot.hash);
+          if (!await fs3.stat(file).catch(() => null)) {
+            const lock = path3.join(this.directory, "quota.lock");
+            let handle;
+            for (let attempt = 0; attempt < 40 && !handle; attempt++) {
+              try {
+                handle = await fs3.open(lock, "wx", 384);
+              } catch (error) {
+                if (error.code !== "EEXIST") throw error;
+                const s = await fs3.stat(lock).catch(() => null);
+                if (s && Date.now() - s.mtimeMs > 6e4) await fs3.rm(lock, { force: true });
+                else await new Promise((r) => setTimeout(r, 25));
+              }
+            }
+            if (!handle) fail("STORE_BUSY", "Snapshot store is busy; capture marked incomplete");
+            try {
+              const entries = await fs3.readdir(path3.dirname(file));
+              if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
+              let size = 0;
+              for (let offset = 0; offset < entries.length; offset += 16) {
+                const batch = entries.slice(offset, offset + 16);
+                const sizes = await Promise.all(batch.map((entry) => fs3.stat(path3.join(path3.dirname(file), entry)).then((stat) => stat.size)));
+                size += sizes.reduce((total, value) => total + value, 0);
+              }
+              if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
+              const temp = `${file}.${randomUUID2()}.tmp`;
+              try {
+                await fs3.writeFile(temp, snapshot.text, { flag: "wx", mode: 384 });
+                await fs3.rename(temp, file);
+              } finally {
+                await fs3.rm(temp, { force: true });
+              }
+            } finally {
+              await handle.close();
+              await fs3.rm(lock, { force: true });
+            }
           }
         }
-        if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail("STORE_LIMIT", "Too many capture segments");
-        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : void 0;
-        changes[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...segments ? { segments } : {} };
+        return { ...snapshot, text: null };
       }
-      await atomicJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, fileCount, changes });
-    };
-    if (inbox) await this.captureLock(save);
-    else await save();
-  }
-  async getRun(id3, inbox = false, hydrate = true) {
-    const aliases = inbox ? void 0 : await readJson(path2.join(this.directory, "run-aliases.json"), {});
-    return this.readRun(id3, inbox, hydrate, aliases);
-  }
-  async readRun(id3, inbox, hydrate, aliases) {
-    validId(id3);
-    if (!inbox) {
-      const resolved = aliases ?? await readJson(path2.join(this.directory, "run-aliases.json"), {});
-      const seen = /* @__PURE__ */ new Set();
-      while (resolved[id3]) {
-        if (seen.has(id3) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
-        seen.add(id3);
-        id3 = resolved[id3];
+      async inspect(snapshot) {
+        if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
+        if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
+        try {
+          const stat = await fs3.lstat(path3.join(this.directory, "blobs", snapshot.hash));
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024 || stat.size !== snapshot.size) throw new Error("Unsafe blob");
+          return { ...snapshot, text: null };
+        } catch {
+          return { ...snapshot, kind: "unavailable", text: null };
+        }
+      }
+      async hydrate(snapshot) {
+        if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
+        if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
+        try {
+          const file = path3.join(this.directory, "blobs", snapshot.hash);
+          const stat = await fs3.lstat(file);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("Unsafe blob");
+          const bytes = await fs3.readFile(file);
+          if (digest(bytes) !== snapshot.hash) throw new Error("Corrupt blob");
+          return { ...snapshot, text: bytes.toString("utf8") };
+        } catch {
+          return { ...snapshot, kind: "unavailable", text: null };
+        }
+      }
+      async writeRun(run, inbox = false) {
+        const save = async () => {
+          const saved = /* @__PURE__ */ new Map();
+          const saveSnapshot = (snapshot) => {
+            let value = saved.get(snapshot);
+            if (!value) {
+              value = this.saveBlob(snapshot);
+              saved.set(snapshot, value);
+            }
+            return value;
+          };
+          validId(run.id);
+          const changes = /* @__PURE__ */ Object.create(null);
+          if (Object.keys(run.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
+          const fileCount = Object.keys(run.changes).length;
+          if (!fileCount) {
+            if (run.state === "running") {
+              const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run;
+              await atomicJson(path3.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
+            } else {
+              for (const sub of ["runs", "inbox"]) await fs3.rm(path3.join(this.directory, sub, `${run.id}.json`), { force: true });
+            }
+            return;
+          }
+          for (const [p, c] of Object.entries(run.changes)) {
+            let diffStats = c.diffStats;
+            if (diffStats?.beforeHash !== c.before.hash || diffStats?.afterHash !== c.after.hash) diffStats = void 0;
+            if (!diffStats && c.before.kind === "text" && c.after.kind === "text" && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
+              try {
+                diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? "", c.after.text ?? "") };
+              } catch {
+              }
+            }
+            if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail("STORE_LIMIT", "Too many capture segments");
+            const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : void 0;
+            changes[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...segments ? { segments } : {} };
+          }
+          await atomicJson(path3.join(this.directory, inbox ? "inbox" : "runs", `${run.id}.json`), { ...run, fileCount, changes });
+        };
+        if (inbox) await this.captureLock(save);
+        else await save();
+      }
+      async getRun(id3, inbox = false, hydrate = true) {
+        const aliases = inbox ? void 0 : await readJson(path3.join(this.directory, "run-aliases.json"), {});
+        return this.readRun(id3, inbox, hydrate, aliases);
+      }
+      async readRun(id3, inbox, hydrate, aliases) {
         validId(id3);
+        if (!inbox) {
+          const resolved = aliases ?? await readJson(path3.join(this.directory, "run-aliases.json"), {});
+          const seen = /* @__PURE__ */ new Set();
+          while (resolved[id3]) {
+            if (seen.has(id3) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
+            seen.add(id3);
+            id3 = resolved[id3];
+            validId(id3);
+          }
+        }
+        const run = await readJson(path3.join(this.directory, inbox ? "inbox" : "runs", `${id3}.json`), null);
+        if (!run || !validRun(run, id3)) return null;
+        if (hydrate) {
+          const loaded = /* @__PURE__ */ new Map();
+          const load = (snapshot) => {
+            const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
+            let pending = loaded.get(key);
+            if (!pending) {
+              pending = this.hydrate(snapshot);
+              loaded.set(key, pending);
+            }
+            return pending;
+          };
+          for (const [p, c] of Object.entries(run.changes)) {
+            const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : void 0;
+            run.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...segments ? { segments } : {} };
+          }
+        }
+        return run;
       }
-    }
-    const run = await readJson(path2.join(this.directory, inbox ? "inbox" : "runs", `${id3}.json`), null);
-    if (!run || !validRun(run, id3)) return null;
-    if (hydrate) {
-      const loaded = /* @__PURE__ */ new Map();
-      const load = (snapshot) => {
-        const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
-        let pending = loaded.get(key);
-        if (!pending) {
-          pending = this.hydrate(snapshot);
-          loaded.set(key, pending);
-        }
-        return pending;
-      };
-      for (const [p, c] of Object.entries(run.changes)) {
-        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : void 0;
-        run.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...segments ? { segments } : {} };
+      async importInbox(generation) {
+        await this.captureLock(async () => {
+          const entries = (await fs3.readdir(path3.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
+          for (const entry of entries) {
+            const id3 = entry.slice(0, -5);
+            const aliases = await readJson(path3.join(this.directory, "run-aliases.json"), {});
+            if (aliases[id3]) {
+              const source = await this.getRun(id3, true, false), target = await this.getRun(id3, false, false);
+              if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
+                const saved = await readJson(path3.join(this.directory, "contributions", entry), null);
+                if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
+                  await atomicJson(path3.join(this.directory, "contributions", entry), { ...source, userMessageId: target.userMessageId });
+                  this.pendingRecovery.add(target.sessionId);
+                }
+                await fs3.rm(path3.join(this.directory, "inbox", entry), { force: true });
+              }
+              continue;
+            }
+            try {
+              const run = await this.getRun(id3, true, false);
+              if (!run) continue;
+              const inboxWasRunning = run.state === "running";
+              const current = await this.getRun(id3, false, false);
+              if (current && (current.sessionId !== run.sessionId || canonical(current.root) !== canonical(run.root))) {
+                await this.audit({ action: "inbox-identity-root-conflict", runId: id3, sessionId: run.sessionId });
+                continue;
+              }
+              if (current && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
+                if ((run.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
+                if (current.execution && run.execution?.id === current.execution.id && run.execution.revision < current.execution.revision) continue;
+              }
+              if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
+              if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
+                const files = /* @__PURE__ */ Object.create(null);
+                for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
+                  if (captureCheckpoint(run.changes[value]) !== checkpoint) continue;
+                  if (current.changes[value]) run.changes[value] = current.changes[value];
+                  else delete run.changes[value];
+                  files[value] = checkpoint;
+                }
+                if (Object.keys(files).length) {
+                  run.hostRecovery = { captureVersion: run.contentVersion ?? 0, files };
+                  const order = [...Object.keys(current.changes).filter((value) => run.changes[value]), ...Object.keys(run.changes).filter((value) => !current.changes[value])];
+                  run.changes = Object.fromEntries(order.map((value) => [value, run.changes[value]]));
+                }
+              }
+              if (current && current.state !== "running" && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
+                const advanced = !!current.execution && run.execution?.id === current.execution.id && run.execution.revision > current.execution.revision;
+                if (!advanced) {
+                  const evidenceChanged = Object.keys({ ...current.changes, ...run.changes }).some((p) => captureCheckpoint(run.changes[p]) !== captureCheckpoint(current.changes[p]));
+                  const damaged = Object.values(run.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
+                  run.state = current.state;
+                  run.endedAt = current.endedAt;
+                  run.execution = current.execution;
+                  run.userMessageId = current.userMessageId;
+                  run.replyMessageId = current.replyMessageId;
+                  run.finalReply = current.finalReply;
+                  run.replies = current.replies;
+                  run.incomplete = current.incomplete || damaged || run.incomplete && (!current.hostRecovery || evidenceChanged);
+                }
+              }
+              const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
+              run.bindings = sameReply ? current?.bindings ?? {} : {};
+              if (run.generation !== generation && run.state === "running") {
+                run.state = "incomplete";
+                run.incomplete = true;
+              }
+              await this.writeRun(run);
+              if (!current || current.contentVersion !== run.contentVersion || current.state !== run.state || JSON.stringify(current.changes) !== JSON.stringify(run.changes)) this.pendingRecovery.add(run.sessionId);
+              if (run.state !== "running" && !inboxWasRunning) await fs3.rm(path3.join(this.directory, "inbox", entry), { force: true });
+            } catch {
+            }
+          }
+        });
       }
-    }
-    return run;
-  }
-  async importInbox(generation) {
-    await this.captureLock(async () => {
-      const entries = (await fs2.readdir(path2.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
-      for (const entry of entries) {
-        const id3 = entry.slice(0, -5);
-        const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {});
-        if (aliases[id3]) {
-          const source = await this.getRun(id3, true, false), target = await this.getRun(id3, false, false);
-          if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
-            const saved = await readJson(path2.join(this.directory, "contributions", entry), null);
-            if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
-              await atomicJson(path2.join(this.directory, "contributions", entry), { ...source, userMessageId: target.userMessageId });
-              this.pendingRecovery.add(target.sessionId);
-            }
-            await fs2.rm(path2.join(this.directory, "inbox", entry), { force: true });
-          }
-          continue;
+      async captureContributions() {
+        const files = (await fs3.readdir(path3.join(this.directory, "contributions"))).filter((file) => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
+        const sources = [];
+        for (const file of files) {
+          const id3 = file.slice(0, -5), source = await readJson(path3.join(this.directory, "contributions", file), null);
+          if (!source || !validRun(source, id3)) continue;
+          const target = await this.getRun(id3, false, false);
+          if (target?.id !== id3 && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
         }
-        try {
-          const run = await this.getRun(id3, true, false);
-          if (!run) continue;
-          const inboxWasRunning = run.state === "running";
-          const current = await this.getRun(id3, false, false);
-          if (current && (current.sessionId !== run.sessionId || canonical(current.root) !== canonical(run.root))) {
-            await this.audit({ action: "inbox-identity-root-conflict", runId: id3, sessionId: run.sessionId });
-            continue;
-          }
-          if (current && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
-            if ((run.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
-            if (current.execution && run.execution?.id === current.execution.id && run.execution.revision < current.execution.revision) continue;
-          }
-          if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
-          if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
-            const files = /* @__PURE__ */ Object.create(null);
-            for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
-              if (captureCheckpoint(run.changes[value]) !== checkpoint) continue;
-              if (current.changes[value]) run.changes[value] = current.changes[value];
-              else delete run.changes[value];
-              files[value] = checkpoint;
-            }
-            if (Object.keys(files).length) {
-              run.hostRecovery = { captureVersion: run.contentVersion ?? 0, files };
-              const order = [...Object.keys(current.changes).filter((value) => run.changes[value]), ...Object.keys(run.changes).filter((value) => !current.changes[value])];
-              run.changes = Object.fromEntries(order.map((value) => [value, run.changes[value]]));
-            }
-          }
-          if (current && current.state !== "running" && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
-            const advanced = !!current.execution && run.execution?.id === current.execution.id && run.execution.revision > current.execution.revision;
-            if (!advanced) {
-              const evidenceChanged = Object.keys({ ...current.changes, ...run.changes }).some((p) => captureCheckpoint(run.changes[p]) !== captureCheckpoint(current.changes[p]));
-              const damaged = Object.values(run.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
-              run.state = current.state;
-              run.endedAt = current.endedAt;
-              run.execution = current.execution;
-              run.userMessageId = current.userMessageId;
-              run.replyMessageId = current.replyMessageId;
-              run.finalReply = current.finalReply;
-              run.replies = current.replies;
-              run.incomplete = current.incomplete || damaged || run.incomplete && (!current.hostRecovery || evidenceChanged);
-            }
-          }
-          const sameReply = run.finalReply?.hash === current?.finalReply?.hash && run.finalReply?.timestamp === current?.finalReply?.timestamp;
-          run.bindings = sameReply ? current?.bindings ?? {} : {};
-          if (run.generation !== generation && run.state === "running") {
-            run.state = "incomplete";
-            run.incomplete = true;
-          }
-          await this.writeRun(run);
-          if (!current || current.contentVersion !== run.contentVersion || current.state !== run.state || JSON.stringify(current.changes) !== JSON.stringify(run.changes)) this.pendingRecovery.add(run.sessionId);
-          if (run.state !== "running" && !inboxWasRunning) await fs2.rm(path2.join(this.directory, "inbox", entry), { force: true });
-        } catch {
-        }
+        return sources;
       }
-    });
-  }
-  async captureContributions() {
-    const files = (await fs2.readdir(path2.join(this.directory, "contributions"))).filter((file) => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
-    const sources = [];
-    for (const file of files) {
-      const id3 = file.slice(0, -5), source = await readJson(path2.join(this.directory, "contributions", file), null);
-      if (!source || !validRun(source, id3)) continue;
-      const target = await this.getRun(id3, false, false);
-      if (target?.id !== id3 && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
-    }
-    return sources;
-  }
-  async listRuns(hydrate = true, includeUnchanged = false) {
-    const files = (await fs2.readdir(path2.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
-    if (!files.length) return [];
-    const aliases = await readJson(path2.join(this.directory, "run-aliases.json"), {}).catch(() => null);
-    if (!aliases) return [];
-    const runs = [];
-    const selected = files.slice(-MAX_RUNS * 2);
-    for (let offset = 0; offset < selected.length; offset += 16) {
-      const page = await Promise.all(selected.slice(offset, offset + 16).map(async (file) => {
-        try {
-          return await this.readRun(file.slice(0, -5), false, hydrate, aliases);
-        } catch {
-          return null;
+      async listRuns(hydrate = true, includeUnchanged = false) {
+        const files = (await fs3.readdir(path3.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
+        if (!files.length) return [];
+        const aliases = await readJson(path3.join(this.directory, "run-aliases.json"), {}).catch(() => null);
+        if (!aliases) return [];
+        const runs = [];
+        const selected = files.slice(-MAX_RUNS * 2);
+        for (let offset = 0; offset < selected.length; offset += 16) {
+          const page = await Promise.all(selected.slice(offset, offset + 16).map(async (file) => {
+            try {
+              return await this.readRun(file.slice(0, -5), false, hydrate, aliases);
+            } catch {
+              return null;
+            }
+          }));
+          for (const run of page) if (run && !runs.some((r) => r.id === run.id) && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
         }
-      }));
-      for (const run of page) if (run && !runs.some((r) => r.id === run.id) && (includeUnchanged || Object.keys(run.changes).length > 0)) runs.push(run);
-    }
-    return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
-  }
-  async comments() {
-    return readJson(path2.join(this.directory, "comments.json"), []);
-  }
-  async saveComments(comments) {
-    if (comments.length > 1e3 || Buffer.byteLength(JSON.stringify(comments)) > 16 * 1024 * 1024) fail("COMMENT_LIMIT", "Comment count or byte limit reached");
-    await atomicJson(path2.join(this.directory, "comments.json"), comments);
-  }
-  async audit(event) {
-    const file = path2.join(this.directory, "actions.jsonl");
-    const size = (await fs2.stat(file).catch(() => ({ size: 0 }))).size;
-    if (size > 1024 * 1024) await fs2.rename(file, `${file}.previous`).catch(() => {
-    });
-    await fs2.appendFile(file, `${JSON.stringify({ timestamp: Date.now(), event })}
+        return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
+      }
+      async comments() {
+        return readJson(path3.join(this.directory, "comments.json"), []);
+      }
+      async saveComments(comments) {
+        if (comments.length > 1e3 || Buffer.byteLength(JSON.stringify(comments)) > 16 * 1024 * 1024) fail("COMMENT_LIMIT", "Comment count or byte limit reached");
+        await atomicJson(path3.join(this.directory, "comments.json"), comments);
+      }
+      async audit(event) {
+        const file = path3.join(this.directory, "actions.jsonl");
+        const size = (await fs3.stat(file).catch(() => ({ size: 0 }))).size;
+        if (size > 1024 * 1024) await fs3.rename(file, `${file}.previous`).catch(() => {
+        });
+        await fs3.appendFile(file, `${JSON.stringify({ timestamp: Date.now(), event })}
 `, { mode: 384 });
-  }
-  async prune() {
-    const runs = await this.listRuns(false, true);
-    let used = 0;
-    const keep = /* @__PURE__ */ new Set();
-    for (const run of runs) {
-      const hashes = Object.values(run.changes).flatMap((c) => [c.before, c.after]).filter((s) => s.exists && s.kind === "text");
-      const cost = hashes.reduce((n, s) => n + s.size, 0);
-      if (used + cost <= MAX_HISTORY_BYTES || run.state === "running") {
-        used += cost;
-        keep.add(run.id);
       }
-    }
-    for (const file of await fs2.readdir(path2.join(this.directory, "runs"))) if (/^[\w-]+\.json$/.test(file) && !keep.has(file.slice(0, -5))) await fs2.rm(path2.join(this.directory, "runs", file), { force: true });
-  }
-  async clear() {
-    await this.captureLock(async () => {
-      for (const inbox of [false, true]) for (const file of await fs2.readdir(path2.join(this.directory, inbox ? "inbox" : "runs"))) {
-        if (!/^[\w-]+\.json$/.test(file)) continue;
-        const run = await this.getRun(file.slice(0, -5), inbox, false);
-        if (run?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
-      }
-      for (const sub of ["runs", "inbox", "contributions", "blobs", "backups", "evidence"]) {
-        const dir = path2.join(this.directory, sub);
-        if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
-        for (const file of await fs2.readdir(dir)) {
-          const target = path2.join(dir, file);
-          const s = await fs2.lstat(target);
-          if (s.isFile() && !s.isSymbolicLink()) await fs2.unlink(target);
+      async prune() {
+        const runs = await this.listRuns(false, true);
+        let used = 0;
+        const keep = /* @__PURE__ */ new Set();
+        for (const run of runs) {
+          const hashes = Object.values(run.changes).flatMap((c) => [c.before, c.after]).filter((s) => s.exists && s.kind === "text");
+          const cost = hashes.reduce((n, s) => n + s.size, 0);
+          if (used + cost <= MAX_HISTORY_BYTES || run.state === "running") {
+            used += cost;
+            keep.add(run.id);
+          }
         }
+        for (const file of await fs3.readdir(path3.join(this.directory, "runs"))) if (/^[\w-]+\.json$/.test(file) && !keep.has(file.slice(0, -5))) await fs3.rm(path3.join(this.directory, "runs", file), { force: true });
       }
-      await this.saveComments([]);
-      await fs2.rm(path2.join(this.directory, "restores.json"), { force: true });
-      await fs2.rm(path2.join(this.directory, "run-aliases.json"), { force: true });
-      await fs2.rm(path2.join(this.directory, "file-aliases.json"), { force: true });
-      this.pendingRecovery.clear();
-    });
+      async clear() {
+        await this.captureLock(async () => {
+          const { inspectCaptureLeases: inspectCaptureLeases2 } = await Promise.resolve().then(() => (init_capture_leases(), capture_leases_exports));
+          if ((await inspectCaptureLeases2(this)).leases.length) fail("AGENT_BUSY", "Resolve outstanding capture leases before clearing history; verify terminal tool evidence first");
+          for (const inbox of [false, true]) for (const file of await fs3.readdir(path3.join(this.directory, inbox ? "inbox" : "runs"))) {
+            if (!/^[\w-]+\.json$/.test(file)) continue;
+            const run = await this.getRun(file.slice(0, -5), inbox, false);
+            if (run?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
+          }
+          for (const sub of ["runs", "inbox", "contributions", "blobs", "backups", "evidence"]) {
+            const dir = path3.join(this.directory, sub);
+            if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
+            for (const file of await fs3.readdir(dir)) {
+              const target = path3.join(dir, file);
+              const s = await fs3.lstat(target);
+              if (s.isFile() && !s.isSymbolicLink()) await fs3.unlink(target);
+            }
+          }
+          await this.saveComments([]);
+          await fs3.rm(path3.join(this.directory, "restores.json"), { force: true });
+          await fs3.rm(path3.join(this.directory, "run-aliases.json"), { force: true });
+          await fs3.rm(path3.join(this.directory, "file-aliases.json"), { force: true });
+          this.pendingRecovery.clear();
+        });
+      }
+    };
   }
-};
+});
+
+// src/core/delegation-lifecycle.ts
+var name = (value) => String(value).split(".").pop().toLowerCase();
+var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
+function safeDelegation(value) {
+  if (!value || !id(value.delegationId) || !["running", "completed", "failed", "aborted", "stopped"].includes(value.status) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0) return void 0;
+  return { delegationId: value.delegationId, status: value.status, startedAt: value.startedAt, ...Number.isSafeInteger(value.completedAt) && value.completedAt >= value.startedAt ? { completedAt: value.completedAt } : {} };
+}
+function safeTaskDetails(tool, details) {
+  if (!details || typeof details !== "object") return void 0;
+  if (name(tool) === "task") return safeDelegation(details);
+  if (!["taskwait", "task_wait", "tasklist", "taskstop"].includes(name(tool))) return void 0;
+  const output = {};
+  for (const key of ["delegations", "stopped", "stopPending", "settled"]) if (Array.isArray(details[key])) output[key] = details[key].slice(0, 256).map(safeDelegation).filter(Boolean);
+  return Object.keys(output).length ? output : void 0;
+}
+
+// src/agent/capture.ts
+init_contracts();
+init_path_policy();
+init_storage();
+import fs6 from "node:fs/promises";
+import path6 from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/core/review-file-policy.ts
 var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
@@ -1111,23 +1292,26 @@ function isExplicitFileTool(name2) {
 }
 
 // src/agent/workspace-capture.ts
-import fs4 from "node:fs/promises";
-import path4 from "node:path";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import fs5 from "node:fs/promises";
+import path5 from "node:path";
+init_path_policy();
 
 // src/core/capture-context.ts
-import fs3 from "node:fs/promises";
-import path3 from "node:path";
+init_path_policy();
+init_public_path();
+init_storage();
+import fs4 from "node:fs/promises";
+import path4 from "node:path";
 var CAPTURE_CONTEXT_TTL = 6e3;
 var id2 = (v) => typeof v === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(v);
 async function readCaptureContext(directory, generation, sessionId, root, now = Date.now()) {
   try {
-    const file = path3.join(directory, "capture-contexts.json"), stat = await fs3.lstat(file);
+    const file = path4.join(directory, "capture-contexts.json"), stat = await fs4.lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128 * 1024) return null;
-    const document = JSON.parse(await fs3.readFile(file, "utf8"));
+    const document = JSON.parse(await fs4.readFile(file, "utf8"));
     if (document.version !== 1 || document.generation !== generation || !Array.isArray(document.contexts) || document.contexts.length > 200) return null;
     const context = document.contexts.find((v) => v?.sessionId === sessionId);
-    if (!context || context.running !== true || !id2(context.taskId) || typeof context.root !== "string" || !path3.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
+    if (!context || context.running !== true || !id2(context.taskId) || typeof context.root !== "string" || !path4.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
     return context;
   } catch {
     return null;
@@ -1135,16 +1319,17 @@ async function readCaptureContext(directory, generation, sessionId, root, now = 
 }
 async function checkScratchAncestry(value) {
   if (!hostScratchRoot(value)) return;
-  const absolute = path3.resolve(value);
-  let cursor = path3.parse(absolute).root;
-  for (const segment of absolute.slice(cursor.length).split(path3.sep)) {
-    cursor = path3.join(cursor, segment);
-    const stat = await fs3.lstat(cursor);
+  const absolute = path4.resolve(value);
+  let cursor = path4.parse(absolute).root;
+  for (const segment of absolute.slice(cursor.length).split(path4.sep)) {
+    cursor = path4.join(cursor, segment);
+    const stat = await fs4.lstat(cursor);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Unsafe scratch capture ancestry");
   }
 }
 
 // src/agent/workspace-capture.ts
+init_capture_leases();
 var WORKSPACE_NOTICE = "Workspace capture: at most 256 files, 4096 directory entries, 16 MiB text and 3 seconds per snapshot; credentials, private paths, dependencies and symlinks excluded. Only observed endpoints are retained; transient changes and uninstrumented/background writers cannot be proven. Renames are represented as deletion/addition.";
 async function snapshotWorkspace(root, privatePaths) {
   const result = { paths: [], complete: true, notice: WORKSPACE_NOTICE };
@@ -1160,13 +1345,13 @@ async function snapshotWorkspace(root, privatePaths) {
     try {
       if (directory !== root) await safeResolve(root, directory);
       if (privatePaths.some((p) => inside(p, directory))) return;
-      dir = await fs4.opendir(directory);
+      dir = await fs5.opendir(directory);
       for await (const entry of dir) {
         if (++entries > 4096 || Date.now() > deadline || result.paths.length >= 256) {
           result.complete = false;
           break;
         }
-        const absolute = path4.join(directory, entry.name), relative = path4.relative(root, absolute);
+        const absolute = path5.join(directory, entry.name), relative = path5.relative(root, absolute);
         try {
           try {
             assertPublicPath(relative);
@@ -1209,42 +1394,9 @@ async function snapshotWorkspace(root, privatePaths) {
   }
   return result;
 }
-async function journal(store, work) {
-  return store.captureLock(async () => {
-    const file = path4.join(store.directory, "capture-leases.json");
-    let data;
-    try {
-      const stat = await fs4.stat(file);
-      if (stat.size > 1024 * 1024) throw new Error("Capture lease journal exceeds limit");
-      data = JSON.parse(await fs4.readFile(file, "utf8"));
-      if (data.version !== 1 || !Array.isArray(data.leases) || data.leases.some((l) => typeof l.id !== "string" || typeof l.root !== "string" || typeof l.ambiguous !== "boolean")) throw new Error("Invalid capture lease journal");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      data = { version: 1, leases: [] };
-    }
-    const result = work(data);
-    await atomicJson(file, data);
-    return result;
-  });
-}
-async function beginCaptureLease(store, root, owner, scopes = [], lifecycle = {}) {
-  return journal(store, (data) => {
-    if (data.leases.length >= 256) throw new Error("Capture lease limit reached; inspect unresolved leases and verify writers stopped before retiring exact legacy IDs");
-    const lease = { id: randomUUID2(), root, scopes: scopes.length ? [...new Set(scopes)] : [root], owner, ambiguous: false, ...lifecycle };
-    for (const other of data.leases) if ((other.scopes ?? [other.root]).some((a) => lease.scopes.some((b) => inside(a, b) || inside(b, a)))) other.ambiguous = lease.ambiguous = true;
-    data.leases.push(lease);
-    return lease.id;
-  });
-}
-async function endCaptureLease(store, id3) {
-  return journal(store, (data) => {
-    const lease = data.leases.find((l) => l.id === id3);
-    data.leases = data.leases.filter((l) => l.id !== id3);
-    return !lease || lease.ambiguous;
-  });
-}
 
 // src/agent/capture.ts
+init_capture_leases();
 var toolName = explicitToolName;
 var MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
 function textContent(message) {
@@ -1291,6 +1443,21 @@ function createCaptureExtension(options) {
     const waits = /* @__PURE__ */ new Set();
     let seen = /* @__PURE__ */ new Set(), retired = /* @__PURE__ */ new Set(), warned = false, disposed = false, tail = Promise.resolve();
     let lastReply, privatePaths = [], observed = /* @__PURE__ */ new Set(), settled = false;
+    let diagnosticCount = 0;
+    const diagnose = async (target, stage, error, ctx, file) => {
+      if (target) {
+        target.incomplete = true;
+        target.notice = "\u90E8\u5206\u5FEB\u7167\u91C7\u96C6\u5931\u8D25\uFF1B\u884C\u6570\u53EF\u80FD\u672A\u77E5\u3002\u8BF7\u68C0\u67E5\u5B58\u50A8\u7A7A\u95F4\u3001\u6587\u4EF6\u6743\u9650\u53CA actions.jsonl \u8BCA\u65AD\u3002";
+      }
+      const raw = error?.code;
+      const code = typeof raw === "string" && /^[A-Z][A-Z0-9_]{0,39}$/.test(raw) ? raw : "CAPTURE_FAILED";
+      if (diagnosticCount++ < 16) await store?.audit({ action: `capture-${stage}`, code, runId: target?.id, ...file ? { pathId: digest(file).slice(0, 24) } : {} }).catch(() => {
+      });
+      if (!warned && ctx && code !== "PATH_DENIED") {
+        warned = true;
+        ctx.ui?.notify(`Diff view: \u5FEB\u7167\u91C7\u96C6\u964D\u7EA7 (${code})\uFF1B\u8BF7\u68C0\u67E5\u6587\u4EF6\u6743\u9650\u3001\u5B58\u50A8\u7A7A\u95F4\u53CA actions.jsonl\u3002`, "warning");
+      }
+    };
     const serial = (fn, ctx) => {
       tail = tail.then(fn).catch(async (error) => {
         lastReply = void 0;
@@ -1300,10 +1467,7 @@ function createCaptureExtension(options) {
           await persist(run).catch(() => {
           });
         }
-        if (!warned) {
-          warned = true;
-          ctx.ui?.notify(`Diff view: ${error.message}`, "warning");
-        }
+        await diagnose(run, "persist", error, ctx);
       });
       return tail;
     };
@@ -1314,7 +1478,7 @@ function createCaptureExtension(options) {
         store = new SnapshotStore(locator.dataPath);
         await store.init();
         target.generation = locator.generation;
-        privatePaths = [.../* @__PURE__ */ new Set([...privatePaths, await fs5.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)])];
+        privatePaths = [.../* @__PURE__ */ new Set([...privatePaths, await fs6.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)])];
         if (!target.notice?.includes("Capture locator refreshed")) target.notice = `${target.notice ?? ""} Capture locator refreshed during the current user task.`.trim();
       }
       return locator;
@@ -1360,9 +1524,9 @@ function createCaptureExtension(options) {
       }
       store = new SnapshotStore(locator.dataPath);
       await store.init();
-      privatePaths = [await fs5.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)];
+      privatePaths = [await fs6.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)];
       await checkScratchAncestry(ctx.cwd);
-      const root = await fs5.realpath(ctx.cwd);
+      const root = await fs6.realpath(ctx.cwd);
       const identity = await readCaptureContext(locator.dataPath, locator.generation, ctx.sessionManager.getSessionId(), root);
       run = { version: 2, contentVersion: 0, boundary: uncertain && !identity ? "uncertain" : "user", id: randomUUID3(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root, startedAt: Date.now(), state: "running", fileCount: 0, incomplete: uncertain, changes: /* @__PURE__ */ Object.create(null), replies: [], bindings: {} };
       run.execution = { id: randomUUID3(), revision: 1, state: "running" };
@@ -1377,13 +1541,14 @@ function createCaptureExtension(options) {
       seen.clear();
       observed.clear();
       warned = false;
+      diagnosticCount = 0;
       lastReply = void 0;
       settled = false;
       await persist(run);
     };
     pi.on("before_agent_start", (event, ctx) => serial(() => begin(ctx, false, event), ctx));
     pi.on("agent_start", (_event, ctx) => serial(async () => {
-      if (disposed || settled || !run || run.execution?.state === "running" || run.mainState === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs5.realpath(ctx.cwd)) return;
+      if (disposed || settled || !run || run.execution?.state === "running" || run.mainState === "aborted" || run.sessionId !== ctx.sessionManager.getSessionId() || run.root !== await fs6.realpath(ctx.cwd)) return;
       await check(run);
       run.state = "running";
       delete run.endedAt;
@@ -1417,7 +1582,7 @@ function createCaptureExtension(options) {
       const name2 = toolName(event.toolName), targetSet = toolPaths(name2, event.input ?? event.args), targets = targetSet.targets;
       if (isReplacementTool(name2) && targets.length) {
         try {
-          if (!(await fs5.lstat(path5.resolve(run.root, targets[0]))).isFile()) return;
+          if (!(await fs6.lstat(path6.resolve(run.root, targets[0]))).isFile()) return;
         } catch {
           return;
         }
@@ -1448,7 +1613,7 @@ function createCaptureExtension(options) {
         }
         return;
       }
-      const leaseStore = store, lease = await beginCaptureLease(leaseStore, run.root, run.id, targets.slice(0, 256).map((p) => path5.resolve(run.root, p)), { sessionId: run.sessionId, toolCallId: event.toolCallId, executionId: run.execution?.id });
+      const leaseStore = store, lease = await beginCaptureLease(leaseStore, run.root, run.id, targets.slice(0, 256).map((p) => path6.resolve(run.root, p)), { sessionId: run.sessionId, toolCallId: event.toolCallId, executionId: run.execution?.id });
       const captured = { run, paths: [], store: leaseStore, lease, name: name2, workspace, complete: true, task: name2 === "task" };
       pending.set(event.toolCallId, captured);
       if (workspace) {
@@ -1465,17 +1630,28 @@ function createCaptureExtension(options) {
             if (!observed.has(capture.identity) && observed.size >= 256) throw new Error("Turn exceeds 256 explicitly captured files");
             observed.add(capture.identity);
             const before = bounded(await readCapturedSnapshot(run.root, capture, privatePaths), captured.paths.map((e) => e.before));
-            if (before.kind !== "text") run.incomplete = true;
+            if (before.kind !== "text") await diagnose(run, "before", { code: "SNAPSHOT_UNAVAILABLE" }, ctx, capture.identity);
             captured.paths.push({ capture, before });
-          } catch {
-            run.incomplete = true;
+          } catch (error) {
+            await diagnose(run, "before", error, ctx, target);
           }
         }
+      }
+      try {
+        await prepareCaptureLease(leaseStore, lease, { name: name2, userMessageId: run.userMessageId, paths: captured.paths });
+      } catch (error) {
+        await diagnose(run, "prepare", error, ctx);
       }
       await persist(run);
     }, ctx));
     const finish = async (id3, captured, isError = false, sample = false) => {
       const target = captured.run;
+      if (captured.finished) {
+        await persist(target);
+        if (!captured.retainPreparation) await endCaptureLease(captured.store, captured.lease);
+        pending.delete(id3);
+        return;
+      }
       await check(target);
       const pairs = [];
       const retain = (snapshot) => bounded(snapshot, pairs.map((pair) => pair.after));
@@ -1496,12 +1672,11 @@ function createCaptureExtension(options) {
       } else for (const entry of captured.paths) {
         try {
           pairs.push({ entry, after: retain(await readCapturedSnapshot(target.root, entry.capture, privatePaths)) });
-        } catch {
-          target.incomplete = true;
+        } catch (error) {
+          await diagnose(target, "after", error);
         }
       }
-      const overlap = sample ? true : await endCaptureLease(captured.store, captured.lease) || captured.store.directory !== store.directory;
-      if (!sample) pending.delete(id3);
+      const overlap = sample ? true : await closeCaptureLease(captured.store, captured.lease) || captured.store.directory !== store.directory;
       if (isError) target.incomplete = true;
       for (const { entry, after: rawAfter, uncertain } of pairs) {
         if (sameSnapshot(entry.before, rawAfter)) continue;
@@ -1540,7 +1715,15 @@ function createCaptureExtension(options) {
         captured.paths = [];
         for (const pair of pairs.slice(0, 256)) captured.paths.push({ capture: pair.entry.capture, before: bounded(pair.after) });
       }
+      if (!sample) {
+        captured.finished = true;
+        captured.retainPreparation = pairs.length < captured.paths.length;
+      }
       await persist(target);
+      if (!sample) {
+        if (!captured.retainPreparation) await endCaptureLease(captured.store, captured.lease);
+        pending.delete(id3);
+      }
     };
     const updateDelegations = async (event, ctx) => {
       const details = event.details ?? event.message?.toolResult?.details;
@@ -1573,7 +1756,7 @@ function createCaptureExtension(options) {
       await updateDelegations(event, ctx);
       const old = detached.get(event.toolCallId);
       if (old && old.sessionId === ctx.sessionManager.getSessionId()) {
-        await endCaptureLease(old.store, old.lease);
+        await closeCaptureLease(old.store, old.lease);
         detached.delete(event.toolCallId);
         return;
       }
@@ -1668,7 +1851,7 @@ function createCaptureExtension(options) {
     }, ctx));
   };
 }
-var pluginRoot = path5.resolve(path5.dirname(fileURLToPath(import.meta.url)), "..");
+var pluginRoot = path6.resolve(path6.dirname(fileURLToPath(import.meta.url)), "..");
 var capture_default = createCaptureExtension({ pluginRoot });
 export {
   createCaptureExtension,

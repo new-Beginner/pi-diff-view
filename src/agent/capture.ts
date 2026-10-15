@@ -8,9 +8,10 @@ import { absentSnapshot, digest, readCapturedSnapshot, resolveCapturePath, sameS
 import { locatorPath, resolveLocator, SnapshotStore } from '../core/storage';
 import { isImagePath } from '../core/review-file-policy';
 import { explicitToolName, isExplicitFileTool, isReplacementTool } from '../core/explicit-file-tools';
-import { beginCaptureLease, endCaptureLease, snapshotWorkspace, WORKSPACE_NOTICE, type CapturedPath } from './workspace-capture';
+import { snapshotWorkspace, WORKSPACE_NOTICE, type CapturedPath } from './workspace-capture';
+import { beginCaptureLease, closeCaptureLease, endCaptureLease, prepareCaptureLease } from '../core/capture-leases';
 import { checkScratchAncestry, readCaptureContext } from '../core/capture-context';
-interface Pending { run: CaptureRun; paths: CapturedPath[]; store: SnapshotStore; lease: string; name: string; workspace: boolean; complete: boolean; task: boolean; }
+interface Pending { run: CaptureRun; paths: CapturedPath[]; store: SnapshotStore; lease: string; name: string; workspace: boolean; complete: boolean; task: boolean; finished?: boolean; retainPreparation?: boolean; }
 const toolName = explicitToolName;
 interface Context { cwd: string; sessionManager: { getSessionId(): string }; ui?: { notify(message: string, level?: string): void }; }
 interface Extension { on(event: string, handler: (event: any, ctx: Context) => unknown): void; }
@@ -49,11 +50,19 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
     const waits = new Set<string>();
     let seen = new Set<string>(), retired = new Set<string>(), warned = false, disposed = false, tail = Promise.resolve();
     let lastReply: CaptureRun['finalReply'], privatePaths: string[] = [], observed = new Set<string>(), settled = false;
+    let diagnosticCount = 0;
+    const diagnose = async (target: CaptureRun | null, stage: string, error: unknown, ctx?: Context, file?: string) => {
+      if (target) { target.incomplete = true; target.notice = '部分快照采集失败；行数可能未知。请检查存储空间、文件权限及 actions.jsonl 诊断。'; }
+      const raw = (error as NodeJS.ErrnoException)?.code;
+      const code = typeof raw === 'string' && /^[A-Z][A-Z0-9_]{0,39}$/.test(raw) ? raw : 'CAPTURE_FAILED';
+      if (diagnosticCount++ < 16) await store?.audit({ action: `capture-${stage}`, code, runId: target?.id, ...(file ? { pathId: digest(file).slice(0, 24) } : {}) }).catch(() => {});
+      if (!warned && ctx && code !== 'PATH_DENIED') { warned = true; ctx.ui?.notify(`Diff view: 快照采集降级 (${code})；请检查文件权限、存储空间及 actions.jsonl。`, 'warning'); }
+    };
     const serial = (fn: () => Promise<void>, ctx: Context): Promise<void> => {
       tail = tail.then(fn).catch(async error => {
         lastReply = undefined;
         if (run) { run.incomplete = true; delete run.finalReply; await persist(run).catch(() => {}); }
-        if (!warned) { warned = true; ctx.ui?.notify(`Diff view: ${error.message}`, 'warning'); }
+        await diagnose(run, 'persist', error, ctx);
       });
       return tail;
     };
@@ -114,7 +123,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       if (uncertain && identity) run.notice = '运行身份已由同会话、同项目的宿主元数据核验；仅记录采集开始后的有界变更。';
       for (const id of seen) retired.add(id);
       while (retired.size > 4096) retired.delete(retired.keys().next().value!);
-      detachPending(); waits.clear(); seen.clear(); observed.clear(); warned = false; lastReply = undefined; settled = false;
+      detachPending(); waits.clear(); seen.clear(); observed.clear(); warned = false; diagnosticCount = 0; lastReply = undefined; settled = false;
       await persist(run);
     };
     pi.on('before_agent_start', (event, ctx) => serial(() => begin(ctx, false, event), ctx));
@@ -181,15 +190,18 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
             if (!observed.has(capture.identity) && observed.size >= 256) throw new Error('Turn exceeds 256 explicitly captured files');
             observed.add(capture.identity);
             const before = bounded(await readCapturedSnapshot(run.root, capture, privatePaths), captured.paths.map(e => e.before));
-            if (before.kind !== 'text') run.incomplete = true;
+            if (before.kind !== 'text') await diagnose(run, 'before', { code: 'SNAPSHOT_UNAVAILABLE' }, ctx, capture.identity);
             captured.paths.push({ capture, before });
-          } catch { run.incomplete = true; }
+          } catch (error) { await diagnose(run, 'before', error, ctx, target); }
         }
       }
+      try { await prepareCaptureLease(leaseStore, lease, { name, userMessageId: run.userMessageId, paths: captured.paths }); }
+      catch (error) { await diagnose(run, 'prepare', error, ctx); }
       await persist(run);
     }, ctx));
     const finish = async (id: string, captured: Pending, isError = false, sample = false) => {
       const target = captured.run;
+      if (captured.finished) { await persist(target); if (!captured.retainPreparation) await endCaptureLease(captured.store, captured.lease); pending.delete(id); return; }
       await check(target);
       const pairs: { entry: CapturedPath; after: FileSnapshot; uncertain?: boolean }[] = [];
       const retain = (snapshot: FileSnapshot) => bounded(snapshot, pairs.map(pair => pair.after));
@@ -206,11 +218,10 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
         for (const entry of remaining.values()) pairs.push({ entry: { capture: entry.capture, before: absentSnapshot() }, after: retain(entry.before), uncertain: !captured.complete });
       } else for (const entry of captured.paths) {
         try { pairs.push({ entry, after: retain(await readCapturedSnapshot(target.root, entry.capture, privatePaths)) }); }
-        catch { target.incomplete = true; }
+        catch (error) { await diagnose(target, 'after', error); }
       }
-      // Close only after the last read, before persistence (writeRun takes the same lock).
-      const overlap = sample ? true : (await endCaptureLease(captured.store, captured.lease)) || captured.store.directory !== store!.directory;
-      if (!sample) pending.delete(id);
+      // End the mutation interval but retain preparation until the result is durable.
+      const overlap = sample ? true : (await closeCaptureLease(captured.store, captured.lease)) || captured.store.directory !== store!.directory;
       if (isError) target.incomplete = true;
       for (const { entry, after: rawAfter, uncertain } of pairs) {
         if (sameSnapshot(entry.before, rawAfter)) continue; // no ghost entries for no-op tools
@@ -243,7 +254,9 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
         captured.paths = [];
         for (const pair of pairs.slice(0, 256)) captured.paths.push({ capture: pair.entry.capture, before: bounded(pair.after) });
       }
+      if (!sample) { captured.finished = true; captured.retainPreparation = pairs.length < captured.paths.length; }
       await persist(target);
+      if (!sample) { if (!captured.retainPreparation) await endCaptureLease(captured.store, captured.lease); pending.delete(id); }
     };
     const updateDelegations = async (event: any, ctx: Context) => {
       const details = event.details ?? event.message?.toolResult?.details;
@@ -272,7 +285,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       await updateDelegations(event, ctx);
       const old = detached.get(event.toolCallId);
       if (old && old.sessionId === ctx.sessionManager.getSessionId()) {
-        await endCaptureLease(old.store, old.lease); detached.delete(event.toolCallId); return;
+        await closeCaptureLease(old.store, old.lease); detached.delete(event.toolCallId); return;
       }
       if (disposed || !run || run.sessionId !== ctx.sessionManager.getSessionId()) return;
       const captured = pending.get(event.toolCallId);

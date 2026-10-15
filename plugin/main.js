@@ -5,6 +5,9 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
 var __export = (target, all) => {
   for (var name2 in all)
     __defProp(target, name2, { get: all[name2], enumerable: true });
@@ -27,71 +30,15 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/main.ts
-var main_exports = {};
-__export(main_exports, {
-  onLoad: () => onLoad,
-  onPanelInvoke: () => onPanelInvoke,
-  onRendererCall: () => onRendererCall,
-  onUnload: () => onUnload
-});
-module.exports = __toCommonJS(main_exports);
-
-// src/core/read-write-queue.ts
-var ReadWriteQueue = class {
-  constructor(concurrency = 4) {
-    this.concurrency = concurrency;
-    if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Invalid read concurrency");
-  }
-  writer = Promise.resolve();
-  readers = /* @__PURE__ */ new Set();
-  active = 0;
-  waiting = [];
-  pending = 0;
-  run(work, write = false) {
-    this.pending++;
-    const result = write ? Promise.all([this.writer, ...this.readers].map((task) => task.catch(() => void 0))).then(work) : this.writer.catch(() => void 0).then(async () => {
-      if (this.active >= this.concurrency) await new Promise((resolve) => this.waiting.push(resolve));
-      else this.active++;
-      try {
-        return await work();
-      } finally {
-        const next = this.waiting.shift();
-        if (next) next();
-        else this.active--;
-      }
-    });
-    if (write) this.writer = result;
-    else this.readers.add(result);
-    const settle = () => {
-      this.pending--;
-      this.readers.delete(result);
-    };
-    void result.then(settle, settle);
-    return result;
-  }
-};
-
-// src/main.ts
-var import_promises11 = __toESM(require("node:fs/promises"), 1);
-var import_node_path13 = __toESM(require("node:path"), 1);
-var import_node_crypto10 = require("node:crypto");
-
-// src/core/storage.ts
-var import_promises2 = __toESM(require("node:fs/promises"), 1);
-var import_node_path2 = __toESM(require("node:path"), 1);
-var import_node_os = __toESM(require("node:os"), 1);
-var import_node_crypto2 = require("node:crypto");
-
-// src/core/path-policy.ts
-var import_promises = __toESM(require("node:fs/promises"), 1);
-var import_node_fs = require("node:fs");
-var import_node_path = __toESM(require("node:path"), 1);
-var import_node_crypto = require("node:crypto");
-
 // src/core/contracts.ts
-var MAX_TEXT_BYTES = 2 * 1024 * 1024;
-var MAX_CAPTURE_SEGMENTS = 32;
+var MAX_TEXT_BYTES, MAX_CAPTURE_SEGMENTS;
+var init_contracts = __esm({
+  "src/core/contracts.ts"() {
+    "use strict";
+    MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    MAX_CAPTURE_SEGMENTS = 32;
+  }
+});
 
 // src/core/public-path.ts
 function deny(code, message) {
@@ -112,6 +59,11 @@ function assertPublicPath(value) {
     if (s === ".." || /[. ]$/.test(s) && s !== "." || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi", ".claude", ".codex", ".pi-desktoooop", ".pi-desktop", ".pi-diff-view", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) deny("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
   }
 }
+var init_public_path = __esm({
+  "src/core/public-path.ts"() {
+    "use strict";
+  }
+});
 
 // src/core/path-policy.ts
 function fail(code, message) {
@@ -252,235 +204,228 @@ async function readRegularSnapshot(target, resolve) {
     await handle?.close();
   }
 }
+var import_promises, import_node_fs, import_node_path, import_node_crypto;
+var init_path_policy = __esm({
+  "src/core/path-policy.ts"() {
+    "use strict";
+    import_promises = __toESM(require("node:fs/promises"), 1);
+    import_node_fs = require("node:fs");
+    import_node_path = __toESM(require("node:path"), 1);
+    import_node_crypto = require("node:crypto");
+    init_contracts();
+    init_public_path();
+    init_public_path();
+  }
+});
 
 // node_modules/diff/libesm/diff/base.js
-var Diff = class {
-  diff(oldStr, newStr, options = {}) {
-    let callback;
-    if (typeof options === "function") {
-      callback = options;
-      options = {};
-    } else if ("callback" in options) {
-      callback = options.callback;
-    }
-    const oldString = this.castInput(oldStr, options);
-    const newString = this.castInput(newStr, options);
-    const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
-    const newTokens = this.removeEmpty(this.tokenize(newString, options));
-    return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
-  }
-  diffWithOptionsObj(oldTokens, newTokens, options, callback) {
-    var _a;
-    const done = (value) => {
-      value = this.postProcess(value, options);
-      if (callback) {
-        setTimeout(function() {
-          callback(value);
-        }, 0);
-        return void 0;
-      } else {
+var Diff;
+var init_base = __esm({
+  "node_modules/diff/libesm/diff/base.js"() {
+    Diff = class {
+      diff(oldStr, newStr, options = {}) {
+        let callback;
+        if (typeof options === "function") {
+          callback = options;
+          options = {};
+        } else if ("callback" in options) {
+          callback = options.callback;
+        }
+        const oldString = this.castInput(oldStr, options);
+        const newString = this.castInput(newStr, options);
+        const oldTokens = this.removeEmpty(this.tokenize(oldString, options));
+        const newTokens = this.removeEmpty(this.tokenize(newString, options));
+        return this.diffWithOptionsObj(oldTokens, newTokens, options, callback);
+      }
+      diffWithOptionsObj(oldTokens, newTokens, options, callback) {
+        var _a;
+        const done = (value) => {
+          value = this.postProcess(value, options);
+          if (callback) {
+            setTimeout(function() {
+              callback(value);
+            }, 0);
+            return void 0;
+          } else {
+            return value;
+          }
+        };
+        const newLen = newTokens.length, oldLen = oldTokens.length;
+        let editLength = 1;
+        let maxEditLength = newLen + oldLen;
+        if (options.maxEditLength != null) {
+          maxEditLength = Math.min(maxEditLength, options.maxEditLength);
+        }
+        const maxExecutionTime = (_a = options.timeout) !== null && _a !== void 0 ? _a : Infinity;
+        const abortAfterTimestamp = Date.now() + maxExecutionTime;
+        const bestPath = [{ oldPos: -1, lastComponent: void 0 }];
+        let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
+        if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+          return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
+        }
+        let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
+        const execEditLength = () => {
+          for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
+            let basePath;
+            const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
+            if (removePath) {
+              bestPath[diagonalPath - 1] = void 0;
+            }
+            let canAdd = false;
+            if (addPath) {
+              const addPathNewPos = addPath.oldPos - diagonalPath;
+              canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
+            }
+            const canRemove = removePath && removePath.oldPos + 1 < oldLen;
+            if (!canAdd && !canRemove) {
+              bestPath[diagonalPath] = void 0;
+              continue;
+            }
+            if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
+              basePath = this.addToPath(addPath, true, false, 0, options);
+            } else {
+              basePath = this.addToPath(removePath, false, true, 1, options);
+            }
+            newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
+            if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
+              return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
+            } else {
+              bestPath[diagonalPath] = basePath;
+              if (basePath.oldPos + 1 >= oldLen) {
+                maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
+              }
+              if (newPos + 1 >= newLen) {
+                minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
+              }
+            }
+          }
+          editLength++;
+        };
+        if (callback) {
+          (function exec() {
+            setTimeout(function() {
+              if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
+                return callback(void 0);
+              }
+              if (!execEditLength()) {
+                exec();
+              }
+            }, 0);
+          })();
+        } else {
+          while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
+            const ret = execEditLength();
+            if (ret) {
+              return ret;
+            }
+          }
+        }
+      }
+      addToPath(path15, added, removed, oldPosInc, options) {
+        const last = path15.lastComponent;
+        if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
+          return {
+            oldPos: path15.oldPos + oldPosInc,
+            lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
+          };
+        } else {
+          return {
+            oldPos: path15.oldPos + oldPosInc,
+            lastComponent: { count: 1, added, removed, previousComponent: last }
+          };
+        }
+      }
+      extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
+        const newLen = newTokens.length, oldLen = oldTokens.length;
+        let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
+        while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
+          newPos++;
+          oldPos++;
+          commonCount++;
+          if (options.oneChangePerToken) {
+            basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
+          }
+        }
+        if (commonCount && !options.oneChangePerToken) {
+          basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
+        }
+        basePath.oldPos = oldPos;
+        return newPos;
+      }
+      equals(left, right, options) {
+        if (options.comparator) {
+          return options.comparator(left, right);
+        } else {
+          return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
+        }
+      }
+      removeEmpty(array) {
+        const ret = [];
+        for (let i = 0; i < array.length; i++) {
+          if (array[i]) {
+            ret.push(array[i]);
+          }
+        }
+        return ret;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      castInput(value, options) {
         return value;
       }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      tokenize(value, options) {
+        return Array.from(value);
+      }
+      join(chars) {
+        return chars.join("");
+      }
+      postProcess(changeObjects, options) {
+        return changeObjects;
+      }
+      get useLongestToken() {
+        return false;
+      }
+      buildValues(lastComponent, newTokens, oldTokens) {
+        const components = [];
+        let nextComponent;
+        while (lastComponent) {
+          components.push(lastComponent);
+          nextComponent = lastComponent.previousComponent;
+          delete lastComponent.previousComponent;
+          lastComponent = nextComponent;
+        }
+        components.reverse();
+        const componentLen = components.length;
+        let componentPos = 0, newPos = 0, oldPos = 0;
+        for (; componentPos < componentLen; componentPos++) {
+          const component = components[componentPos];
+          if (!component.removed) {
+            if (!component.added && this.useLongestToken) {
+              let value = newTokens.slice(newPos, newPos + component.count);
+              value = value.map(function(value2, i) {
+                const oldValue = oldTokens[oldPos + i];
+                return oldValue.length > value2.length ? oldValue : value2;
+              });
+              component.value = this.join(value);
+            } else {
+              component.value = this.join(newTokens.slice(newPos, newPos + component.count));
+            }
+            newPos += component.count;
+            if (!component.added) {
+              oldPos += component.count;
+            }
+          } else {
+            component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
+            oldPos += component.count;
+          }
+        }
+        return components;
+      }
     };
-    const newLen = newTokens.length, oldLen = oldTokens.length;
-    let editLength = 1;
-    let maxEditLength = newLen + oldLen;
-    if (options.maxEditLength != null) {
-      maxEditLength = Math.min(maxEditLength, options.maxEditLength);
-    }
-    const maxExecutionTime = (_a = options.timeout) !== null && _a !== void 0 ? _a : Infinity;
-    const abortAfterTimestamp = Date.now() + maxExecutionTime;
-    const bestPath = [{ oldPos: -1, lastComponent: void 0 }];
-    let newPos = this.extractCommon(bestPath[0], newTokens, oldTokens, 0, options);
-    if (bestPath[0].oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
-      return done(this.buildValues(bestPath[0].lastComponent, newTokens, oldTokens));
-    }
-    let minDiagonalToConsider = -Infinity, maxDiagonalToConsider = Infinity;
-    const execEditLength = () => {
-      for (let diagonalPath = Math.max(minDiagonalToConsider, -editLength); diagonalPath <= Math.min(maxDiagonalToConsider, editLength); diagonalPath += 2) {
-        let basePath;
-        const removePath = bestPath[diagonalPath - 1], addPath = bestPath[diagonalPath + 1];
-        if (removePath) {
-          bestPath[diagonalPath - 1] = void 0;
-        }
-        let canAdd = false;
-        if (addPath) {
-          const addPathNewPos = addPath.oldPos - diagonalPath;
-          canAdd = addPath && 0 <= addPathNewPos && addPathNewPos < newLen;
-        }
-        const canRemove = removePath && removePath.oldPos + 1 < oldLen;
-        if (!canAdd && !canRemove) {
-          bestPath[diagonalPath] = void 0;
-          continue;
-        }
-        if (!canRemove || canAdd && removePath.oldPos < addPath.oldPos) {
-          basePath = this.addToPath(addPath, true, false, 0, options);
-        } else {
-          basePath = this.addToPath(removePath, false, true, 1, options);
-        }
-        newPos = this.extractCommon(basePath, newTokens, oldTokens, diagonalPath, options);
-        if (basePath.oldPos + 1 >= oldLen && newPos + 1 >= newLen) {
-          return done(this.buildValues(basePath.lastComponent, newTokens, oldTokens)) || true;
-        } else {
-          bestPath[diagonalPath] = basePath;
-          if (basePath.oldPos + 1 >= oldLen) {
-            maxDiagonalToConsider = Math.min(maxDiagonalToConsider, diagonalPath - 1);
-          }
-          if (newPos + 1 >= newLen) {
-            minDiagonalToConsider = Math.max(minDiagonalToConsider, diagonalPath + 1);
-          }
-        }
-      }
-      editLength++;
-    };
-    if (callback) {
-      (function exec() {
-        setTimeout(function() {
-          if (editLength > maxEditLength || Date.now() > abortAfterTimestamp) {
-            return callback(void 0);
-          }
-          if (!execEditLength()) {
-            exec();
-          }
-        }, 0);
-      })();
-    } else {
-      while (editLength <= maxEditLength && Date.now() <= abortAfterTimestamp) {
-        const ret = execEditLength();
-        if (ret) {
-          return ret;
-        }
-      }
-    }
   }
-  addToPath(path14, added, removed, oldPosInc, options) {
-    const last = path14.lastComponent;
-    if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
-      return {
-        oldPos: path14.oldPos + oldPosInc,
-        lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
-      };
-    } else {
-      return {
-        oldPos: path14.oldPos + oldPosInc,
-        lastComponent: { count: 1, added, removed, previousComponent: last }
-      };
-    }
-  }
-  extractCommon(basePath, newTokens, oldTokens, diagonalPath, options) {
-    const newLen = newTokens.length, oldLen = oldTokens.length;
-    let oldPos = basePath.oldPos, newPos = oldPos - diagonalPath, commonCount = 0;
-    while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(oldTokens[oldPos + 1], newTokens[newPos + 1], options)) {
-      newPos++;
-      oldPos++;
-      commonCount++;
-      if (options.oneChangePerToken) {
-        basePath.lastComponent = { count: 1, previousComponent: basePath.lastComponent, added: false, removed: false };
-      }
-    }
-    if (commonCount && !options.oneChangePerToken) {
-      basePath.lastComponent = { count: commonCount, previousComponent: basePath.lastComponent, added: false, removed: false };
-    }
-    basePath.oldPos = oldPos;
-    return newPos;
-  }
-  equals(left, right, options) {
-    if (options.comparator) {
-      return options.comparator(left, right);
-    } else {
-      return left === right || !!options.ignoreCase && left.toLowerCase() === right.toLowerCase();
-    }
-  }
-  removeEmpty(array) {
-    const ret = [];
-    for (let i = 0; i < array.length; i++) {
-      if (array[i]) {
-        ret.push(array[i]);
-      }
-    }
-    return ret;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  castInput(value, options) {
-    return value;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  tokenize(value, options) {
-    return Array.from(value);
-  }
-  join(chars) {
-    return chars.join("");
-  }
-  postProcess(changeObjects, options) {
-    return changeObjects;
-  }
-  get useLongestToken() {
-    return false;
-  }
-  buildValues(lastComponent, newTokens, oldTokens) {
-    const components = [];
-    let nextComponent;
-    while (lastComponent) {
-      components.push(lastComponent);
-      nextComponent = lastComponent.previousComponent;
-      delete lastComponent.previousComponent;
-      lastComponent = nextComponent;
-    }
-    components.reverse();
-    const componentLen = components.length;
-    let componentPos = 0, newPos = 0, oldPos = 0;
-    for (; componentPos < componentLen; componentPos++) {
-      const component = components[componentPos];
-      if (!component.removed) {
-        if (!component.added && this.useLongestToken) {
-          let value = newTokens.slice(newPos, newPos + component.count);
-          value = value.map(function(value2, i) {
-            const oldValue = oldTokens[oldPos + i];
-            return oldValue.length > value2.length ? oldValue : value2;
-          });
-          component.value = this.join(value);
-        } else {
-          component.value = this.join(newTokens.slice(newPos, newPos + component.count));
-        }
-        newPos += component.count;
-        if (!component.added) {
-          oldPos += component.count;
-        }
-      } else {
-        component.value = this.join(oldTokens.slice(oldPos, oldPos + component.count));
-        oldPos += component.count;
-      }
-    }
-    return components;
-  }
-};
+});
 
 // node_modules/diff/libesm/diff/line.js
-var LineDiff = class extends Diff {
-  constructor() {
-    super(...arguments);
-    this.tokenize = tokenize;
-  }
-  equals(left, right, options) {
-    if (options.ignoreWhitespace) {
-      if (!options.newlineIsToken || !left.includes("\n")) {
-        left = left.trim();
-      }
-      if (!options.newlineIsToken || !right.includes("\n")) {
-        right = right.trim();
-      }
-    } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
-      if (left.endsWith("\n")) {
-        left = left.slice(0, -1);
-      }
-      if (right.endsWith("\n")) {
-        right = right.slice(0, -1);
-      }
-    }
-    return super.equals(left, right, options);
-  }
-};
-var lineDiff = new LineDiff();
 function diffLines(oldStr, newStr, options) {
   return lineDiff.diff(oldStr, newStr, options);
 }
@@ -502,13 +447,39 @@ function tokenize(value, options) {
   }
   return retLines;
 }
+var LineDiff, lineDiff;
+var init_line = __esm({
+  "node_modules/diff/libesm/diff/line.js"() {
+    init_base();
+    LineDiff = class extends Diff {
+      constructor() {
+        super(...arguments);
+        this.tokenize = tokenize;
+      }
+      equals(left, right, options) {
+        if (options.ignoreWhitespace) {
+          if (!options.newlineIsToken || !left.includes("\n")) {
+            left = left.trim();
+          }
+          if (!options.newlineIsToken || !right.includes("\n")) {
+            right = right.trim();
+          }
+        } else if (options.ignoreNewlineAtEof && !options.newlineIsToken) {
+          if (left.endsWith("\n")) {
+            left = left.slice(0, -1);
+          }
+          if (right.endsWith("\n")) {
+            right = right.slice(0, -1);
+          }
+        }
+        return super.equals(left, right, options);
+      }
+    };
+    lineDiff = new LineDiff();
+  }
+});
 
 // node_modules/diff/libesm/patch/create.js
-var INCLUDE_HEADERS = {
-  includeIndex: true,
-  includeUnderline: true,
-  includeFileHeaders: true
-};
 function structuredPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader, options) {
   let optionsObj;
   if (!options) {
@@ -682,6 +653,24 @@ function splitLines(text2) {
   }
   return result;
 }
+var INCLUDE_HEADERS;
+var init_create = __esm({
+  "node_modules/diff/libesm/patch/create.js"() {
+    init_line();
+    INCLUDE_HEADERS = {
+      includeIndex: true,
+      includeUnderline: true,
+      includeFileHeaders: true
+    };
+  }
+});
+
+// node_modules/diff/libesm/index.js
+var init_libesm = __esm({
+  "node_modules/diff/libesm/index.js"() {
+    init_create();
+  }
+});
 
 // src/core/diff.ts
 function buildHunks(before, after, context = 3) {
@@ -726,54 +715,169 @@ function selectHunkText(before, after, hunkId) {
   const newStart = h.newLines === 0 ? h.newStart : h.newStart - 1;
   return [...left.slice(0, start), ...right.slice(newStart, newStart + h.newLines), ...left.slice(start + h.oldLines)].join("");
 }
+var init_diff = __esm({
+  "src/core/diff.ts"() {
+    "use strict";
+    init_libesm();
+  }
+});
+
+// src/core/capture-leases.ts
+var capture_leases_exports = {};
+__export(capture_leases_exports, {
+  beginCaptureLease: () => beginCaptureLease,
+  closeCaptureLease: () => closeCaptureLease,
+  endCaptureLease: () => endCaptureLease,
+  inspectCaptureLeases: () => inspectCaptureLeases,
+  prepareCaptureLease: () => prepareCaptureLease,
+  retireLegacyCaptureLeases: () => retireLegacyCaptureLeases,
+  writeCaptureLeases: () => writeCaptureLeases
+});
+function validate(data) {
+  if (data.version !== 1 || !Array.isArray(data.leases) || data.leases.length > 256 || new Set(data.leases.map((l) => l.id)).size !== data.leases.length) throw new Error("Invalid capture lease journal");
+  for (const l of data.leases) {
+    if (typeof l.id !== "string" || typeof l.root !== "string" || typeof l.ambiguous !== "boolean" || l.closed !== void 0 && typeof l.closed !== "boolean") throw new Error("Invalid capture lease");
+    const p = l.prepared;
+    if (!p) continue;
+    if (![l.owner, l.sessionId, l.executionId].every((id2) => typeof id2 === "string" && /^[a-zA-Z0-9-]{1,80}$/.test(id2)) || typeof l.toolCallId !== "string" || !l.toolCallId.length || l.toolCallId.length > 256 || !import_node_path2.default.isAbsolute(l.root) || typeof p.name !== "string" || p.name.length > 100 || p.userMessageId !== void 0 && (typeof p.userMessageId !== "string" || p.userMessageId.length > 256) || !Array.isArray(p.paths) || p.paths.length > 256) throw new Error("Invalid preparation identity");
+    for (const { capture: c, before: s } of p.paths) {
+      if (!c || !s || typeof c.absolutePath !== "string" || !import_node_path2.default.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) throw new Error("Invalid preparation path");
+      assertPublicPath(c.path);
+      assertPublicPath(c.absolutePath);
+      if (c.origin === "workspace" ? import_node_path2.default.isAbsolute(c.path) || !inside(l.root, c.absolutePath) || canonical(import_node_path2.default.resolve(l.root, c.path)) !== c.identity : c.origin !== "external" || inside(l.root, c.absolutePath) || canonical(c.path) !== c.identity) throw new Error("Invalid preparation scope");
+      if (!(l.scopes ?? []).some((scope) => canonical(scope) === c.identity) || s.text !== null || typeof s.exists !== "boolean" || typeof s.hash !== "string" || !Number.isFinite(s.size) || s.size < 0 || !Number.isFinite(s.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(s.kind)) throw new Error("Invalid preparation endpoint");
+      if (s.kind === "text" && (s.exists ? !/^[a-f0-9]{64}$/.test(s.hash) || s.size > 2 * 1024 * 1024 : s.hash !== "absent" || s.size !== 0)) throw new Error("Invalid preparation text");
+    }
+  }
+}
+async function inspectCaptureLeases(store2) {
+  const file = import_node_path2.default.join(store2.directory, "capture-leases.json");
+  const stat = await import_promises2.default.lstat(file).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!stat) return { fingerprint: digest("absent"), leases: [] };
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_JOURNAL_BYTES) throw new Error("Unsafe lease journal");
+  const text2 = await import_promises2.default.readFile(file, "utf8"), data = JSON.parse(text2);
+  validate(data);
+  return { fingerprint: digest(text2), leases: data.leases };
+}
+async function writeCaptureLeases(store2, leases) {
+  const data = { version: 1, leases };
+  validate(data);
+  if (Buffer.byteLength(JSON.stringify(data)) > MAX_JOURNAL_BYTES) throw new Error("Capture lease journal exceeds limit");
+  await atomicJson(import_node_path2.default.join(store2.directory, "capture-leases.json"), data);
+}
+async function journal(store2, work) {
+  return store2.captureLock(async () => {
+    const { leases } = await inspectCaptureLeases(store2);
+    const result = work(leases);
+    await writeCaptureLeases(store2, leases);
+    return result;
+  });
+}
+async function beginCaptureLease(store2, root, owner, scopes = [], lifecycle = {}) {
+  return journal(store2, (leases) => {
+    if (leases.length >= 256) throw new Error("Capture lease limit reached; verify unresolved writers before retiring leases");
+    const lease = { id: (0, import_node_crypto2.randomUUID)(), root, scopes: scopes.length ? [...new Set(scopes)] : [root], owner, ambiguous: false, ...lifecycle };
+    for (const other of leases) if (!other.closed && (other.scopes ?? [other.root]).some((a) => lease.scopes.some((b) => inside(a, b) || inside(b, a)))) other.ambiguous = lease.ambiguous = true;
+    leases.push(lease);
+    return lease.id;
+  });
+}
+async function prepareCaptureLease(store2, id2, preparation) {
+  await store2.captureLock(async () => {
+    const { leases } = await inspectCaptureLeases(store2), lease = leases.find((l) => l.id === id2);
+    if (!lease || lease.prepared) throw new Error("Missing or already prepared capture lease");
+    const paths = [];
+    for (const entry of preparation.paths) paths.push({ capture: entry.capture, before: await store2.saveBlob(entry.before) });
+    lease.prepared = { ...preparation, paths };
+    await writeCaptureLeases(store2, leases);
+  });
+}
+async function closeCaptureLease(store2, id2) {
+  return journal(store2, (leases) => {
+    const lease = leases.find((l) => l.id === id2);
+    if (lease) lease.closed = true;
+    return !lease || lease.ambiguous;
+  });
+}
+async function endCaptureLease(store2, id2) {
+  return journal(store2, (leases) => {
+    const index = leases.findIndex((l) => l.id === id2), lease = leases[index];
+    if (index >= 0) leases.splice(index, 1);
+    return !lease || lease.ambiguous;
+  });
+}
+async function retireLegacyCaptureLeases(store2, root, ids, fingerprint, writersStopped) {
+  if (!writersStopped || !ids.length || new Set(ids).size !== ids.length) throw new Error("Explicit confirmation of stopped legacy writers is required");
+  await store2.captureLock(async () => {
+    const current = await inspectCaptureLeases(store2);
+    if (current.fingerprint !== fingerprint) throw new Error("Lease journal changed; inspect again");
+    const selected2 = current.leases.filter((l) => ids.includes(l.id));
+    if (selected2.length !== ids.length || selected2.some((l) => canonical(l.root) !== canonical(root) || l.sessionId || l.toolCallId)) throw new Error("Unverified or non-legacy lease selection");
+    await atomicJson(import_node_path2.default.join(store2.directory, "backups", `leases-${fingerprint}.json`), { version: 1, leases: current.leases });
+    await writeCaptureLeases(store2, current.leases.filter((l) => !ids.includes(l.id)));
+  });
+}
+var import_promises2, import_node_path2, import_node_crypto2, MAX_JOURNAL_BYTES;
+var init_capture_leases = __esm({
+  "src/core/capture-leases.ts"() {
+    "use strict";
+    import_promises2 = __toESM(require("node:fs/promises"), 1);
+    import_node_path2 = __toESM(require("node:path"), 1);
+    import_node_crypto2 = require("node:crypto");
+    init_path_policy();
+    init_storage();
+    MAX_JOURNAL_BYTES = 1024 * 1024;
+  }
+});
 
 // src/core/storage.ts
-var MAX_RUNS = 200;
-var MAX_HISTORY_BYTES = 128 * 1024 * 1024;
 function captureCheckpoint(change) {
   const snapshot = (value) => [value.exists, value.kind, value.hash, value.size, value.mode];
   return digest(JSON.stringify(change ? [change.capture, change.evidence, change.ambiguous, change.note, snapshot(change.before), snapshot(change.after), change.segments?.map((s) => [s.evidence, s.ambiguous, s.conflicted, snapshot(s.before), snapshot(s.after)]), change.segmentsTruncated] : null));
 }
 async function atomicJson(file, value) {
-  await import_promises2.default.mkdir(import_node_path2.default.dirname(file), { recursive: true, mode: 448 });
-  const temp = `${file}.${(0, import_node_crypto2.randomUUID)()}.tmp`;
+  await import_promises3.default.mkdir(import_node_path3.default.dirname(file), { recursive: true, mode: 448 });
+  const temp = `${file}.${(0, import_node_crypto3.randomUUID)()}.tmp`;
   try {
-    await import_promises2.default.writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 384 });
-    await import_promises2.default.rename(temp, file);
+    await import_promises3.default.writeFile(temp, JSON.stringify(value), { flag: "wx", mode: 384 });
+    await import_promises3.default.rename(temp, file);
   } finally {
-    await import_promises2.default.rm(temp, { force: true });
+    await import_promises3.default.rm(temp, { force: true });
   }
 }
 async function readJson(file, fallback) {
   try {
-    const s = await import_promises2.default.stat(file);
+    const s = await import_promises3.default.stat(file);
     if (s.size > 16 * 1024 * 1024) fail("STORE_LIMIT", "Store record too large");
-    return JSON.parse(await import_promises2.default.readFile(file, "utf8"));
+    return JSON.parse(await import_promises3.default.readFile(file, "utf8"));
   } catch (error) {
     if (error.code === "ENOENT" && fallback !== void 0) return fallback;
     throw error;
   }
 }
 async function locatorPath(pluginRoot2) {
-  return import_node_path2.default.join(import_node_os.default.homedir(), ".pi-diff-view", "locators", `${digest(canonical(await import_promises2.default.realpath(pluginRoot2)))}.json`);
+  return import_node_path3.default.join(import_node_os.default.homedir(), ".pi-diff-view", "locators", `${digest(canonical(await import_promises3.default.realpath(pluginRoot2)))}.json`);
 }
 function validId(id2) {
   if (!/^[a-zA-Z0-9-]{1,80}$/.test(id2)) fail("INVALID_ID", "Invalid record identifier");
 }
 function validRun(run2, id2) {
-  if (!run2 || ![1, 2].includes(run2.version) || run2.id !== id2 || typeof run2.sessionId !== "string" || !import_node_path2.default.isAbsolute(run2.root) || !run2.changes || Array.isArray(run2.changes) || Object.keys(run2.changes).length > 256 || !Array.isArray(run2.replies) || !run2.bindings) return false;
+  if (!run2 || ![1, 2].includes(run2.version) || run2.id !== id2 || typeof run2.sessionId !== "string" || !import_node_path3.default.isAbsolute(run2.root) || !run2.changes || Array.isArray(run2.changes) || Object.keys(run2.changes).length > 256 || !Array.isArray(run2.replies) || !run2.bindings) return false;
   try {
     for (const [value, change] of Object.entries(run2.changes)) {
       assertPublicPath(value);
       if (change.segments !== void 0 && (!Array.isArray(change.segments) || change.segments.length > MAX_CAPTURE_SEGMENTS || change.segments.some((s) => !s || typeof s.evidence !== "string" || s.evidence.length > 1024 || !s.evidence.includes(":") || s.ambiguous !== void 0 && typeof s.ambiguous !== "boolean" || s.conflicted !== void 0 && (s.conflicted !== true || s.ambiguous !== true)))) return false;
       for (const snapshot of [change.before, change.after, ...(change.segments ?? []).flatMap((s) => [s.before, s.after])]) if (!snapshot || typeof snapshot.exists !== "boolean" || typeof snapshot.hash !== "string" || !Number.isFinite(snapshot.size) || snapshot.size < 0 || !Number.isFinite(snapshot.mode) || !["text", "binary", "large", "symlink", "submodule", "conflict", "unavailable"].includes(snapshot.kind)) return false;
       if (run2.version === 1) {
-        if (import_node_path2.default.isAbsolute(value) || !inside(run2.root, import_node_path2.default.resolve(run2.root, value))) return false;
+        if (import_node_path3.default.isAbsolute(value) || !inside(run2.root, import_node_path3.default.resolve(run2.root, value))) return false;
       } else {
         const c = change.capture;
-        if (!c || c.path !== value || !import_node_path2.default.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) return false;
+        if (!c || c.path !== value || !import_node_path3.default.isAbsolute(c.absolutePath) || c.identity !== canonical(c.absolutePath) || c.id !== digest(c.identity).slice(0, 24)) return false;
         if (c.origin === "workspace") {
-          if (import_node_path2.default.isAbsolute(value) || !inside(run2.root, c.absolutePath) || canonical(import_node_path2.default.resolve(run2.root, value)) !== c.identity) return false;
+          if (import_node_path3.default.isAbsolute(value) || !inside(run2.root, c.absolutePath) || canonical(import_node_path3.default.resolve(run2.root, value)) !== c.identity) return false;
         } else if (c.origin !== "external" || inside(run2.root, c.absolutePath) || canonical(value) !== c.identity) return false;
       }
     }
@@ -782,386 +886,456 @@ function validRun(run2, id2) {
     return false;
   }
 }
-var SnapshotStore = class {
-  constructor(directory) {
-    this.directory = directory;
-  }
-  pendingRecovery = /* @__PURE__ */ new Set();
-  needsRecovery(sessionId) {
-    return this.pendingRecovery.has(sessionId);
-  }
-  acknowledgeRecovery(sessionId) {
-    this.pendingRecovery.delete(sessionId);
-  }
-  async init() {
-    for (const sub of ["blobs", "inbox", "runs", "contributions", "backups", "evidence"]) await import_promises2.default.mkdir(import_node_path2.default.join(this.directory, sub), { recursive: true, mode: 448 });
-  }
-  /** Called under captureLock after the destination has been durably written. */
-  async retireRun(from, to) {
-    validId(from);
-    validId(to);
-    if (from === to) return;
-    const target = await this.getRun(to, false, false);
-    const recorded = await this.getRun(from, false, false);
-    const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
-    const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
-    if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail("REPAIR_IDENTITY", "Cannot retire unverified run identity");
-    const fileAliases = await readJson(import_node_path2.default.join(this.directory, "file-aliases.json"), {});
-    const paths = /* @__PURE__ */ new Map();
-    for (const [value, change] of Object.entries(source.changes)) {
-      const match = target.changes[value] ? value : Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === change.capture?.identity);
-      if (!match) continue;
-      paths.set(value, match);
-      if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture.id;
-    }
-    await atomicJson(import_node_path2.default.join(this.directory, "file-aliases.json"), fileAliases);
-    const comments = await this.comments();
-    for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
-      comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path) };
-      comment.stale = true;
-    }
-    await this.saveComments(comments);
-    const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
-    aliases[from] = to;
-    await atomicJson(import_node_path2.default.join(this.directory, "run-aliases.json"), aliases);
-    if (recorded) await atomicJson(import_node_path2.default.join(this.directory, "contributions", `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
-    for (const sub of ["runs", "inbox"]) await import_promises2.default.rm(import_node_path2.default.join(this.directory, sub, `${from}.json`), { force: true });
-  }
-  async resolveFileId(runId, fileId) {
-    if (!fileId) return fileId;
-    const aliases = await readJson(import_node_path2.default.join(this.directory, "file-aliases.json"), {});
-    return aliases[`${runId}:${fileId}`] ?? fileId;
-  }
-  async captureLock(work) {
-    const lock = import_node_path2.default.join(this.directory, "capture.lock");
-    let handle;
-    for (let attempt = 0; attempt < 80 && !handle; attempt++) {
-      try {
-        handle = await import_promises2.default.open(lock, "wx", 384);
-        await handle.writeFile(JSON.stringify({ pid: process.pid }));
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        const owner = await readJson(lock, null).catch(() => null);
-        if (owner?.pid && owner.pid !== process.pid) {
-          try {
-            process.kill(owner.pid, 0);
-          } catch (e) {
-            if (e.code === "ESRCH") await import_promises2.default.rm(lock, { force: true });
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+var import_promises3, import_node_path3, import_node_os, import_node_crypto3, MAX_RUNS, MAX_HISTORY_BYTES, SnapshotStore;
+var init_storage = __esm({
+  "src/core/storage.ts"() {
+    "use strict";
+    import_promises3 = __toESM(require("node:fs/promises"), 1);
+    import_node_path3 = __toESM(require("node:path"), 1);
+    import_node_os = __toESM(require("node:os"), 1);
+    import_node_crypto3 = require("node:crypto");
+    init_path_policy();
+    init_diff();
+    init_contracts();
+    MAX_RUNS = 200;
+    MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+    SnapshotStore = class {
+      constructor(directory) {
+        this.directory = directory;
       }
-    }
-    if (!handle) fail("STORE_BUSY", "Capture store is busy; retry after active Agents stop");
-    try {
-      return await work();
-    } finally {
-      await handle.close();
-      await import_promises2.default.rm(lock, { force: true });
-    }
-  }
-  async saveBlob(snapshot) {
-    if (snapshot.kind === "text" && snapshot.exists && snapshot.text !== null) {
-      if (!/^[a-f0-9]{64}$/.test(snapshot.hash) || digest(snapshot.text) !== snapshot.hash) fail("SNAPSHOT_INVALID", "Snapshot content hash does not match");
-      const file = import_node_path2.default.join(this.directory, "blobs", snapshot.hash);
-      if (!await import_promises2.default.stat(file).catch(() => null)) {
-        const lock = import_node_path2.default.join(this.directory, "quota.lock");
+      pendingRecovery = /* @__PURE__ */ new Set();
+      needsRecovery(sessionId) {
+        return this.pendingRecovery.has(sessionId);
+      }
+      acknowledgeRecovery(sessionId) {
+        this.pendingRecovery.delete(sessionId);
+      }
+      async init() {
+        for (const sub of ["blobs", "inbox", "runs", "contributions", "backups", "evidence"]) await import_promises3.default.mkdir(import_node_path3.default.join(this.directory, sub), { recursive: true, mode: 448 });
+      }
+      /** Called under captureLock after the destination has been durably written. */
+      async retireRun(from, to) {
+        validId(from);
+        validId(to);
+        if (from === to) return;
+        const target = await this.getRun(to, false, false);
+        const recorded = await this.getRun(from, false, false);
+        const stableHostId = target?.userMessageId && `host-${digest(`${target.sessionId}\0${target.userMessageId}`).slice(0, 48)}`;
+        const source = recorded ?? (from === stableHostId && target ? { ...target, id: from } : null);
+        if (!source || !target || source.sessionId !== target.sessionId || source.userMessageId !== target.userMessageId) fail("REPAIR_IDENTITY", "Cannot retire unverified run identity");
+        const fileAliases = await readJson(import_node_path3.default.join(this.directory, "file-aliases.json"), {});
+        const paths = /* @__PURE__ */ new Map();
+        for (const [value, change] of Object.entries(source.changes)) {
+          const match = target.changes[value] ? value : Object.keys(target.changes).find((p) => target.changes[p].capture?.identity === change.capture?.identity);
+          if (!match) continue;
+          paths.set(value, match);
+          if (change.capture?.id && target.changes[match].capture?.id) fileAliases[`${from}:${change.capture.id}`] = target.changes[match].capture.id;
+        }
+        await atomicJson(import_node_path3.default.join(this.directory, "file-aliases.json"), fileAliases);
+        const comments = await this.comments();
+        for (const comment of comments) if (comment.sessionId === source.sessionId && comment.anchor.runId === from && canonical(comment.anchor.root) === canonical(source.root) && paths.has(comment.anchor.path)) {
+          comment.anchor = { ...comment.anchor, runId: to, root: target.root, path: paths.get(comment.anchor.path) };
+          comment.stale = true;
+        }
+        await this.saveComments(comments);
+        const aliases = await readJson(import_node_path3.default.join(this.directory, "run-aliases.json"), {});
+        aliases[from] = to;
+        await atomicJson(import_node_path3.default.join(this.directory, "run-aliases.json"), aliases);
+        if (recorded) await atomicJson(import_node_path3.default.join(this.directory, "contributions", `${from}.json`), { ...recorded, userMessageId: target.userMessageId });
+        for (const sub of ["runs", "inbox"]) await import_promises3.default.rm(import_node_path3.default.join(this.directory, sub, `${from}.json`), { force: true });
+      }
+      async resolveFileId(runId, fileId) {
+        if (!fileId) return fileId;
+        const aliases = await readJson(import_node_path3.default.join(this.directory, "file-aliases.json"), {});
+        return aliases[`${runId}:${fileId}`] ?? fileId;
+      }
+      async captureLock(work) {
+        const lock = import_node_path3.default.join(this.directory, "capture.lock");
         let handle;
-        for (let attempt = 0; attempt < 40 && !handle; attempt++) {
+        for (let attempt = 0; attempt < 80 && !handle; attempt++) {
           try {
-            handle = await import_promises2.default.open(lock, "wx", 384);
+            handle = await import_promises3.default.open(lock, "wx", 384);
+            await handle.writeFile(JSON.stringify({ pid: process.pid }));
           } catch (error) {
             if (error.code !== "EEXIST") throw error;
-            const s = await import_promises2.default.stat(lock).catch(() => null);
-            if (s && Date.now() - s.mtimeMs > 6e4) await import_promises2.default.rm(lock, { force: true });
-            else await new Promise((r) => setTimeout(r, 25));
+            const owner = await readJson(lock, null).catch(() => null);
+            if (owner?.pid && owner.pid !== process.pid) {
+              try {
+                process.kill(owner.pid, 0);
+              } catch (e) {
+                if (e.code === "ESRCH") await import_promises3.default.rm(lock, { force: true });
+              }
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
           }
         }
-        if (!handle) fail("STORE_BUSY", "Snapshot store is busy; capture marked incomplete");
+        if (!handle) fail("STORE_BUSY", "Capture store is busy; retry after active Agents stop");
         try {
-          const entries = await import_promises2.default.readdir(import_node_path2.default.dirname(file));
-          if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
-          let size = 0;
-          for (let offset = 0; offset < entries.length; offset += 16) {
-            const batch = entries.slice(offset, offset + 16);
-            const sizes = await Promise.all(batch.map((entry) => import_promises2.default.stat(import_node_path2.default.join(import_node_path2.default.dirname(file), entry)).then((stat) => stat.size)));
-            size += sizes.reduce((total, value) => total + value, 0);
-          }
-          if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
-          try {
-            await import_promises2.default.writeFile(file, snapshot.text, { flag: "wx", mode: 384 });
-          } catch (error) {
-            if (error.code !== "EEXIST") throw error;
-          }
+          return await work();
         } finally {
           await handle.close();
-          await import_promises2.default.rm(lock, { force: true });
+          await import_promises3.default.rm(lock, { force: true });
         }
       }
-    }
-    return { ...snapshot, text: null };
-  }
-  async inspect(snapshot) {
-    if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
-    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
-    try {
-      const stat = await import_promises2.default.lstat(import_node_path2.default.join(this.directory, "blobs", snapshot.hash));
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024 || stat.size !== snapshot.size) throw new Error("Unsafe blob");
-      return { ...snapshot, text: null };
-    } catch {
-      return { ...snapshot, kind: "unavailable", text: null };
-    }
-  }
-  async hydrate(snapshot) {
-    if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
-    if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
-    try {
-      const file = import_node_path2.default.join(this.directory, "blobs", snapshot.hash);
-      const stat = await import_promises2.default.lstat(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("Unsafe blob");
-      const bytes = await import_promises2.default.readFile(file);
-      if (digest(bytes) !== snapshot.hash) throw new Error("Corrupt blob");
-      return { ...snapshot, text: bytes.toString("utf8") };
-    } catch {
-      return { ...snapshot, kind: "unavailable", text: null };
-    }
-  }
-  async writeRun(run2, inbox = false) {
-    const save = async () => {
-      const saved = /* @__PURE__ */ new Map();
-      const saveSnapshot = (snapshot) => {
-        let value = saved.get(snapshot);
-        if (!value) {
-          value = this.saveBlob(snapshot);
-          saved.set(snapshot, value);
-        }
-        return value;
-      };
-      validId(run2.id);
-      const changes2 = /* @__PURE__ */ Object.create(null);
-      if (Object.keys(run2.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
-      const fileCount = Object.keys(run2.changes).length;
-      if (!fileCount) {
-        if (run2.state === "running") {
-          const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run2;
-          await atomicJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${run2.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
-        } else {
-          for (const sub of ["runs", "inbox"]) await import_promises2.default.rm(import_node_path2.default.join(this.directory, sub, `${run2.id}.json`), { force: true });
-        }
-        return;
-      }
-      for (const [p, c] of Object.entries(run2.changes)) {
-        let diffStats = c.diffStats;
-        if (diffStats?.beforeHash !== c.before.hash || diffStats?.afterHash !== c.after.hash) diffStats = void 0;
-        if (!diffStats && c.before.kind === "text" && c.after.kind === "text" && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
-          try {
-            diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? "", c.after.text ?? "") };
-          } catch {
+      async saveBlob(snapshot) {
+        if (snapshot.kind === "text" && snapshot.exists && snapshot.text !== null) {
+          if (!/^[a-f0-9]{64}$/.test(snapshot.hash) || digest(snapshot.text) !== snapshot.hash) fail("SNAPSHOT_INVALID", "Snapshot content hash does not match");
+          const file = import_node_path3.default.join(this.directory, "blobs", snapshot.hash);
+          if (!await import_promises3.default.stat(file).catch(() => null)) {
+            const lock = import_node_path3.default.join(this.directory, "quota.lock");
+            let handle;
+            for (let attempt = 0; attempt < 40 && !handle; attempt++) {
+              try {
+                handle = await import_promises3.default.open(lock, "wx", 384);
+              } catch (error) {
+                if (error.code !== "EEXIST") throw error;
+                const s = await import_promises3.default.stat(lock).catch(() => null);
+                if (s && Date.now() - s.mtimeMs > 6e4) await import_promises3.default.rm(lock, { force: true });
+                else await new Promise((r) => setTimeout(r, 25));
+              }
+            }
+            if (!handle) fail("STORE_BUSY", "Snapshot store is busy; capture marked incomplete");
+            try {
+              const entries = await import_promises3.default.readdir(import_node_path3.default.dirname(file));
+              if (entries.length > 4096) fail("STORE_LIMIT", "Snapshot limit reached; clear plugin history after stopping Agents");
+              let size = 0;
+              for (let offset = 0; offset < entries.length; offset += 16) {
+                const batch = entries.slice(offset, offset + 16);
+                const sizes = await Promise.all(batch.map((entry) => import_promises3.default.stat(import_node_path3.default.join(import_node_path3.default.dirname(file), entry)).then((stat) => stat.size)));
+                size += sizes.reduce((total, value) => total + value, 0);
+              }
+              if (size + snapshot.size > MAX_HISTORY_BYTES) fail("STORE_LIMIT", "128 MiB snapshot capacity reached; clear plugin history after stopping Agents");
+              const temp = `${file}.${(0, import_node_crypto3.randomUUID)()}.tmp`;
+              try {
+                await import_promises3.default.writeFile(temp, snapshot.text, { flag: "wx", mode: 384 });
+                await import_promises3.default.rename(temp, file);
+              } finally {
+                await import_promises3.default.rm(temp, { force: true });
+              }
+            } finally {
+              await handle.close();
+              await import_promises3.default.rm(lock, { force: true });
+            }
           }
         }
-        if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail("STORE_LIMIT", "Too many capture segments");
-        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : void 0;
-        changes2[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...segments ? { segments } : {} };
+        return { ...snapshot, text: null };
       }
-      await atomicJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${run2.id}.json`), { ...run2, fileCount, changes: changes2 });
-    };
-    if (inbox) await this.captureLock(save);
-    else await save();
-  }
-  async getRun(id2, inbox = false, hydrate = true) {
-    const aliases = inbox ? void 0 : await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
-    return this.readRun(id2, inbox, hydrate, aliases);
-  }
-  async readRun(id2, inbox, hydrate, aliases) {
-    validId(id2);
-    if (!inbox) {
-      const resolved = aliases ?? await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
-      const seen = /* @__PURE__ */ new Set();
-      while (resolved[id2]) {
-        if (seen.has(id2) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
-        seen.add(id2);
-        id2 = resolved[id2];
+      async inspect(snapshot) {
+        if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
+        if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
+        try {
+          const stat = await import_promises3.default.lstat(import_node_path3.default.join(this.directory, "blobs", snapshot.hash));
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024 || stat.size !== snapshot.size) throw new Error("Unsafe blob");
+          return { ...snapshot, text: null };
+        } catch {
+          return { ...snapshot, kind: "unavailable", text: null };
+        }
+      }
+      async hydrate(snapshot) {
+        if (!snapshot.exists || snapshot.kind !== "text") return { ...snapshot };
+        if (!/^[a-f0-9]{64}$/.test(snapshot.hash)) return { ...snapshot, kind: "unavailable", text: null };
+        try {
+          const file = import_node_path3.default.join(this.directory, "blobs", snapshot.hash);
+          const stat = await import_promises3.default.lstat(file);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("Unsafe blob");
+          const bytes = await import_promises3.default.readFile(file);
+          if (digest(bytes) !== snapshot.hash) throw new Error("Corrupt blob");
+          return { ...snapshot, text: bytes.toString("utf8") };
+        } catch {
+          return { ...snapshot, kind: "unavailable", text: null };
+        }
+      }
+      async writeRun(run2, inbox = false) {
+        const save = async () => {
+          const saved = /* @__PURE__ */ new Map();
+          const saveSnapshot = (snapshot) => {
+            let value = saved.get(snapshot);
+            if (!value) {
+              value = this.saveBlob(snapshot);
+              saved.set(snapshot, value);
+            }
+            return value;
+          };
+          validId(run2.id);
+          const changes2 = /* @__PURE__ */ Object.create(null);
+          if (Object.keys(run2.changes).length > 256) fail("STORE_LIMIT", "Turn exceeds 256 captured files");
+          const fileCount = Object.keys(run2.changes).length;
+          if (!fileCount) {
+            if (run2.state === "running") {
+              const { prompt: _prompt, finalReply: _reply, cardPreview: _preview, ...marker } = run2;
+              await atomicJson(import_node_path3.default.join(this.directory, inbox ? "inbox" : "runs", `${run2.id}.json`), { ...marker, fileCount: 0, changes: {}, replies: [], bindings: {} });
+            } else {
+              for (const sub of ["runs", "inbox"]) await import_promises3.default.rm(import_node_path3.default.join(this.directory, sub, `${run2.id}.json`), { force: true });
+            }
+            return;
+          }
+          for (const [p, c] of Object.entries(run2.changes)) {
+            let diffStats = c.diffStats;
+            if (diffStats?.beforeHash !== c.before.hash || diffStats?.afterHash !== c.after.hash) diffStats = void 0;
+            if (!diffStats && c.before.kind === "text" && c.after.kind === "text" && (!c.before.exists || c.before.text !== null) && (!c.after.exists || c.after.text !== null)) {
+              try {
+                diffStats = { beforeHash: c.before.hash, afterHash: c.after.hash, ...stats(c.before.text ?? "", c.after.text ?? "") };
+              } catch {
+              }
+            }
+            if (c.segments && c.segments.length > MAX_CAPTURE_SEGMENTS) fail("STORE_LIMIT", "Too many capture segments");
+            const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await saveSnapshot(s.before), after: await saveSnapshot(s.after) }))) : void 0;
+            changes2[p] = { ...c, diffStats, before: await saveSnapshot(c.before), after: await saveSnapshot(c.after), ...segments ? { segments } : {} };
+          }
+          await atomicJson(import_node_path3.default.join(this.directory, inbox ? "inbox" : "runs", `${run2.id}.json`), { ...run2, fileCount, changes: changes2 });
+        };
+        if (inbox) await this.captureLock(save);
+        else await save();
+      }
+      async getRun(id2, inbox = false, hydrate = true) {
+        const aliases = inbox ? void 0 : await readJson(import_node_path3.default.join(this.directory, "run-aliases.json"), {});
+        return this.readRun(id2, inbox, hydrate, aliases);
+      }
+      async readRun(id2, inbox, hydrate, aliases) {
         validId(id2);
+        if (!inbox) {
+          const resolved = aliases ?? await readJson(import_node_path3.default.join(this.directory, "run-aliases.json"), {});
+          const seen = /* @__PURE__ */ new Set();
+          while (resolved[id2]) {
+            if (seen.has(id2) || seen.size >= MAX_RUNS) fail("REPAIR_IDENTITY", "Invalid run alias chain");
+            seen.add(id2);
+            id2 = resolved[id2];
+            validId(id2);
+          }
+        }
+        const run2 = await readJson(import_node_path3.default.join(this.directory, inbox ? "inbox" : "runs", `${id2}.json`), null);
+        if (!run2 || !validRun(run2, id2)) return null;
+        if (hydrate) {
+          const loaded = /* @__PURE__ */ new Map();
+          const load = (snapshot) => {
+            const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
+            let pending = loaded.get(key);
+            if (!pending) {
+              pending = this.hydrate(snapshot);
+              loaded.set(key, pending);
+            }
+            return pending;
+          };
+          for (const [p, c] of Object.entries(run2.changes)) {
+            const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : void 0;
+            run2.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...segments ? { segments } : {} };
+          }
+        }
+        return run2;
       }
-    }
-    const run2 = await readJson(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs", `${id2}.json`), null);
-    if (!run2 || !validRun(run2, id2)) return null;
-    if (hydrate) {
-      const loaded = /* @__PURE__ */ new Map();
-      const load = (snapshot) => {
-        const key = JSON.stringify([snapshot.kind, snapshot.exists, snapshot.hash, snapshot.mode]);
-        let pending = loaded.get(key);
-        if (!pending) {
-          pending = this.hydrate(snapshot);
-          loaded.set(key, pending);
-        }
-        return pending;
-      };
-      for (const [p, c] of Object.entries(run2.changes)) {
-        const segments = c.segments ? await Promise.all(c.segments.map(async (s) => ({ ...s, before: await load(s.before), after: await load(s.after) }))) : void 0;
-        run2.changes[p] = { ...c, before: await load(c.before), after: await load(c.after), ...segments ? { segments } : {} };
+      async importInbox(generation2) {
+        await this.captureLock(async () => {
+          const entries = (await import_promises3.default.readdir(import_node_path3.default.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
+          for (const entry of entries) {
+            const id2 = entry.slice(0, -5);
+            const aliases = await readJson(import_node_path3.default.join(this.directory, "run-aliases.json"), {});
+            if (aliases[id2]) {
+              const source = await this.getRun(id2, true, false), target = await this.getRun(id2, false, false);
+              if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
+                const saved = await readJson(import_node_path3.default.join(this.directory, "contributions", entry), null);
+                if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
+                  await atomicJson(import_node_path3.default.join(this.directory, "contributions", entry), { ...source, userMessageId: target.userMessageId });
+                  this.pendingRecovery.add(target.sessionId);
+                }
+                await import_promises3.default.rm(import_node_path3.default.join(this.directory, "inbox", entry), { force: true });
+              }
+              continue;
+            }
+            try {
+              const run2 = await this.getRun(id2, true, false);
+              if (!run2) continue;
+              const inboxWasRunning = run2.state === "running";
+              const current = await this.getRun(id2, false, false);
+              if (current && (current.sessionId !== run2.sessionId || canonical(current.root) !== canonical(run2.root))) {
+                await this.audit({ action: "inbox-identity-root-conflict", runId: id2, sessionId: run2.sessionId });
+                continue;
+              }
+              if (current && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
+                if ((run2.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
+                if (current.execution && run2.execution?.id === current.execution.id && run2.execution.revision < current.execution.revision) continue;
+              }
+              if (current?.hostRecovery && (run2.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
+              if (current?.hostRecovery?.files && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root) && (!run2.userMessageId || run2.userMessageId === current.userMessageId)) {
+                const files = /* @__PURE__ */ Object.create(null);
+                for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
+                  if (captureCheckpoint(run2.changes[value]) !== checkpoint) continue;
+                  if (current.changes[value]) run2.changes[value] = current.changes[value];
+                  else delete run2.changes[value];
+                  files[value] = checkpoint;
+                }
+                if (Object.keys(files).length) {
+                  run2.hostRecovery = { captureVersion: run2.contentVersion ?? 0, files };
+                  const order = [...Object.keys(current.changes).filter((value) => run2.changes[value]), ...Object.keys(run2.changes).filter((value) => !current.changes[value])];
+                  run2.changes = Object.fromEntries(order.map((value) => [value, run2.changes[value]]));
+                }
+              }
+              if (current && current.state !== "running" && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
+                const advanced = !!current.execution && run2.execution?.id === current.execution.id && run2.execution.revision > current.execution.revision;
+                if (!advanced) {
+                  const evidenceChanged = Object.keys({ ...current.changes, ...run2.changes }).some((p) => captureCheckpoint(run2.changes[p]) !== captureCheckpoint(current.changes[p]));
+                  const damaged = Object.values(run2.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
+                  run2.state = current.state;
+                  run2.endedAt = current.endedAt;
+                  run2.execution = current.execution;
+                  run2.userMessageId = current.userMessageId;
+                  run2.replyMessageId = current.replyMessageId;
+                  run2.finalReply = current.finalReply;
+                  run2.replies = current.replies;
+                  run2.incomplete = current.incomplete || damaged || run2.incomplete && (!current.hostRecovery || evidenceChanged);
+                }
+              }
+              const sameReply = run2.finalReply?.hash === current?.finalReply?.hash && run2.finalReply?.timestamp === current?.finalReply?.timestamp;
+              run2.bindings = sameReply ? current?.bindings ?? {} : {};
+              if (run2.generation !== generation2 && run2.state === "running") {
+                run2.state = "incomplete";
+                run2.incomplete = true;
+              }
+              await this.writeRun(run2);
+              if (!current || current.contentVersion !== run2.contentVersion || current.state !== run2.state || JSON.stringify(current.changes) !== JSON.stringify(run2.changes)) this.pendingRecovery.add(run2.sessionId);
+              if (run2.state !== "running" && !inboxWasRunning) await import_promises3.default.rm(import_node_path3.default.join(this.directory, "inbox", entry), { force: true });
+            } catch {
+            }
+          }
+        });
       }
-    }
-    return run2;
-  }
-  async importInbox(generation2) {
-    await this.captureLock(async () => {
-      const entries = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "inbox"))).filter((e) => /^[\w-]+\.json$/.test(e)).slice(0, MAX_RUNS);
-      for (const entry of entries) {
-        const id2 = entry.slice(0, -5);
-        const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {});
-        if (aliases[id2]) {
-          const source = await this.getRun(id2, true, false), target = await this.getRun(id2, false, false);
-          if (source && target && source.sessionId === target.sessionId && canonical(source.root) === canonical(target.root)) {
-            const saved = await readJson(import_node_path2.default.join(this.directory, "contributions", entry), null);
-            if (!saved || (source.contentVersion ?? 0) > (saved.hostRecovery?.captureVersion ?? saved.contentVersion ?? 0)) {
-              await atomicJson(import_node_path2.default.join(this.directory, "contributions", entry), { ...source, userMessageId: target.userMessageId });
-              this.pendingRecovery.add(target.sessionId);
-            }
-            await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
-          }
-          continue;
+      async captureContributions() {
+        const files = (await import_promises3.default.readdir(import_node_path3.default.join(this.directory, "contributions"))).filter((file) => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
+        const sources = [];
+        for (const file of files) {
+          const id2 = file.slice(0, -5), source = await readJson(import_node_path3.default.join(this.directory, "contributions", file), null);
+          if (!source || !validRun(source, id2)) continue;
+          const target = await this.getRun(id2, false, false);
+          if (target?.id !== id2 && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
         }
-        try {
-          const run2 = await this.getRun(id2, true, false);
-          if (!run2) continue;
-          const inboxWasRunning = run2.state === "running";
-          const current = await this.getRun(id2, false, false);
-          if (current && (current.sessionId !== run2.sessionId || canonical(current.root) !== canonical(run2.root))) {
-            await this.audit({ action: "inbox-identity-root-conflict", runId: id2, sessionId: run2.sessionId });
-            continue;
-          }
-          if (current && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
-            if ((run2.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
-            if (current.execution && run2.execution?.id === current.execution.id && run2.execution.revision < current.execution.revision) continue;
-          }
-          if (current?.hostRecovery && (run2.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
-          if (current?.hostRecovery?.files && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root) && (!run2.userMessageId || run2.userMessageId === current.userMessageId)) {
-            const files = /* @__PURE__ */ Object.create(null);
-            for (const [value, checkpoint] of Object.entries(current.hostRecovery.files)) {
-              if (captureCheckpoint(run2.changes[value]) !== checkpoint) continue;
-              if (current.changes[value]) run2.changes[value] = current.changes[value];
-              else delete run2.changes[value];
-              files[value] = checkpoint;
-            }
-            if (Object.keys(files).length) {
-              run2.hostRecovery = { captureVersion: run2.contentVersion ?? 0, files };
-              const order = [...Object.keys(current.changes).filter((value) => run2.changes[value]), ...Object.keys(run2.changes).filter((value) => !current.changes[value])];
-              run2.changes = Object.fromEntries(order.map((value) => [value, run2.changes[value]]));
-            }
-          }
-          if (current && current.state !== "running" && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
-            const advanced = !!current.execution && run2.execution?.id === current.execution.id && run2.execution.revision > current.execution.revision;
-            if (!advanced) {
-              const evidenceChanged = Object.keys({ ...current.changes, ...run2.changes }).some((p) => captureCheckpoint(run2.changes[p]) !== captureCheckpoint(current.changes[p]));
-              const damaged = Object.values(run2.changes).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable");
-              run2.state = current.state;
-              run2.endedAt = current.endedAt;
-              run2.execution = current.execution;
-              run2.userMessageId = current.userMessageId;
-              run2.replyMessageId = current.replyMessageId;
-              run2.finalReply = current.finalReply;
-              run2.replies = current.replies;
-              run2.incomplete = current.incomplete || damaged || run2.incomplete && (!current.hostRecovery || evidenceChanged);
-            }
-          }
-          const sameReply = run2.finalReply?.hash === current?.finalReply?.hash && run2.finalReply?.timestamp === current?.finalReply?.timestamp;
-          run2.bindings = sameReply ? current?.bindings ?? {} : {};
-          if (run2.generation !== generation2 && run2.state === "running") {
-            run2.state = "incomplete";
-            run2.incomplete = true;
-          }
-          await this.writeRun(run2);
-          if (!current || current.contentVersion !== run2.contentVersion || current.state !== run2.state || JSON.stringify(current.changes) !== JSON.stringify(run2.changes)) this.pendingRecovery.add(run2.sessionId);
-          if (run2.state !== "running" && !inboxWasRunning) await import_promises2.default.rm(import_node_path2.default.join(this.directory, "inbox", entry), { force: true });
-        } catch {
-        }
+        return sources;
       }
-    });
-  }
-  async captureContributions() {
-    const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "contributions"))).filter((file) => /^[\w-]+\.json$/.test(file)).slice(-MAX_RUNS * 2);
-    const sources = [];
-    for (const file of files) {
-      const id2 = file.slice(0, -5), source = await readJson(import_node_path2.default.join(this.directory, "contributions", file), null);
-      if (!source || !validRun(source, id2)) continue;
-      const target = await this.getRun(id2, false, false);
-      if (target?.id !== id2 && target?.sessionId === source.sessionId && canonical(target.root) === canonical(source.root) && target.userMessageId === source.userMessageId) sources.push(source);
-    }
-    return sources;
-  }
-  async listRuns(hydrate = true, includeUnchanged = false) {
-    const files = (await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
-    if (!files.length) return [];
-    const aliases = await readJson(import_node_path2.default.join(this.directory, "run-aliases.json"), {}).catch(() => null);
-    if (!aliases) return [];
-    const runs = [];
-    const selected2 = files.slice(-MAX_RUNS * 2);
-    for (let offset = 0; offset < selected2.length; offset += 16) {
-      const page = await Promise.all(selected2.slice(offset, offset + 16).map(async (file) => {
-        try {
-          return await this.readRun(file.slice(0, -5), false, hydrate, aliases);
-        } catch {
-          return null;
+      async listRuns(hydrate = true, includeUnchanged = false) {
+        const files = (await import_promises3.default.readdir(import_node_path3.default.join(this.directory, "runs"))).filter((e) => /^[\w-]+\.json$/.test(e));
+        if (!files.length) return [];
+        const aliases = await readJson(import_node_path3.default.join(this.directory, "run-aliases.json"), {}).catch(() => null);
+        if (!aliases) return [];
+        const runs = [];
+        const selected2 = files.slice(-MAX_RUNS * 2);
+        for (let offset = 0; offset < selected2.length; offset += 16) {
+          const page = await Promise.all(selected2.slice(offset, offset + 16).map(async (file) => {
+            try {
+              return await this.readRun(file.slice(0, -5), false, hydrate, aliases);
+            } catch {
+              return null;
+            }
+          }));
+          for (const run2 of page) if (run2 && !runs.some((r) => r.id === run2.id) && (includeUnchanged || Object.keys(run2.changes).length > 0)) runs.push(run2);
         }
-      }));
-      for (const run2 of page) if (run2 && !runs.some((r) => r.id === run2.id) && (includeUnchanged || Object.keys(run2.changes).length > 0)) runs.push(run2);
-    }
-    return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
-  }
-  async comments() {
-    return readJson(import_node_path2.default.join(this.directory, "comments.json"), []);
-  }
-  async saveComments(comments) {
-    if (comments.length > 1e3 || Buffer.byteLength(JSON.stringify(comments)) > 16 * 1024 * 1024) fail("COMMENT_LIMIT", "Comment count or byte limit reached");
-    await atomicJson(import_node_path2.default.join(this.directory, "comments.json"), comments);
-  }
-  async audit(event) {
-    const file = import_node_path2.default.join(this.directory, "actions.jsonl");
-    const size = (await import_promises2.default.stat(file).catch(() => ({ size: 0 }))).size;
-    if (size > 1024 * 1024) await import_promises2.default.rename(file, `${file}.previous`).catch(() => {
-    });
-    await import_promises2.default.appendFile(file, `${JSON.stringify({ timestamp: Date.now(), event })}
+        return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RUNS);
+      }
+      async comments() {
+        return readJson(import_node_path3.default.join(this.directory, "comments.json"), []);
+      }
+      async saveComments(comments) {
+        if (comments.length > 1e3 || Buffer.byteLength(JSON.stringify(comments)) > 16 * 1024 * 1024) fail("COMMENT_LIMIT", "Comment count or byte limit reached");
+        await atomicJson(import_node_path3.default.join(this.directory, "comments.json"), comments);
+      }
+      async audit(event) {
+        const file = import_node_path3.default.join(this.directory, "actions.jsonl");
+        const size = (await import_promises3.default.stat(file).catch(() => ({ size: 0 }))).size;
+        if (size > 1024 * 1024) await import_promises3.default.rename(file, `${file}.previous`).catch(() => {
+        });
+        await import_promises3.default.appendFile(file, `${JSON.stringify({ timestamp: Date.now(), event })}
 `, { mode: 384 });
-  }
-  async prune() {
-    const runs = await this.listRuns(false, true);
-    let used = 0;
-    const keep = /* @__PURE__ */ new Set();
-    for (const run2 of runs) {
-      const hashes = Object.values(run2.changes).flatMap((c) => [c.before, c.after]).filter((s) => s.exists && s.kind === "text");
-      const cost = hashes.reduce((n, s) => n + s.size, 0);
-      if (used + cost <= MAX_HISTORY_BYTES || run2.state === "running") {
-        used += cost;
-        keep.add(run2.id);
       }
-    }
-    for (const file of await import_promises2.default.readdir(import_node_path2.default.join(this.directory, "runs"))) if (/^[\w-]+\.json$/.test(file) && !keep.has(file.slice(0, -5))) await import_promises2.default.rm(import_node_path2.default.join(this.directory, "runs", file), { force: true });
-  }
-  async clear() {
-    await this.captureLock(async () => {
-      for (const inbox of [false, true]) for (const file of await import_promises2.default.readdir(import_node_path2.default.join(this.directory, inbox ? "inbox" : "runs"))) {
-        if (!/^[\w-]+\.json$/.test(file)) continue;
-        const run2 = await this.getRun(file.slice(0, -5), inbox, false);
-        if (run2?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
-      }
-      for (const sub of ["runs", "inbox", "contributions", "blobs", "backups", "evidence"]) {
-        const dir = import_node_path2.default.join(this.directory, sub);
-        if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
-        for (const file of await import_promises2.default.readdir(dir)) {
-          const target = import_node_path2.default.join(dir, file);
-          const s = await import_promises2.default.lstat(target);
-          if (s.isFile() && !s.isSymbolicLink()) await import_promises2.default.unlink(target);
+      async prune() {
+        const runs = await this.listRuns(false, true);
+        let used = 0;
+        const keep = /* @__PURE__ */ new Set();
+        for (const run2 of runs) {
+          const hashes = Object.values(run2.changes).flatMap((c) => [c.before, c.after]).filter((s) => s.exists && s.kind === "text");
+          const cost = hashes.reduce((n, s) => n + s.size, 0);
+          if (used + cost <= MAX_HISTORY_BYTES || run2.state === "running") {
+            used += cost;
+            keep.add(run2.id);
+          }
         }
+        for (const file of await import_promises3.default.readdir(import_node_path3.default.join(this.directory, "runs"))) if (/^[\w-]+\.json$/.test(file) && !keep.has(file.slice(0, -5))) await import_promises3.default.rm(import_node_path3.default.join(this.directory, "runs", file), { force: true });
       }
-      await this.saveComments([]);
-      await import_promises2.default.rm(import_node_path2.default.join(this.directory, "restores.json"), { force: true });
-      await import_promises2.default.rm(import_node_path2.default.join(this.directory, "run-aliases.json"), { force: true });
-      await import_promises2.default.rm(import_node_path2.default.join(this.directory, "file-aliases.json"), { force: true });
-      this.pendingRecovery.clear();
+      async clear() {
+        await this.captureLock(async () => {
+          const { inspectCaptureLeases: inspectCaptureLeases2 } = await Promise.resolve().then(() => (init_capture_leases(), capture_leases_exports));
+          if ((await inspectCaptureLeases2(this)).leases.length) fail("AGENT_BUSY", "Resolve outstanding capture leases before clearing history; verify terminal tool evidence first");
+          for (const inbox of [false, true]) for (const file of await import_promises3.default.readdir(import_node_path3.default.join(this.directory, inbox ? "inbox" : "runs"))) {
+            if (!/^[\w-]+\.json$/.test(file)) continue;
+            const run2 = await this.getRun(file.slice(0, -5), inbox, false);
+            if (run2?.state === "running") fail("AGENT_BUSY", "Stop active captures before clearing history");
+          }
+          for (const sub of ["runs", "inbox", "contributions", "blobs", "backups", "evidence"]) {
+            const dir = import_node_path3.default.join(this.directory, sub);
+            if (!inside(this.directory, dir)) fail("STORE_ESCAPE", "Invalid store path");
+            for (const file of await import_promises3.default.readdir(dir)) {
+              const target = import_node_path3.default.join(dir, file);
+              const s = await import_promises3.default.lstat(target);
+              if (s.isFile() && !s.isSymbolicLink()) await import_promises3.default.unlink(target);
+            }
+          }
+          await this.saveComments([]);
+          await import_promises3.default.rm(import_node_path3.default.join(this.directory, "restores.json"), { force: true });
+          await import_promises3.default.rm(import_node_path3.default.join(this.directory, "run-aliases.json"), { force: true });
+          await import_promises3.default.rm(import_node_path3.default.join(this.directory, "file-aliases.json"), { force: true });
+          this.pendingRecovery.clear();
+        });
+      }
+    };
+  }
+});
+
+// src/main.ts
+var main_exports = {};
+__export(main_exports, {
+  onLoad: () => onLoad,
+  onPanelInvoke: () => onPanelInvoke,
+  onRendererCall: () => onRendererCall,
+  onUnload: () => onUnload
+});
+module.exports = __toCommonJS(main_exports);
+
+// src/core/read-write-queue.ts
+var ReadWriteQueue = class {
+  constructor(concurrency = 4) {
+    this.concurrency = concurrency;
+    if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Invalid read concurrency");
+  }
+  writer = Promise.resolve();
+  readers = /* @__PURE__ */ new Set();
+  active = 0;
+  waiting = [];
+  pending = 0;
+  run(work, write = false) {
+    this.pending++;
+    const result = write ? Promise.all([this.writer, ...this.readers].map((task) => task.catch(() => void 0))).then(work) : this.writer.catch(() => void 0).then(async () => {
+      if (this.active >= this.concurrency) await new Promise((resolve) => this.waiting.push(resolve));
+      else this.active++;
+      try {
+        return await work();
+      } finally {
+        const next = this.waiting.shift();
+        if (next) next();
+        else this.active--;
+      }
     });
+    if (write) this.writer = result;
+    else this.readers.add(result);
+    const settle = () => {
+      this.pending--;
+      this.readers.delete(result);
+    };
+    void result.then(settle, settle);
+    return result;
   }
 };
+
+// src/main.ts
+var import_promises12 = __toESM(require("node:fs/promises"), 1);
+var import_node_path14 = __toESM(require("node:path"), 1);
+var import_node_crypto11 = require("node:crypto");
+init_storage();
 
 // src/core/review-file-policy.ts
 var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
@@ -1240,67 +1414,73 @@ function finalReplyCandidates(content) {
 }
 
 // src/core/review-service.ts
-var import_node_path6 = __toESM(require("node:path"), 1);
-var import_node_crypto5 = require("node:crypto");
+var import_node_path7 = __toESM(require("node:path"), 1);
+var import_node_crypto6 = require("node:crypto");
+init_contracts();
+init_path_policy();
+init_diff();
+init_storage();
 
 // src/core/rollback.ts
-var import_promises3 = __toESM(require("node:fs/promises"), 1);
+var import_promises4 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs2 = require("node:fs");
-var import_node_path3 = __toESM(require("node:path"), 1);
-var import_node_crypto3 = require("node:crypto");
+var import_node_path4 = __toESM(require("node:path"), 1);
+var import_node_crypto4 = require("node:crypto");
+init_path_policy();
+init_storage();
 async function replaceSnapshot(root, value, expected, desired, backupDir) {
   if (expected.kind !== "text" || desired.kind !== "text" || desired.exists && (desired.text === null || digest(desired.text) !== desired.hash)) fail("RESTORE_UNAVAILABLE", "Complete validated text snapshots are required");
   const target = await safeResolve(root, value);
   if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed outside this review; refresh before retrying");
-  await import_promises3.default.mkdir(backupDir, { recursive: true, mode: 448 });
-  const backups = await import_promises3.default.readdir(backupDir);
+  await import_promises4.default.mkdir(backupDir, { recursive: true, mode: 448 });
+  const backups = await import_promises4.default.readdir(backupDir);
   let backupBytes = 0;
-  for (const file of backups) backupBytes += (await import_promises3.default.stat(import_node_path3.default.join(backupDir, file))).size;
+  for (const file of backups) backupBytes += (await import_promises4.default.stat(import_node_path4.default.join(backupDir, file))).size;
   if (backups.length >= 998 || backupBytes + 2 * expected.size + desired.size + 8192 > 64 * 1024 * 1024) fail("BACKUP_LIMIT", "Recovery backup limit reached; export needed backups before clearing plugin history");
-  const id2 = (0, import_node_crypto3.randomUUID)(), record = import_node_path3.default.join(backupDir, `${id2}.json`);
+  const id2 = (0, import_node_crypto4.randomUUID)(), record = import_node_path4.default.join(backupDir, `${id2}.json`);
   await atomicJson(record, { version: 1, root, path: value, before: expected, after: desired });
   if (!expected.exists && !desired.exists) return;
-  await import_promises3.default.mkdir(import_node_path3.default.dirname(target), { recursive: true });
+  await import_promises4.default.mkdir(import_node_path4.default.dirname(target), { recursive: true });
   await safeResolve(root, value);
-  const temp = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id2}.tmp`);
-  const original = import_node_path3.default.join(import_node_path3.default.dirname(target), `.diff-view-${id2}.original`);
-  const originalRel = import_node_path3.default.relative(root, original);
+  const temp = import_node_path4.default.join(import_node_path4.default.dirname(target), `.diff-view-${id2}.tmp`);
+  const original = import_node_path4.default.join(import_node_path4.default.dirname(target), `.diff-view-${id2}.original`);
+  const originalRel = import_node_path4.default.relative(root, original);
   let held = false;
   try {
     if (desired.exists) {
-      const handle = await import_promises3.default.open(temp, "wx", desired.mode & 511 || 420);
+      const handle = await import_promises4.default.open(temp, "wx", desired.mode & 511 || 420);
       try {
         await handle.writeFile(desired.text, "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
-      if (process.platform !== "win32") await import_promises3.default.chmod(temp, desired.mode & 511);
+      if (process.platform !== "win32") await import_promises4.default.chmod(temp, desired.mode & 511);
     }
     await safeResolve(root, value);
     if (!sameSnapshot(await readSnapshot(root, value), expected)) fail("FILE_CONFLICT", "File changed before restore");
     if (expected.exists) {
-      await import_promises3.default.rename(target, original);
+      await import_promises4.default.rename(target, original);
       held = true;
       const actual = await readSnapshot(root, originalRel);
       if (!sameSnapshot(actual, expected)) fail("FILE_CONFLICT", "Actual moved file changed; original content will be preserved");
-      const rawBackup = import_node_path3.default.join(backupDir, `${id2}.original`);
-      await import_promises3.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
-      await import_promises3.default.chmod(rawBackup, 384);
+      const rawBackup = import_node_path4.default.join(backupDir, `${id2}.original`);
+      await import_promises4.default.copyFile(original, rawBackup, import_node_fs2.constants.COPYFILE_EXCL);
+      await import_promises4.default.chmod(rawBackup, 384);
       if (!sameSnapshot(await readSnapshot(root, originalRel), expected)) fail("FILE_CONFLICT", "Moved file changed while backing up");
     }
-    if (desired.exists) await import_promises3.default.link(temp, target);
+    if (desired.exists) await import_promises4.default.link(temp, target);
     else if ((await readSnapshot(root, value)).exists) fail("FILE_CONFLICT", "Another file appeared before deletion completed");
     if (held) {
-      await import_promises3.default.unlink(original);
+      await import_promises4.default.unlink(original);
       held = false;
     }
   } catch (error) {
     if (held) {
       try {
         await safeResolve(root, value);
-        await import_promises3.default.link(original, target);
-        await import_promises3.default.unlink(original);
+        await import_promises4.default.link(original, target);
+        await import_promises4.default.unlink(original);
         held = false;
       } catch {
       }
@@ -1309,17 +1489,21 @@ async function replaceSnapshot(root, value, expected, desired, backupDir) {
     if (error.code === "EEXIST") fail("FILE_CONFLICT", "Another file appeared; it was not overwritten");
     throw error;
   } finally {
-    await import_promises3.default.rm(temp, { force: true });
+    await import_promises4.default.rm(temp, { force: true });
   }
 }
 
 // src/git/repository.ts
-var import_promises4 = __toESM(require("node:fs/promises"), 1);
-var import_node_path4 = __toESM(require("node:path"), 1);
-var import_node_crypto4 = require("node:crypto");
+var import_promises5 = __toESM(require("node:fs/promises"), 1);
+var import_node_path5 = __toESM(require("node:path"), 1);
+var import_node_crypto5 = require("node:crypto");
+init_contracts();
+init_path_policy();
+init_diff();
 
 // src/git/runner.ts
 var import_node_child_process = require("node:child_process");
+init_path_policy();
 var devNull = "/dev/null";
 var OUTPUT_LIMIT = 16 * 1024 * 1024;
 async function git(root, args, options = {}) {
@@ -1476,12 +1660,12 @@ function reviewState(review) {
   return state;
 }
 async function discoverRepository(authorizedRoot, includeBranch = true) {
-  const root = await import_promises4.default.realpath(authorizedRoot);
-  if (!(await import_promises4.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
-  const result = { root, name: import_node_path4.default.basename(root), git: false };
+  const root = await import_promises5.default.realpath(authorizedRoot);
+  if (!(await import_promises5.default.stat(root)).isDirectory()) fail("INVALID_ROOT", "Project root is not a directory");
+  const result = { root, name: import_node_path5.default.basename(root), git: false };
   const top = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true, limit: 16384 });
   if (top.code !== 0) return result;
-  const gitRoot = await import_promises4.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
+  const gitRoot = await import_promises5.default.realpath(top.stdout.toString("utf8").replace(/\r?\n$/, ""));
   if (canonical(gitRoot) !== canonical(root)) return result;
   result.git = true;
   if (!includeBranch) return result;
@@ -1503,10 +1687,10 @@ async function boundedRead(handle, size, code) {
 async function readIndex(indexPath) {
   let handle;
   try {
-    const stat = await import_promises4.default.lstat(indexPath);
+    const stat = await import_promises5.default.lstat(indexPath);
     if (!stat.isFile() || stat.isSymbolicLink()) fail("INDEX_DENIED", "Git index must be a regular file");
     if (stat.size > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
-    handle = await import_promises4.default.open(indexPath, "r");
+    handle = await import_promises5.default.open(indexPath, "r");
     const bytes = await boundedRead(handle, stat.size, "STALE_INDEX");
     if (bytes.length > OUTPUT_LIMIT) fail("GIT_LIMIT", "Git index exceeds the size budget");
     const after = await handle.stat();
@@ -1537,21 +1721,21 @@ async function captureWorking(root, rel, reserve, onBytes) {
     target = await safeResolve(root, rel);
   } catch (error) {
     if (error.code !== "SYMLINK_DENIED") throw error;
-    const parent = import_node_path4.default.posix.dirname(rel);
+    const parent = import_node_path5.default.posix.dirname(rel);
     if (parent !== ".") await safeResolve(root, parent);
-    const leaf = import_node_path4.default.resolve(root, rel);
-    const stat = await import_promises4.default.lstat(leaf);
+    const leaf = import_node_path5.default.resolve(root, rel);
+    const stat = await import_promises5.default.lstat(leaf);
     if (!stat.isSymbolicLink()) throw error;
-    return metadata("symlink", digest(await import_promises4.default.readlink(leaf)), 40960, stat.size);
+    return metadata("symlink", digest(await import_promises5.default.readlink(leaf)), 40960, stat.size);
   }
   let handle;
   try {
-    const stat = await import_promises4.default.lstat(target);
+    const stat = await import_promises5.default.lstat(target);
     if (stat.isDirectory()) return metadata("submodule", `directory:${stat.mtimeMs}`, 57344);
     if (!stat.isFile()) return metadata("unavailable", `special:${stat.mode}`, stat.mode);
     if (stat.size > MAX_TEXT_BYTES) return metadata("large", `large:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
     if (!await reserve(stat.size)) return metadata("unavailable", `budget:${stat.size}:${stat.mtimeMs}`, stat.mode, stat.size);
-    handle = await import_promises4.default.open(target, "r");
+    handle = await import_promises5.default.open(target, "r");
     const opened = await handle.stat();
     if (!opened.isFile() || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs)
       fail("FILE_CHANGED", "Working file changed during capture");
@@ -1745,7 +1929,7 @@ async function readGitReview(requestedRoot, scope, ref) {
         assertPublicPath(change.path);
         if (change.oldPath) assertPublicPath(change.oldPath);
         working = await captureWorking(root, change.path, reserve, scope === "unstaged" && leftEntry && !conflict ? (bytes) => {
-          workingOid = (0, import_node_crypto4.createHash)(objectLength === 64 ? "sha256" : "sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+          workingOid = (0, import_node_crypto5.createHash)(objectLength === 64 ? "sha256" : "sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
         } : void 0);
         if (change.oldPath) oldWorking = await captureWorking(root, change.oldPath, reserve);
       } catch (error) {
@@ -1885,9 +2069,11 @@ async function readGitReview(requestedRoot, scope, ref) {
 }
 
 // src/git/actions.ts
-var import_promises5 = __toESM(require("node:fs/promises"), 1);
-var import_node_path5 = __toESM(require("node:path"), 1);
+var import_promises6 = __toESM(require("node:fs/promises"), 1);
+var import_node_path6 = __toESM(require("node:path"), 1);
 var import_node_os2 = __toESM(require("node:os"), 1);
+init_path_policy();
+init_diff();
 function reverseHunkText(before, after, hunkId) {
   const hunk = buildHunks(before, after).find((h) => h.id === hunkId);
   if (!hunk) fail("STALE_HUNK", "Hunk changed; refresh the review");
@@ -1939,7 +2125,7 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
   const lockPath = `${state.indexPath}.lock`;
   let lock;
   try {
-    lock = await import_promises5.default.open(lockPath, "wx", 384);
+    lock = await import_promises6.default.open(lockPath, "wx", 384);
   } catch (error) {
     if (error.code === "EEXIST") fail("INDEX_LOCKED", "Git index is locked; retry after the other operation finishes");
     throw error;
@@ -1952,11 +2138,11 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
       await replaceSnapshot(state.root, file.path, state.working.get(file.path), desired, backupDir);
       return;
     }
-    tempDir = await import_promises5.default.mkdtemp(import_node_path5.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
-    const tempIndex = import_node_path5.default.join(tempDir, "index");
+    tempDir = await import_promises6.default.mkdtemp(import_node_path6.default.join(process.env.PI_SCRATCH_DIR ?? import_node_os2.default.tmpdir(), "pi-git-index-"));
+    const tempIndex = import_node_path6.default.join(tempDir, "index");
     const current = await readIndex(state.indexPath);
     if (current.fingerprint !== state.indexFingerprint) fail("STALE_INDEX", "Index changed; refresh the review");
-    if (current.bytes) await import_promises5.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
+    if (current.bytes) await import_promises6.default.writeFile(tempIndex, current.bytes, { flag: "wx", mode: 384 });
     else await git(state.root, ["read-tree", "--empty"], { index: tempIndex, limit: 4096 });
     await git(state.root, ["update-index", "--no-split-index"], { index: tempIndex, limit: 4096 });
     const changes2 = file.oldPath ? action === "stage" ? [{ path: file.oldPath, snapshot: absentSnapshot() }, { path: file.path, snapshot: desired }] : [{ path: file.path, snapshot: absentSnapshot() }, { path: file.oldPath, snapshot: file.before }] : [{ path: file.path, snapshot: desired }];
@@ -1982,14 +2168,14 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
     await lock.sync();
     await guard(state, file, action);
     await lock.close();
-    await import_promises5.default.rename(lockPath, state.indexPath);
+    await import_promises6.default.rename(lockPath, state.indexPath);
     installed = true;
   } finally {
     await lock.close().catch(() => {
     });
-    if (!installed) await import_promises5.default.unlink(lockPath).catch(() => {
+    if (!installed) await import_promises6.default.unlink(lockPath).catch(() => {
     });
-    if (tempDir) await import_promises5.default.rm(tempDir, { recursive: true, force: true });
+    if (tempDir) await import_promises6.default.rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -2044,7 +2230,7 @@ var ReviewService = class {
         if (!repositories.some((r) => canonical(r.root) === canonical(repo.root))) repositories.push(repo);
         this.allowed.add(canonical(repo.root));
       } catch {
-        repositories.push({ root, name: import_node_path6.default.basename(root), git: false });
+        repositories.push({ root, name: import_node_path7.default.basename(root), git: false });
       }
     }
     this.mutableRoots = new Set(this.allowed);
@@ -2115,7 +2301,7 @@ var ReviewService = class {
     return { runId: run2.id, sessionId: run2.sessionId, startedAt: run2.startedAt, fileCount: summary.fileCount, additions: summary.additions, deletions: summary.deletions, unknownFileCount: summary.unknownFileCount, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark" };
   }
   async summarizeRun(run2, args, readOnly = false, netOnly = false) {
-    const states2 = readOnly ? {} : await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+    const states2 = readOnly ? {} : await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
     const { bindings: _bindings, cardPreview: _preview, ...content } = run2;
     const key = digest(JSON.stringify(["stats-known-v1", content, states2, readOnly ? [] : [...this.mutableRoots].sort(), readOnly, netOnly]));
     let cached = this.summaries.get(run2.id);
@@ -2197,7 +2383,7 @@ var ReviewService = class {
       } else {
         root = run2.root;
         if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
-        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
         const entries = Object.entries(run2.changes).filter(([value]) => !isImagePath(value));
         for (let offset = 0; offset < entries.length; offset += 16) {
           const currentRun = run2;
@@ -2227,7 +2413,7 @@ var ReviewService = class {
     const cached = { summary: null, files, git: git2, run: run2, createdAt: Date.now(), hydratedFiles: /* @__PURE__ */ new Set() };
     const focused = files.find((file) => file.id === request.focusFileId) ?? files[0];
     if (run2 && focused) await this.hydrateFile(cached, focused);
-    const summary = { id: (0, import_node_crypto5.randomUUID)(), scope: request.scope, root: root ?? "", files: [], notice, sessionId: run2?.sessionId ?? request.sessionId, runId: run2?.id, ...run2 ? { run: runSummary(run2) } : {} };
+    const summary = { id: (0, import_node_crypto6.randomUUID)(), scope: request.scope, root: root ?? "", files: [], notice, sessionId: run2?.sessionId ?? request.sessionId, runId: run2?.id, ...run2 ? { run: runSummary(run2) } : {} };
     const first = this.filePage(cached, 0);
     summary.files = first.files;
     summary.nextFileOffset = first.nextOffset;
@@ -2277,7 +2463,7 @@ var ReviewService = class {
   async hydrateFile(review, file) {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
-    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {})]);
+    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {})]);
     Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states2));
     review.hydratedFiles?.add(file.id);
   }
@@ -2343,7 +2529,7 @@ var ReviewService = class {
       if (file) await this.hydrateFile(review, file);
       if (!file || file.fingerprint !== args.fingerprint || !file.actions.includes(args.action)) fail("ACTION_DENIED", "Action is not available for this version");
       if (file.origin === "external" || !this.mutableRoots.has(canonical(review.summary.root))) fail("ACTION_DENIED", "External or historical project captures are read-only");
-      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path6.default.join(this.store.directory, "backups"));
+      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path7.default.join(this.store.directory, "backups"));
       else if (review.run) {
         if (args.hunkId) fail("ACTION_DENIED", "Turn restore requires a complete file snapshot");
         await this.store.importInbox(this.generation);
@@ -2352,12 +2538,12 @@ var ReviewService = class {
         const latestChange = latest.changes[file.path];
         if (latestChange?.capture?.origin !== "workspace") fail("ACTION_DENIED", "External captures cannot authorize mutations");
         if (!latestChange || !sameSnapshot(latestChange.before, file.before) || !sameSnapshot(latestChange.after, file.after)) fail("FILE_CONFLICT", "Captured file version changed; refresh");
-        const states2 = await readJson(import_node_path6.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
         const key = `${review.run.id}:${file.path}`;
         if (states2[key] === "reverted" !== (args.action === "reapply")) fail("FILE_CONFLICT", "Restore state changed; refresh");
-        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path6.default.join(this.store.directory, "backups"));
+        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path7.default.join(this.store.directory, "backups"));
         states2[key] = args.action === "reapply" ? "active" : "reverted";
-        await atomicJson(import_node_path6.default.join(this.store.directory, "restores.json"), states2);
+        await atomicJson(import_node_path7.default.join(this.store.directory, "restores.json"), states2);
       } else fail("ACTION_DENIED", "Read-only scope");
       await this.store.audit({ action: args.action, root: review.summary.root, path: file.path, runId: review.run?.id, hunkId: args.hunkId });
       this.reviews.delete(args.reviewId);
@@ -2413,7 +2599,7 @@ var ReviewService = class {
     const comments = await this.store.comments();
     const old = args.id ? comments.find((c) => c.id === args.id) : void 0;
     if (args.id && (!old || old.sessionId !== args.sessionId)) fail("COMMENT_DENIED", "Comment identity changed");
-    const comment = { id: old?.id ?? (0, import_node_crypto5.randomUUID)(), sessionId: args.sessionId ?? review?.summary.sessionId, anchor: { ...anchor, excerpt: lines.slice(Math.max(0, anchor.line - 4), anchor.line + 3).join("\n").slice(0, 4e3) }, body: args.body.trim(), createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now() };
+    const comment = { id: old?.id ?? (0, import_node_crypto6.randomUUID)(), sessionId: args.sessionId ?? review?.summary.sessionId, anchor: { ...anchor, excerpt: lines.slice(Math.max(0, anchor.line - 4), anchor.line + 3).join("\n").slice(0, 4e3) }, body: args.body.trim(), createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now() };
     await this.store.saveComments([...comments.filter((c) => c.id !== comment.id), comment]);
     return comment;
   }
@@ -2546,7 +2732,7 @@ ${text2}`;
       case "copyPath": {
         const review = this.get(args.reviewId), file = review.files.find((file2) => file2.id === args.fileId);
         if (!file) fail("FILE_NOT_FOUND", "No validated review file for this path");
-        const value = file.absolutePath ?? import_node_path6.default.resolve(review.summary.root, file.path);
+        const value = file.absolutePath ?? import_node_path7.default.resolve(review.summary.root, file.path);
         assertPublicPath(file.path);
         await this.host.clipboard(value);
         return { ok: true };
@@ -2574,8 +2760,12 @@ ${text2}`;
   }
 };
 
+// src/main.ts
+init_path_policy();
+
 // src/core/jobs.ts
-var import_node_crypto6 = require("node:crypto");
+var import_node_crypto7 = require("node:crypto");
+init_path_policy();
 var JobQueue = class {
   constructor(execute2) {
     this.execute = execute2;
@@ -2589,7 +2779,7 @@ var JobQueue = class {
     const navigation2 = method === "selectTurn", systemOpen = method === "openSystemFile";
     if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2 && !!j.systemOpen === systemOpen).length >= (navigation2 || systemOpen ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
     for (const [id3, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id3);
-    const id2 = (0, import_node_crypto6.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {}, ...systemOpen ? { systemOpen: true } : {} };
+    const id2 = (0, import_node_crypto7.randomUUID)(), job = { state: "pending", at: Date.now(), ...navigation2 ? { navigation: true } : {}, ...systemOpen ? { systemOpen: true } : {} };
     this.jobs.set(id2, job);
     const work = async () => {
       await new Promise((r) => setTimeout(r, 0));
@@ -2630,8 +2820,9 @@ var JobQueue = class {
 };
 
 // src/core/native-host-build.ts
-var import_promises6 = __toESM(require("node:fs/promises"), 1);
-var import_node_path7 = __toESM(require("node:path"), 1);
+var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_node_path8 = __toESM(require("node:path"), 1);
+init_path_policy();
 
 // src/core/native-build-contract.ts
 var NATIVE_BUILD = {
@@ -2652,12 +2843,12 @@ async function inspectNativeHostBuild(version, executable = process.execPath) {
   if (version !== NATIVE_BUILD.version) return { version, hashes, supported: false, reason: `Only the inspected PI-Desktop ${NATIVE_BUILD.version} build is supported` };
   let handle;
   try {
-    let archiveFs = import_promises6.default;
+    let archiveFs = import_promises7.default;
     try {
       archiveFs = require("original-fs").promises;
     } catch {
     }
-    const archive = import_node_path7.default.join(import_node_path7.default.dirname(executable), "resources", "app.asar");
+    const archive = import_node_path8.default.join(import_node_path8.default.dirname(executable), "resources", "app.asar");
     const stat = await archiveFs.lstat(archive);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Host archive is not a regular file");
     handle = await archiveFs.open(archive, "r");
@@ -2687,7 +2878,8 @@ async function inspectNativeHostBuild(version, executable = process.execPath) {
 }
 
 // src/core/review-navigation.ts
-var import_node_crypto7 = require("node:crypto");
+var import_node_crypto8 = require("node:crypto");
+init_path_policy();
 var ReviewNavigationStore = class {
   activeSession;
   selections = /* @__PURE__ */ new Map();
@@ -2698,7 +2890,7 @@ var ReviewNavigationStore = class {
     if (!request.sessionId || request.scope !== "lastTurn" && (request.scope !== "turn" || !request.runId)) fail("NAVIGATION_INVALID", "A recorded task/session is required");
     if (request.scope === "lastTurn" && (request.runId != null || request.root != null || fileId != null)) fail("NAVIGATION_INVALID", "Latest turn cannot pin a recorded task, project or file");
     const previous = this.selections.get(request.sessionId);
-    const entry = { nonce: previous?.nonce ?? (0, import_node_crypto7.randomUUID)(), revision: (previous?.revision ?? 0) + 1, sessionId: request.sessionId, request, fileId, at: Date.now() };
+    const entry = { nonce: previous?.nonce ?? (0, import_node_crypto8.randomUUID)(), revision: (previous?.revision ?? 0) + 1, sessionId: request.sessionId, request, fileId, at: Date.now() };
     this.selections.set(request.sessionId, entry);
     return entry;
   }
@@ -2795,9 +2987,11 @@ function collectDelegations(messages, ownerOf) {
 }
 
 // src/core/host-history.ts
-var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_promises8 = __toESM(require("node:fs/promises"), 1);
 var import_node_fs3 = require("node:fs");
-var import_node_path8 = __toESM(require("node:path"), 1);
+var import_node_path9 = __toESM(require("node:path"), 1);
+init_contracts();
+init_path_policy();
 
 // src/core/explicit-file-tools.ts
 var explicitToolName = (name2) => String(name2).split(".").pop().toLowerCase();
@@ -2813,6 +3007,8 @@ function isExplicitEvidence(ref) {
 }
 
 // src/core/edit-replay.ts
+init_contracts();
+init_path_policy();
 function replayRecordedEdit(before, args, expectedHash) {
   if (!/^[a-f0-9]{64}$/.test(expectedHash) || Buffer.byteLength(before) > MAX_TEXT_BYTES) return void 0;
   if (typeof args.ops !== "string") {
@@ -2878,6 +3074,8 @@ function replayRecordedEdit(before, args, expectedHash) {
 }
 
 // src/core/host-history.ts
+init_storage();
+init_capture_leases();
 var ID = /^[a-zA-Z0-9-]{1,80}$/;
 var HASH = /^[a-f0-9]{64}$/;
 var object = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -2890,32 +3088,32 @@ var unknownSnapshot = (exists, hash, label) => ({ exists, text: null, hash: type
 var HostHistoryImporter = class {
   constructor(store2, hostDataRoot) {
     this.store = store2;
-    if (!import_node_path8.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
-    this.hostDataRoot = import_node_path8.default.resolve(hostDataRoot);
+    if (!import_node_path9.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
+    this.hostDataRoot = import_node_path9.default.resolve(hostDataRoot);
   }
   hostDataRoot;
   /** Native session scratch contract; this root is for recording only, never disk actions. */
   scratchRoot(sessionId) {
     if (!ID.test(sessionId)) throw new Error("Invalid history session");
-    return import_node_path8.default.join(this.hostDataRoot, "scratch", sessionId);
+    return import_node_path9.default.join(this.hostDataRoot, "scratch", sessionId);
   }
   async checked(relative, directory = false) {
-    const target = import_node_path8.default.resolve(this.hostDataRoot, relative);
+    const target = import_node_path9.default.resolve(this.hostDataRoot, relative);
     if (!inside(this.hostDataRoot, target)) throw new Error("Host evidence escape");
-    let cursor = import_node_path8.default.parse(target).root;
-    for (const segment of target.slice(cursor.length).split(import_node_path8.default.sep)) {
-      cursor = import_node_path8.default.join(cursor, segment);
-      const stat2 = await import_promises7.default.lstat(cursor);
+    let cursor = import_node_path9.default.parse(target).root;
+    for (const segment of target.slice(cursor.length).split(import_node_path9.default.sep)) {
+      cursor = import_node_path9.default.join(cursor, segment);
+      const stat2 = await import_promises8.default.lstat(cursor);
       if (stat2.isSymbolicLink() || cursor !== target && !stat2.isDirectory()) throw new Error("Unsafe host evidence ancestry");
     }
-    const stat = await import_promises7.default.lstat(target);
+    const stat = await import_promises8.default.lstat(target);
     if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error("Invalid host evidence type");
     return target;
   }
   async read(relative, limit) {
     const file = await this.checked(relative);
-    const initial = await import_promises7.default.lstat(file);
-    const handle = await import_promises7.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
+    const initial = await import_promises8.default.lstat(file);
+    const handle = await import_promises8.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > limit || stat.ino !== initial.ino || stat.dev !== initial.dev) throw new Error("Host evidence limit/identity");
@@ -2928,7 +3126,7 @@ var HostHistoryImporter = class {
       }
       const after = await handle.stat();
       await this.checked(relative);
-      const live = await import_promises7.default.lstat(file);
+      const live = await import_promises8.default.lstat(file);
       if (length > limit || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || live.ino !== stat.ino || live.dev !== stat.dev) throw new Error("Host evidence changed; retry sync");
       return bytes.subarray(0, length);
     } finally {
@@ -2937,12 +3135,12 @@ var HostHistoryImporter = class {
   }
   capture(root, value, sessionId) {
     assertPublicPath(value);
-    const absolutePath = import_node_path8.default.resolve(root, value);
+    const absolutePath = import_node_path9.default.resolve(root, value);
     assertPublicPath(absolutePath);
     if (inside(this.hostDataRoot, absolutePath) && !inside(this.scratchRoot(sessionId), absolutePath) || inside(this.store.directory, absolutePath)) throw new Error("Private history path");
     const origin = inside(root, absolutePath) ? "workspace" : "external";
-    if (origin === "external" && !import_node_path8.default.isAbsolute(value)) throw new Error("Relative external history path");
-    const display = origin === "workspace" ? import_node_path8.default.relative(root, absolutePath).split(import_node_path8.default.sep).join("/") : absolutePath;
+    if (origin === "external" && !import_node_path9.default.isAbsolute(value)) throw new Error("Relative external history path");
+    const display = origin === "workspace" ? import_node_path9.default.relative(root, absolutePath).split(import_node_path9.default.sep).join("/") : absolutePath;
     assertPublicPath(display);
     const identity = canonical(absolutePath);
     return { id: digest(identity).slice(0, 24), identity, path: display, absolutePath, origin };
@@ -2960,8 +3158,8 @@ var HostHistoryImporter = class {
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
   async syncSession(sessionId, root, options = {}) {
-    if (!ID.test(sessionId) || !import_node_path8.default.isAbsolute(root)) throw new Error("Invalid history session/root");
-    root = import_node_path8.default.resolve(root);
+    if (!ID.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid history session/root");
+    root = import_node_path9.default.resolve(root);
     const capture = (value) => this.capture(root, value, sessionId);
     const running = typeof options === "boolean" ? options : options.running === true;
     const mainRunning = typeof options === "boolean" ? options : options.mainRunning ?? running;
@@ -3085,7 +3283,7 @@ var HostHistoryImporter = class {
     const relative = `review-changes/${sessionId}`;
     try {
       const dir = await this.checked(relative, true);
-      const entries = await import_promises7.default.readdir(dir, { withFileTypes: true });
+      const entries = await import_promises8.default.readdir(dir, { withFileTypes: true });
       if (entries.length > 4096) {
         warn("Host modification directory limit exceeded");
         return d;
@@ -3113,7 +3311,7 @@ var HostHistoryImporter = class {
         add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
       } else {
         const name2 = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
-        if (!["write", "edit"].includes(name2) || typeof target !== "string" || !import_node_path8.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
+        if (!["write", "edit"].includes(name2) || typeof target !== "string" || !import_node_path9.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
         const text2 = name2 === "write" && typeof b.args.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name2, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
       }
@@ -3121,6 +3319,11 @@ var HostHistoryImporter = class {
     await this.store.init();
     const capturedEndpoints = /* @__PURE__ */ new Map();
     const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
+    const preparations = await inspectCaptureLeases(this.store).catch(() => {
+      warn("Capture preparation journal unavailable or unsafe");
+      return { fingerprint: "", leases: [] };
+    });
+    const preparedEvents = /* @__PURE__ */ new Map();
     const endpoint = (source2, change, ref, side, snapshot) => {
       const separator = ref.indexOf(":"), callId = ref.slice(separator + 1), message = aliases.get(callId);
       if (!(ref.startsWith("native:") || isExplicitEvidence(ref)) || !message || owner(message) !== source2.userMessageId || !change.capture) return;
@@ -3144,6 +3347,28 @@ var HostHistoryImporter = class {
         if (!change.segments?.length && !change.ambiguous && change.evidence?.length) for (const side of ["before", "after"]) endpoint(source2, change, side === "before" ? change.evidence[0] : change.evidence.at(-1), side, change[side]);
         for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ["before", "after"]) endpoint(source2, change, segment.evidence, side, segment[side]);
       }
+    }
+    for (const lease of preparations.leases) {
+      const p = lease.prepared;
+      if (!p || lease.ambiguous || lease.sessionId !== sessionId || canonical(lease.root) !== canonical(root)) continue;
+      const recordedSource = sources.find((s) => s.id === lease.owner);
+      if (recordedSource && (recordedSource.execution?.id !== lease.executionId || recordedSource.sessionId !== sessionId || canonical(recordedSource.root) !== canonical(root) || recordedSource.userMessageId !== p.userMessageId)) continue;
+      const source2 = recordedSource ?? { userMessageId: p.userMessageId };
+      const message = aliases.get(lease.toolCallId), block = message?.blocks.find((b) => b.type === "tool_call" && b.callId === lease.toolCallId);
+      if (!source2 || !message || !p.userMessageId || owner(message) !== p.userMessageId || !block || block.status !== "success" || block.result?.isError || explicitToolName(block.name) !== p.name || !isExplicitFileTool(block.name)) continue;
+      const matched = [];
+      for (const entry of p.paths) {
+        try {
+          const argument = block.args?.path ?? block.args?.file_path;
+          if (typeof argument !== "string" || capture(argument).identity !== entry.capture.identity) continue;
+          const e = events.find((e2) => e2.meta.messageId === lease.toolCallId && capture(e2.meta.path).identity === entry.capture.identity);
+          if (!e) continue;
+          endpoint(source2, { capture: entry.capture, before: entry.before, after: entry.before }, `${p.name}:${lease.toolCallId}`, "before", entry.before);
+          matched.push(e);
+        } catch {
+        }
+      }
+      if (matched.length) preparedEvents.set(lease.id, matched);
     }
     events.sort((a, b) => a.message.order - b.message.order);
     if (events.length > 4096) {
@@ -3278,6 +3503,10 @@ var HostHistoryImporter = class {
     d.events = events.length;
     await this.store.init();
     await this.store.captureLock(async () => {
+      if (preparedEvents.size && (await inspectCaptureLeases(this.store)).fingerprint !== preparations.fingerprint) {
+        warn("Capture preparation changed; retry recovery");
+        return;
+      }
       const existing = await this.store.listRuns(false, true);
       const users = ordered.filter((m) => m.role === "user" && !m.parent && !m.meta.steering);
       const nextBoundary = new Map(users.slice(0, -1).map((user, index) => [user.id, users[index + 1].createdAt]));
@@ -3350,11 +3579,11 @@ var HostHistoryImporter = class {
             warn("Existing run root conflict; content frozen; verified repair requires explicit approval");
             continue;
           }
-          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises7.default.readFile(import_node_path8.default.join(this.store.directory, file), "utf8").catch((error) => {
+          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises8.default.readFile(import_node_path9.default.join(this.store.directory, file), "utf8").catch((error) => {
             if (error.code === "ENOENT") return null;
             throw error;
           })])));
-          await atomicJson(import_node_path8.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
+          await atomicJson(import_node_path9.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
         }
         if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
@@ -3480,6 +3709,17 @@ var HostHistoryImporter = class {
         await this.store.writeRun(run2);
         d.imported++;
       }
+      const consumed = /* @__PURE__ */ new Set();
+      for (const [id2, linked] of preparedEvents) if (linked.length === preparations.leases.find((l) => l.id === id2)?.prepared?.paths.length && linked.every((e) => !e.conflicted && e.before?.kind === "text" && e.after?.kind === "text")) {
+        for (const runId of d.runIds) {
+          const destination = await this.store.getRun(runId, false, false);
+          if (destination?.sessionId === sessionId && linked.every((e) => destination.userMessageId === owner(e.message) && Object.values(destination.changes).some((c) => c.capture?.identity === capture(e.meta.path).identity && c.segments?.some((s) => s.evidence === `native:${e.meta.messageId}` && s.before.hash === e.before.hash && s.after.hash === e.after.hash)))) {
+            consumed.add(id2);
+            break;
+          }
+        }
+      }
+      if (consumed.size) await writeCaptureLeases(this.store, preparations.leases.filter((l) => !consumed.has(l.id)));
     });
     return d;
   }
@@ -3564,10 +3804,13 @@ function applyReview(before, hunks, expected) {
 }
 
 // src/core/host-evidence-store.ts
-var import_promises8 = __toESM(require("node:fs/promises"), 1);
-var import_node_path9 = __toESM(require("node:path"), 1);
+var import_promises9 = __toESM(require("node:fs/promises"), 1);
+var import_node_path10 = __toESM(require("node:path"), 1);
+init_storage();
+init_path_policy();
 
 // src/core/host-transcript.ts
+init_public_path();
 function hostEvidenceMessages(messages) {
   return messages.flatMap((value) => {
     if (!value || typeof value.id !== "string" || typeof value.role !== "string") return [];
@@ -3620,14 +3863,14 @@ var LIMIT = 8 * 1024 * 1024;
 var HostEvidenceStore = class {
   directory;
   constructor(dataPath) {
-    this.directory = import_node_path9.default.join(dataPath, "evidence");
+    this.directory = import_node_path10.default.join(dataPath, "evidence");
   }
   file(sessionId, root) {
-    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
-    return import_node_path9.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path10.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
+    return import_node_path10.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
   }
   async checkDirectory() {
-    const stat = await import_promises8.default.lstat(this.directory);
+    const stat = await import_promises9.default.lstat(this.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence directory");
   }
   async restore(buffer, sessionId, root) {
@@ -3636,7 +3879,7 @@ var HostEvidenceStore = class {
     await this.checkDirectory();
     let record;
     try {
-      const stat = await import_promises8.default.lstat(file);
+      const stat = await import_promises9.default.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LIMIT) throw new Error("Unsafe persisted evidence record");
       record = await readJson(file);
     } catch (error) {
@@ -3654,12 +3897,12 @@ var HostEvidenceStore = class {
     const record = { version: 1, sessionId, root: canonical(root), messages: hostEvidenceMessages(messages) };
     const bytes = Buffer.byteLength(JSON.stringify(record));
     if (bytes > LIMIT) throw new Error("Persisted evidence exceeds 8 MiB limit");
-    const entries = (await import_promises8.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
-    const present = entries.includes(import_node_path9.default.basename(file));
+    const entries = (await import_promises9.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
+    const present = entries.includes(import_node_path10.default.basename(file));
     if (!present && entries.length >= MAX_RUNS) throw new Error("Persisted evidence session limit reached");
     let size = bytes;
-    for (const name2 of entries) if (name2 !== import_node_path9.default.basename(file)) {
-      const stat = await import_promises8.default.lstat(import_node_path9.default.join(this.directory, name2));
+    for (const name2 of entries) if (name2 !== import_node_path10.default.basename(file)) {
+      const stat = await import_promises9.default.lstat(import_node_path10.default.join(this.directory, name2));
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence record");
       size += stat.size;
     }
@@ -3669,10 +3912,12 @@ var HostEvidenceStore = class {
 };
 
 // src/git/local-management.ts
-var import_promises9 = __toESM(require("node:fs/promises"), 1);
-var import_node_path10 = __toESM(require("node:path"), 1);
+var import_promises10 = __toESM(require("node:fs/promises"), 1);
+var import_node_path11 = __toESM(require("node:path"), 1);
 var import_node_child_process2 = require("node:child_process");
-var import_node_crypto8 = require("node:crypto");
+var import_node_crypto9 = require("node:crypto");
+init_libesm();
+init_path_policy();
 var mutations = /* @__PURE__ */ new Set(["stage", "unstage", "discard", "commit", "branchCreate", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
 var confirmation = /* @__PURE__ */ new Set(["discard", "commit", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
 var operations = /* @__PURE__ */ new Set(["status", "diff", "stats", "discardPreview", "branches", "history", "commitDiff", "blame", "stashList", "stashShow", ...mutations]);
@@ -3758,10 +4003,10 @@ async function run(root, args, hooks = false, index) {
 }
 async function filePath(root, value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
+  if (import_node_path11.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
   assertPublicPath(rel);
   const resolved = await safeResolve(root, rel);
-  const stat = await import_promises9.default.lstat(resolved).catch((error) => {
+  const stat = await import_promises10.default.lstat(resolved).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -3810,7 +4055,7 @@ async function requireHead(root) {
 async function requireIdle(root) {
   for (const name2 of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
     const result = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", name2]);
-    if (await import_promises9.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
+    if (await import_promises10.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
   }
 }
 async function checkedDiffPaths(root, args) {
@@ -3884,7 +4129,7 @@ function commitMessage(args) {
 ${args.description.trim()}` : ""), "Commit message", 5e3);
 }
 async function indexBytes(index) {
-  return import_promises9.default.readFile(index).catch((error) => {
+  return import_promises10.default.readFile(index).catch((error) => {
     if (error.code === "ENOENT") return void 0;
     throw error;
   });
@@ -3902,7 +4147,7 @@ async function selectedCommit(root, args, message, state) {
   const previous = await headCommit(root);
   const realIndex = (await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).stdout.toString().trim();
   const original = await indexBytes(realIndex);
-  const token = `diff-view-commit-${(0, import_node_crypto8.randomUUID)()}`, isolated = import_node_path10.default.join(import_node_path10.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
+  const token = `diff-view-commit-${(0, import_node_crypto9.randomUUID)()}`, isolated = import_node_path11.default.join(import_node_path11.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
   let lock, ownsLock = false;
   try {
     await git(root, ["read-tree", ...previous ? [previous] : ["--empty"]], { index: isolated });
@@ -3922,17 +4167,17 @@ async function selectedCommit(root, args, message, state) {
     if (!oid || oid === previous) fail("COMMIT_NOT_CREATED", "Git did not create a new commit. Inspect hook output and refresh.");
     let notice;
     try {
-      if (original) await import_promises9.default.writeFile(nextIndex, original);
+      if (original) await import_promises10.default.writeFile(nextIndex, original);
       else await git(root, ["read-tree", "--empty"], { index: nextIndex });
       await git(root, ["reset", "-q", oid, "--", ...paths], { index: nextIndex });
-      lock = await import_promises9.default.open(`${realIndex}.lock`, "wx");
+      lock = await import_promises10.default.open(`${realIndex}.lock`, "wx");
       ownsLock = true;
       if (!sameIndex(original, await indexBytes(realIndex))) notice = "\u63D0\u4EA4\u5DF2\u6210\u529F\uFF0C\u4F46\u7D22\u5F15\u5728\u63D0\u4EA4\u671F\u95F4\u88AB\u5916\u90E8\u4FEE\u6539\uFF1B\u5DF2\u4FDD\u7559\u5916\u90E8\u6682\u5B58\uFF0C\u8BF7\u5237\u65B0\u6838\u5BF9\u3002";
       else {
-        await lock.writeFile(await import_promises9.default.readFile(nextIndex));
+        await lock.writeFile(await import_promises10.default.readFile(nextIndex));
         await lock.close();
         lock = void 0;
-        await import_promises9.default.rename(`${realIndex}.lock`, realIndex);
+        await import_promises10.default.rename(`${realIndex}.lock`, realIndex);
         ownsLock = false;
       }
     } catch {
@@ -3941,8 +4186,8 @@ async function selectedCommit(root, args, message, state) {
     return { ok: true, oid, ...output(result, notice) };
   } finally {
     await lock?.close().catch(() => void 0);
-    if (ownsLock) await import_promises9.default.unlink(`${realIndex}.lock`).catch(() => void 0);
-    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises9.default.unlink(file).catch(() => void 0);
+    if (ownsLock) await import_promises10.default.unlink(`${realIndex}.lock`).catch(() => void 0);
+    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises10.default.unlink(file).catch(() => void 0);
   }
 }
 async function discardTarget(root, values) {
@@ -3970,9 +4215,9 @@ var LocalGitManagement = class {
     if (!value || typeof value !== "object" || Array.isArray(value)) fail("INVALID_ARGUMENT", "Git management arguments are required.");
     const args = value;
     if (!operations.has(args.operation)) fail("INVALID_OPERATION", "Unsupported local-only Git operation.");
-    const roots = await Promise.all(allowedRoots.map((root2) => import_promises9.default.realpath(root2)));
+    const roots = await Promise.all(allowedRoots.map((root2) => import_promises10.default.realpath(root2)));
     const requested = args.root ?? (roots.length === 1 ? roots[0] : fail("ROOT_REQUIRED", "Select an authorized project root."));
-    const root = await import_promises9.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
+    const root = await import_promises10.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
     if (!roots.some((allowed) => canonical(allowed) === canonical(root))) fail("ROOT_DENIED", "Repository is not an authorized project root.");
     const key = canonical(root);
     const queue = queues.get(key) ?? new ReadWriteQueue(4);
@@ -3996,7 +4241,7 @@ var LocalGitManagement = class {
       const target = await discardTarget(root, args.paths);
       if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };
       if (args.fingerprint !== target.fingerprint) fail("FILE_CHANGED", "File or index changed since confirmation. Refresh and review before discarding.");
-      if (target.untracked) await import_promises9.default.unlink(await safeResolve(root, target.rel));
+      if (target.untracked) await import_promises10.default.unlink(await safeResolve(root, target.rel));
       else await run(root, ["restore", "--worktree", "--", target.rel]);
       return { ok: true };
     }
@@ -4140,11 +4385,17 @@ Stash was not dropped. Inspect status and resolve any conflicts manually; do not
 var localManagement = new LocalGitManagement();
 var dispatch = (method, args, allowedRoots) => localManagement.dispatch(method, args, allowedRoots);
 
+// src/main.ts
+init_path_policy();
+
 // src/core/capture-context.ts
-var import_node_path11 = __toESM(require("node:path"), 1);
+var import_node_path12 = __toESM(require("node:path"), 1);
+init_path_policy();
+init_public_path();
+init_storage();
 var CAPTURE_CONTEXT_TTL = 6e3;
 async function writeCaptureContexts(directory, generation2, contexts2) {
-  await atomicJson(import_node_path11.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
+  await atomicJson(import_node_path12.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
 }
 
 // src/core/host-evidence-buffer.ts
@@ -4199,7 +4450,8 @@ var HostEvidenceBuffer = class {
 };
 
 // src/core/file-open.ts
-var import_node_crypto9 = require("node:crypto");
+var import_node_crypto10 = require("node:crypto");
+init_path_policy();
 var FileOpenRequests = class {
   constructor(now = Date.now) {
     this.now = now;
@@ -4210,7 +4462,7 @@ var FileOpenRequests = class {
   add(target) {
     for (const [id2, request] of this.requests) if (this.now() - request.at > 15e3) this.requests.delete(id2);
     if (this.requests.size >= 16) fail("FILE_OPEN_BUSY", "\u6253\u5F00\u8BF7\u6C42\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
-    const requestId = (0, import_node_crypto9.randomUUID)();
+    const requestId = (0, import_node_crypto10.randomUUID)();
     this.requests.set(requestId, { target: { ...target, requestId }, at: this.now(), delivered: false, status: { state: "pending" } });
     this.listeners.get(target.sessionId)?.finish(this.take(target.sessionId));
     return { requestId };
@@ -4285,8 +4537,9 @@ var FileOpenRequests = class {
 
 // src/core/system-open.ts
 var import_node_child_process3 = require("node:child_process");
-var import_promises10 = __toESM(require("node:fs/promises"), 1);
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_promises11 = __toESM(require("node:fs/promises"), 1);
+var import_node_path13 = __toESM(require("node:path"), 1);
+init_path_policy();
 var script = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -4305,15 +4558,15 @@ var encodedScript = Buffer.from(script, "utf16le").toString("base64");
 async function openSystemFile(target, options = {}) {
   if (process.platform !== "win32") fail("SYSTEM_OPEN_UNSUPPORTED", "\u7CFB\u7EDF\u6253\u5F00\u76EE\u524D\u4EC5\u652F\u6301 Windows\u3002 / System open currently supports Windows only.");
   assertPublicPath(target);
-  if (!import_node_path12.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
-  const stat = await import_promises10.default.lstat(target).catch((error) => {
+  if (!import_node_path13.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
+  const stat = await import_promises11.default.lstat(target).catch((error) => {
     if (error.code === "ENOENT") fail("FILE_NOT_FOUND", "\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u7CFB\u7EDF\u6253\u5F00\u3002 / The file no longer exists.");
     throw error;
   });
   if (stat.isSymbolicLink() || !stat.isFile()) fail("NOT_FILE", "Only regular files can be opened");
   const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
   if (!/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) fail("SYSTEM_OPEN_FAILED", "Invalid Windows system directory");
-  const executable = import_node_path12.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const executable = import_node_path13.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   await options.validate?.();
   if (options.signal?.aborted) fail("PLUGIN_UNLOADED", "Diff view unloaded; the file was not opened");
   return new Promise((resolve, reject) => {
@@ -4381,7 +4634,7 @@ var rendererStages = {};
 var runningDiagnostic;
 var rendererDiagnostic;
 async function saveRendererStatus() {
-  if (store && !disposed) await atomicJson(import_node_path13.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+  if (store && !disposed) await atomicJson(import_node_path14.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
 }
 var navigation = new ReviewNavigationStore();
 function serial(work) {
@@ -4422,26 +4675,26 @@ async function heartbeat() {
 }
 async function onLoad() {
   disposed = false;
-  generation = (0, import_node_crypto10.randomUUID)();
-  pluginRoot = await import_promises11.default.realpath(__dirname);
+  generation = (0, import_node_crypto11.randomUUID)();
+  pluginRoot = await import_promises12.default.realpath(__dirname);
   systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
-  const parent = import_node_path13.default.dirname(dataPath), plugins = import_node_path13.default.dirname(parent);
-  history = import_node_path13.default.basename(parent) === "data" && import_node_path13.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path13.default.dirname(plugins)) : null;
+  const parent = import_node_path14.default.dirname(dataPath), plugins = import_node_path14.default.dirname(parent);
+  history = import_node_path14.default.basename(parent) === "data" && import_node_path14.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path14.default.dirname(plugins)) : null;
   contexts.clear();
   evidence.clear();
   sessionRoots.clear();
-  const savedRoots = await readJson(import_node_path13.default.join(store.directory, "session-roots.json"), {});
-  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path13.default.isAbsolute(root)) sessionRoots.set(id2, root);
+  const savedRoots = await readJson(import_node_path14.default.join(store.directory, "session-roots.json"), {});
+  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path14.default.isAbsolute(root)) sessionRoots.set(id2, root);
   fileOpens.clear();
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
   navigation.clear();
-  navigation.restore(await readJson(import_node_path13.default.join(store.directory, "selections.json"), []));
+  navigation.restore(await readJson(import_node_path14.default.join(store.directory, "selections.json"), []));
   await saveRendererStatus();
   await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot);
@@ -4498,7 +4751,7 @@ async function onUnload() {
   evidence.clear();
   contexts.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises11.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises12.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -4610,7 +4863,7 @@ async function execute(s, method, args) {
     }
     sessionRoots.set(args.sessionId, root);
     while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
-    await atomicJson(import_node_path13.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
+    await atomicJson(import_node_path14.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
     const now = Date.now();
     const taskId = typeof args.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : void 0;
     const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : void 0;
@@ -4663,7 +4916,7 @@ async function execute(s, method, args) {
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
     if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
     const selection = args.scope === "lastTurn" ? navigation.set({ scope: "lastTurn", sessionId: run2.sessionId }) : navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
-    await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+    await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
   }
   if (method === "readTurnSelection") {
@@ -4675,7 +4928,7 @@ async function execute(s, method, args) {
     const target = await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
     if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
       const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store.resolveFileId(selection.request.runId, selection.fileId));
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+      await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), navigation.export());
       return repaired;
     }
     return selection;
@@ -4689,7 +4942,7 @@ async function execute(s, method, args) {
       evidence.clear();
       navigation.clear();
       fileOpens.clear();
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), []);
+      await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {
       navigationClearing = false;

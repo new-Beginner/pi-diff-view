@@ -126,7 +126,10 @@ export class SnapshotStore {
             size += sizes.reduce((total, value) => total + value, 0);
           }
           if (size + snapshot.size > MAX_HISTORY_BYTES) fail('STORE_LIMIT', '128 MiB snapshot capacity reached; clear plugin history after stopping Agents');
-          try { await fs.writeFile(file, snapshot.text, { flag: 'wx', mode: 0o600 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+          // Publish complete blobs atomically; interrupted writes must not leave a partial hash file.
+          const temp = `${file}.${randomUUID()}.tmp`;
+          try { await fs.writeFile(temp, snapshot.text, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); }
+          finally { await fs.rm(temp, { force: true }); }
         } finally { await handle.close(); await fs.rm(lock, { force: true }); }
       }
     }
@@ -336,6 +339,9 @@ export class SnapshotStore {
   }
   async clear(): Promise<void> {
     await this.captureLock(async () => {
+      // A settled runner does not prove its unfinished tool stopped. Never delete prepared blobs.
+      const { inspectCaptureLeases } = await import('./capture-leases');
+      if ((await inspectCaptureLeases(this)).leases.length) fail('AGENT_BUSY', 'Resolve outstanding capture leases before clearing history; verify terminal tool evidence first');
       for (const inbox of [false, true]) for (const file of await fs.readdir(path.join(this.directory, inbox ? 'inbox' : 'runs'))) {
         if (!/^[\w-]+\.json$/.test(file)) continue;
         const run = await this.getRun(file.slice(0, -5), inbox, false);

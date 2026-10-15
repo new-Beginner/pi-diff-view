@@ -9,6 +9,7 @@ import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/cor
 import { HostHistoryImporter, hostHistoryRunId } from '../../src/core/host-history';
 import { ReviewService } from '../../src/core/review-service';
 import type { CaptureRun } from '../../src/core/contracts';
+import { inspectCaptureLeases } from '../../src/agent/workspace-capture';
 
 let temp: string, host: string, root: string, plugin: string, locator: string, generation: string, sid: string, store: SnapshotStore;
 beforeEach(async () => {
@@ -142,4 +143,204 @@ it('bounds segment metadata and does not rewrite or rehash retained segment text
   const metadata = (await store.getRun(run.id, false, false))!.changes['a.txt'];
   expect(metadata.segments!.every(s => s.before.text === null && s.after.text === null)).toBe(true);
   expect((await fs.readdir(path.join(store.directory, 'blobs'))).length).toBe(35);
+});
+
+it.each([false, true])('persists the exact before endpoint before mutation (absent: %s)', async absent => {
+  const h = harness(), file = path.join(root, 'a.txt');
+  if (!absent) await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  const leases = await inspectCaptureLeases(new SnapshotStore(store.directory));
+  const prepared = (leases.leases[0] as any).prepared;
+  expect(prepared).toMatchObject({ name: 'write', userMessageId: 'user', paths: [{ before: { exists: !absent, text: null, kind: 'text' } }] });
+  if (!absent) expect(await fs.readFile(path.join(store.directory, 'blobs', prepared.paths[0].before.hash), 'utf8')).toBe('before\n');
+  await store.importInbox(generation);
+  expect(await store.listRuns()).toHaveLength(0); // Preparation is not a completed change.
+});
+
+async function writeHistory(status = 'success', content = 'after\n') {
+  await transcript('Write');
+  const file = path.join(host, 'sessions', `${sid}.jsonl`);
+  const rows = (await fs.readFile(file, 'utf8')).split('\n').map(line => JSON.parse(line));
+  Object.assign(rows[2].blocks[0], { args: { path: path.join(root, 'a.txt'), content }, status, result: { isError: status === 'error' } });
+  await fs.writeFile(file, rows.map(row => JSON.stringify(row)).join('\n'));
+}
+
+it.each([false, true])('recovers exact durable before after closure loss, idempotently and without live reads (absent: %s)', async absent => {
+  const h = harness(), file = path.join(root, 'a.txt');
+  if (!absent) await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await fs.writeFile(file, 'unrelated current bytes\n'); // The old closure never receives a result.
+  await writeHistory();
+  await store.importInbox(generation);
+  const read = fs.readFile.bind(fs);
+  vi.spyOn(fs, 'readFile').mockImplementation(((p: any, ...args: any[]) => {
+    if (canonical(String(p)) === canonical(file)) throw new Error('No historical live reads');
+    return (read as any)(p, ...args);
+  }) as any);
+  for (let i = 0; i < 2; i++) {
+    const restarted = new SnapshotStore(store.directory);
+    await new HostHistoryImporter(restarted, host).syncSession(sid, root);
+    const runs = await restarted.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].changes['a.txt']).toMatchObject({ before: { exists: !absent, text: absent ? null : 'before\n', kind: 'text' }, after: { text: 'after\n', kind: 'text' } });
+    expect(runs[0].changes['a.txt'].segments).toHaveLength(1);
+  }
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(0);
+});
+
+it.each(['pending', 'error'])('does not turn a %s preparation into a change or retire its lease', async status => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await writeHistory(status); await store.importInbox(generation);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect(await store.listRuns()).toHaveLength(0);
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(1);
+});
+
+it('records bounded sanitized per-path failures instead of silently losing before', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  const read = fs.open.bind(fs);
+  vi.spyOn(fs, 'open').mockImplementation(((p: any, ...args: any[]) => {
+    if (canonical(String(p)) === canonical(file)) throw Object.assign(new Error('secret-content-and-path'), { code: 'EACCES' });
+    return (read as any)(p, ...args);
+  }) as any);
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  for (let i = 0; i < 20; i++) {
+    await h.emit('tool_call', { toolName: 'Write', toolCallId: `failed-${i}`, input: { path: file, content: 'after\n' } });
+    await h.emit('tool_result', { toolCallId: `failed-${i}` });
+  }
+  const audit = await fs.readFile(path.join(store.directory, 'actions.jsonl'), 'utf8');
+  expect(audit).toContain('EACCES'); expect(audit).toContain('capture-before');
+  expect(audit).not.toContain('secret-content-and-path'); expect(audit).not.toContain(file);
+  expect(audit.trim().split('\n').length).toBeLessThanOrEqual(16);
+  expect(h.ctx.ui.notify).toHaveBeenCalledTimes(1);
+});
+
+it('keeps overlapping preparations conservative after restart', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  for (const id of ['edit', 'other']) await h.emit('tool_call', { toolName: 'Write', toolCallId: id, input: { path: file, content: 'after\n' } });
+  await writeHistory(); await store.importInbox(generation);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect((await store.listRuns())[0].changes['a.txt'].before.kind).toBe('unavailable');
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(2);
+});
+
+it('degrades visibly when preparation persistence fails, without blocking the mutation', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  const save = vi.spyOn(SnapshotStore.prototype, 'saveBlob').mockRejectedValueOnce(Object.assign(new Error('secret failure'), { code: 'ENOSPC' }));
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  expect((await inspectCaptureLeases(store)).leases[0].prepared).toBeUndefined();
+  expect(h.ctx.ui.notify).toHaveBeenCalledTimes(1);
+  save.mockRestore(); await fs.writeFile(file, 'after\n'); await h.emit('tool_result', { toolCallId: 'edit' });
+  const run = await saved(); expect(run.incomplete).toBe(true);
+  expect(run.changes['a.txt'].before.text).toBe('before\n');
+  expect(await fs.readFile(path.join(store.directory, 'actions.jsonl'), 'utf8')).toContain('ENOSPC');
+});
+
+it('keeps preparation through result persistence failure and retries duplicate results without duplicate segments', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await fs.writeFile(file, 'after\n');
+  const write = vi.spyOn(SnapshotStore.prototype, 'writeRun').mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+  await h.emit('tool_result', { toolCallId: 'edit' });
+  expect((await inspectCaptureLeases(store)).leases[0]).toMatchObject({ closed: true, prepared: { name: 'write' } });
+  write.mockRestore();
+  await fs.writeFile(file, 'unrelated late bytes\n');
+  await h.emit('tool_result', { toolCallId: 'edit' }); await h.emit('tool_result', { toolCallId: 'edit' });
+  const change = (await saved()).changes['a.txt'];
+  expect(change.segments).toHaveLength(1); expect(change.after.text).toBe('after\n');
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(0);
+});
+
+it('recovers a prepared operation after empty runner settlement and a late terminal result', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await h.emit('agent_end'); await fs.writeFile(file, 'after\n');
+  await h.emit('tool_result', { toolCallId: 'edit' });
+  await writeHistory(); await store.importInbox(generation);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect((await store.listRuns())[0].changes['a.txt']).toMatchObject({ before: { text: 'before\n' }, after: { text: 'after\n' } });
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(0);
+});
+
+it('retains before when the terminal after read fails, then recovers from historical evidence', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await fs.writeFile(file, 'after\n');
+  const open = fs.open.bind(fs), spy = vi.spyOn(fs, 'open').mockImplementation(((p: any, ...args: any[]) => {
+    if (canonical(String(p)) === canonical(file)) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return (open as any)(p, ...args);
+  }) as any);
+  await h.emit('tool_result', { toolCallId: 'edit' }); spy.mockRestore();
+  expect((await inspectCaptureLeases(store)).leases[0].prepared).toBeDefined();
+  await writeHistory(); await store.importInbox(generation);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect((await store.listRuns())[0].changes['a.txt'].before.text).toBe('before\n');
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(0);
+});
+
+it.each(['sessionId', 'executionId', 'userMessageId', 'path', 'corrupt'])('rejects mismatched preparation provenance: %s', async mismatch => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  const journal = path.join(store.directory, 'capture-leases.json'), data = JSON.parse(await fs.readFile(journal, 'utf8')), lease = data.leases[0];
+  if (mismatch === 'userMessageId') lease.prepared.userMessageId = 'different-user';
+  else if (mismatch === 'path') lease.prepared.paths[0].capture.identity = 'different-path';
+  else if (mismatch === 'corrupt') await fs.writeFile(path.join(store.directory, 'blobs', lease.prepared.paths[0].before.hash), 'corrupt bytes');
+  else lease[mismatch] = randomUUID();
+  await atomicJson(journal, data); await writeHistory(); await store.importInbox(generation);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect((await store.listRuns())[0].changes['a.txt'].before.kind).toBe('unavailable');
+  expect(JSON.parse(await fs.readFile(journal, 'utf8')).leases).toHaveLength(1);
+});
+
+it('rechecks preparation ambiguity under lock before publishing recovery', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await writeHistory(); await store.importInbox(generation);
+  const hydrate = store.hydrate.bind(store); let injected = false;
+  vi.spyOn(store, 'hydrate').mockImplementation(async snapshot => {
+    if (!injected) { injected = true; await h.emit('tool_call', { toolName: 'Write', toolCallId: 'concurrent', input: { path: file, content: 'other\n' } }); }
+    return hydrate(snapshot);
+  });
+  const d = await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect(d.warnings).toContain('Capture preparation changed; retry recovery');
+  expect(await store.listRuns()).toHaveLength(0);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect((await store.listRuns())[0].changes['a.txt'].before.kind).toBe('unavailable');
+});
+
+it('refuses history clear while unresolved preparation still references before blobs', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'); await fs.writeFile(file, 'before\n');
+  await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Write', toolCallId: 'edit', input: { path: file, content: 'after\n' } });
+  await h.emit('agent_end'); await store.importInbox(generation);
+  await expect(store.clear()).rejects.toMatchObject({ code: 'AGENT_BUSY' });
+  expect(await fs.readFile(path.join(store.directory, 'blobs', digest('before\n')), 'utf8')).toBe('before\n');
+  await writeHistory(); await new HostHistoryImporter(store, host).syncSession(sid, root);
+  await expect(store.clear()).resolves.toBeUndefined();
+  expect(await store.listRuns()).toHaveLength(0);
+});
+
+it('recovers an interrupted Edit only from durable before plus the recorded result hash', async () => {
+  const h = harness(), file = path.join(root, 'a.txt'), args = { path: file, old_string: 'before', new_string: 'after' };
+  await fs.writeFile(file, 'before\n'); await h.emit('before_agent_start', { userMessageId: 'user' });
+  await h.emit('tool_call', { toolName: 'Edit', toolCallId: 'edit', input: args });
+  await writeHistory();
+  const transcriptFile = path.join(host, 'sessions', `${sid}.jsonl`), rows = (await fs.readFile(transcriptFile, 'utf8')).split('\n').map(line => JSON.parse(line));
+  Object.assign(rows[2].blocks[0], { name: 'Edit', args, result: { isError: false, details: { review: { version: 1, sessionId: sid, messageId: 'edit', path: file, afterExists: true, afterHash: digest('after\n') } } } });
+  await fs.writeFile(transcriptFile, rows.map(row => JSON.stringify(row)).join('\n'));
+  await fs.writeFile(file, 'unrelated\n'); await store.importInbox(generation);
+  await new HostHistoryImporter(store, host).syncSession(sid, root);
+  expect((await store.listRuns())[0].changes['a.txt']).toMatchObject({ before: { text: 'before\n' }, after: { text: 'after\n' } });
+  expect((await inspectCaptureLeases(store)).leases).toHaveLength(0);
 });

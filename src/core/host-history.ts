@@ -8,6 +8,7 @@ import { isImagePath } from './review-file-policy';
 import { explicitToolName, isExplicitFileTool, isExplicitEvidence, isReplacementTool } from './explicit-file-tools';
 import { replayRecordedEdit } from './edit-replay';
 import { atomicJson, captureCheckpoint, type SnapshotStore } from './storage';
+import { inspectCaptureLeases, writeCaptureLeases } from './capture-leases';
 
 type RecordValue = Record<string, any>;
 type HistoryChange = CapturedChange & { note?: string; oldPath?: string };
@@ -203,7 +204,9 @@ export class HostHistoryImporter {
     await this.store.init();
     const capturedEndpoints = new Map<string, FileSnapshot[]>();
     const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
-    const endpoint = (source: CaptureRun, change: CapturedChange, ref: string, side: 'before' | 'after', snapshot: FileSnapshot) => {
+    const preparations = await inspectCaptureLeases(this.store).catch(() => { warn('Capture preparation journal unavailable or unsafe'); return { fingerprint: '', leases: [] }; });
+    const preparedEvents = new Map<string, Event[]>();
+    const endpoint = (source: Pick<CaptureRun, 'userMessageId'>, change: CapturedChange, ref: string, side: 'before' | 'after', snapshot: FileSnapshot) => {
       const separator = ref.indexOf(':'), callId = ref.slice(separator + 1), message = aliases.get(callId);
       if (!(ref.startsWith('native:') || isExplicitEvidence(ref)) || !message || owner(message) !== source.userMessageId || !change.capture) return;
       const block = message.blocks.find(b => b.type === 'tool_call' && b.callId === callId);
@@ -227,6 +230,30 @@ export class HostHistoryImporter {
         if (!change.segments?.length && !change.ambiguous && change.evidence?.length) for (const side of ['before', 'after'] as const) endpoint(source, change, side === 'before' ? change.evidence[0] : change.evidence.at(-1)!, side, change[side]);
         for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ['before', 'after'] as const) endpoint(source, change, segment.evidence, side, segment[side]);
       }
+    }
+    // Preparation supplies only BEFORE, and only for exact successful native operations.
+    // A run/execution marker corroborates provenance; no current filesystem reads occur.
+    for (const lease of preparations.leases) {
+      const p = lease.prepared;
+      if (!p || lease.ambiguous || lease.sessionId !== sessionId || canonical(lease.root) !== canonical(root)) continue;
+      const recordedSource = sources.find(s => s.id === lease.owner);
+      if (recordedSource && (recordedSource.execution?.id !== lease.executionId || recordedSource.sessionId !== sessionId || canonical(recordedSource.root) !== canonical(root) || recordedSource.userMessageId !== p.userMessageId)) continue;
+      // Empty settled runs are removed; the validated preparation retains their provenance.
+      const source = recordedSource ?? { userMessageId: p.userMessageId };
+      const message = aliases.get(lease.toolCallId!), block = message?.blocks.find(b => b.type === 'tool_call' && b.callId === lease.toolCallId);
+      if (!source || !message || !p.userMessageId || owner(message) !== p.userMessageId || !block || block.status !== 'success' || block.result?.isError || explicitToolName(block.name) !== p.name || !isExplicitFileTool(block.name)) continue;
+      const matched: Event[] = [];
+      for (const entry of p.paths) {
+        try {
+          const argument = block.args?.path ?? block.args?.file_path;
+          if (typeof argument !== 'string' || capture(argument).identity !== entry.capture.identity) continue;
+          const e = events.find(e => e.meta.messageId === lease.toolCallId && capture(e.meta.path).identity === entry.capture.identity);
+          if (!e) continue;
+          endpoint(source, { capture: entry.capture, before: entry.before, after: entry.before }, `${p.name}:${lease.toolCallId}`, 'before', entry.before);
+          matched.push(e);
+        } catch { /* Unmatched rename destinations and invalid scopes stay unresolved. */ }
+      }
+      if (matched.length) preparedEvents.set(lease.id, matched);
     }
     events.sort((a, b) => a.message.order - b.message.order);
     if (events.length > 4096) { warn('Host event limit exceeded'); return d; }
@@ -332,6 +359,9 @@ export class HostHistoryImporter {
     d.events = events.length;
     await this.store.init();
     await this.store.captureLock(async () => {
+      // A concurrent writer may have marked an interval ambiguous while blobs were read.
+      // Revalidate under the same lock as import/retirement, never silently trust stale metadata.
+      if (preparedEvents.size && (await inspectCaptureLeases(this.store)).fingerprint !== preparations.fingerprint) { warn('Capture preparation changed; retry recovery'); return; }
       const existing = await this.store.listRuns(false, true) as HostHistoryRun[];
       const users = ordered.filter(m => m.role === 'user' && !m.parent && !m.meta.steering);
       const nextBoundary = new Map(users.slice(0, -1).map((user, index) => [user.id, users[index + 1].createdAt]));
@@ -495,6 +525,15 @@ export class HostHistoryImporter {
         await this.store.writeRun(run);
         d.imported++;
       }
+      const consumed = new Set<string>();
+      // Retire only after ALL prepared files have exact segments at a durable destination.
+      for (const [id, linked] of preparedEvents) if (linked.length === preparations.leases.find(l => l.id === id)?.prepared?.paths.length && linked.every(e => !e.conflicted && e.before?.kind === 'text' && e.after?.kind === 'text')) {
+        for (const runId of d.runIds) {
+          const destination = await this.store.getRun(runId, false, false);
+          if (destination?.sessionId === sessionId && linked.every(e => destination.userMessageId === owner(e.message) && Object.values(destination.changes).some(c => c.capture?.identity === capture(e.meta.path).identity && c.segments?.some(s => s.evidence === `native:${e.meta.messageId}` && s.before.hash === e.before!.hash && s.after.hash === e.after!.hash)))) { consumed.add(id); break; }
+        }
+      }
+      if (consumed.size) await writeCaptureLeases(this.store, preparations.leases.filter(l => !consumed.has(l.id)));
     });
     return d;
   }
