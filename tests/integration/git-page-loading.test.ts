@@ -49,3 +49,30 @@ it('lightweight reads retain root authorization and mutation confirmation', asyn
   await expect(management.dispatch('gitManage', { root, operation: 'history', includeRepository: true }, [])).rejects.toMatchObject({ code: 'ROOT_DENIED' });
   await expect(invoke('branchSwitch', { name: 'other', includeRepository: true })).rejects.toMatchObject({ code: 'CONFIRM_REQUIRED' });
 });
+it('piggybacks bounded untracked statistics without starting diff or ls-files', async () => {
+  await fs.writeFile(path.join(root, 'note.txt'), 'one\ntwo\n');
+  await fs.writeFile(path.join(root, 'empty.txt'), '');
+  await fs.writeFile(path.join(root, 'binary.dat'), Buffer.from([0, 1]));
+  await fs.writeFile(path.join(root, '.env.local'), 'SECRET=private\n');
+  vi.mocked(spawn).mockClear();
+  const value = await invoke('status', { includeStats: true });
+  expect(value.entries.find((e: any) => e.path === 'note.txt').stats).toEqual({ path: 'note.txt', additions: 2, deletions: 0 });
+  expect(value.entries.find((e: any) => e.path === 'empty.txt').stats).toEqual({ path: 'empty.txt', additions: 0, deletions: 0 });
+  expect(value.entries.find((e: any) => e.path === 'binary.dat').stats.kind).toBe('binary');
+  expect(value.entries.find((e: any) => e.path === '.env.local').stats).toBeUndefined();
+  const calls = vi.mocked(spawn).mock.calls.map(call => call[1] as string[]);
+  expect(calls.some(args => args.includes('--numstat') || args.includes('ls-files'))).toBe(false);
+  await fs.writeFile(path.join(root, 'note.txt'), 'changed\n');
+  expect((await invoke('status', { includeStats: true })).entries.find((e: any) => e.path === 'note.txt').stats.additions).toBe(1);
+  expect((await invoke('status')).entries.every((e: any) => !e.stats)).toBe(true);
+});
+it('defers oversized and excess inline candidates, and skips numstat for untracked-only batches', async () => {
+  await fs.writeFile(path.join(root, 'large.txt'), 'x'.repeat(20000));
+  await Promise.all(Array.from({ length: 20 }, (_, i) => fs.writeFile(path.join(root, `small-${i}.txt`), 'line\n')));
+  const value = await invoke('status', { includeStats: true });
+  expect(value.entries.find((e: any) => e.path === 'large.txt').stats).toBeUndefined();
+  expect(value.entries.filter((e: any) => e.stats).length).toBeLessThanOrEqual(16);
+  vi.mocked(spawn).mockClear();
+  expect((await invoke('stats', { scope: 'workspace', paths: ['large.txt'] })).entries).toEqual([{ path: 'large.txt', additions: 1, deletions: 0 }]);
+  expect(vi.mocked(spawn).mock.calls.some(call => (call[1] as string[]).includes('--numstat'))).toBe(false);
+});

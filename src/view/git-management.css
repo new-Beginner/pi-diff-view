@@ -7,8 +7,8 @@
 .git-management p, .git-management small { overflow-wrap: anywhere; }
 .git-management button, .git-management input, .git-management textarea { font: inherit; color: inherit; }
 .git-management button { border: 1px solid var(--dv-control-border); background: var(--dv-bg); border-radius: var(--dv-radius-control); padding: 5px 10px; min-height: 32px; max-width: 100%; overflow-wrap: anywhere; cursor: pointer; }
-.git-management button:hover:not(:disabled) { background: var(--dv-hover); }
-.git-management button:active:not(:disabled) { background: var(--dv-selected); }
+.git-management button:where(:not(.gm-file)):hover:not(:disabled) { background: var(--dv-hover); }
+.git-management button:where(:not(.gm-file)):active:not(:disabled) { background: var(--dv-selected); }
 .git-management button[aria-pressed='true'] { background: var(--dv-selected); font-weight: 600; }
 .git-management :is(button, input, textarea):disabled { opacity: .5; cursor: not-allowed; }
 .git-management :focus-visible { outline: 2px solid var(--dv-focus); outline-offset: -2px; }
@@ -59,7 +59,10 @@
 .git-management .gm-file-chevron svg { width: 12px; height: 12px; }
 .git-management .gm-file-row:hover .gm-file-chevron, .git-management .gm-file:focus-visible .gm-file-chevron, .git-management .gm-file[aria-expanded='true'] .gm-file-chevron { opacity: 1; }
 .git-management .gm-file[aria-expanded='true'] .gm-file-chevron { transform: rotate(90deg); }
-.git-management .gm-file-stats { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font: 12px/20px var(--dv-font); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.git-management .gm-file-stats { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 72px; gap: 4px; flex-shrink: 0; font: 12px/20px var(--dv-font); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.git-management .gm-stats-refreshing { opacity: .65; }
+.git-management .gm-stats-indicator { display: inline-grid; place-items: center; width: 10px; color: var(--gm-rail-muted); }
+.git-management .gm-stats-indicator svg { width: 10px; height: 10px; }
 .git-management .gm-added { color: var(--dv-green); }
 .git-management .gm-deleted { color: var(--dv-red); }
 .git-management .gm-stats-unknown { color: var(--gm-rail-muted); font: 11px/20px var(--dv-font); }

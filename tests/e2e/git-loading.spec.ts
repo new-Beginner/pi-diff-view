@@ -93,3 +93,15 @@ test('real bridge: obsolete read errors stay isolated and slow writes still lock
     expect(f.calls.filter(op => op === 'status')).toHaveLength(1);
   } finally { await f.close(); }
 });
+test('real Git and bounded bridge: small untracked counts arrive with the file list', async ({ page }) => {
+  const f = await fixture(page);
+  try {
+    await fs.writeFile(path.join(f.root, 'note.txt'), 'line\n'.repeat(10));
+    await f.mount();
+    await expect(page.locator('.gm-file-stats')).toHaveText('+10-0');
+    await expect(page.getByRole('button', { name: 'note.txt', exact: true })).toBeEnabled();
+    expect(f.calls.filter(op => op === 'status')).toHaveLength(1);
+    expect(f.calls.filter(op => op === 'stats')).toHaveLength(0);
+    for (const at of f.admissions) expect(f.admissions.filter(t => t >= at && t < at + 1000).length).toBeLessThanOrEqual(6);
+  } finally { await f.close(); }
+});

@@ -4024,7 +4024,7 @@ async function repositorySummary(root) {
   ]);
   return { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null };
 }
-async function status(root) {
+async function status(root, includeStats = false) {
   const [raw, head, branch] = await Promise.all([
     git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]),
     headCommit(root),
@@ -4033,11 +4033,20 @@ async function status(root) {
   const rows = records2(raw.stdout);
   if (rows.length > 500) fail("GIT_LIMIT", "More than 500 changed files. Use the Git CLI or narrow this repository.");
   const entries = [];
+  let inlineCandidates = 0;
   for (let offset = 0; offset < rows.length; offset += 8) {
     const batch = await Promise.all(rows.slice(offset, offset + 8).map(async (row) => {
       const entry = { path: row.slice(3), index: row[0], working: row[1] };
+      const inline = includeStats && entry.index === "?" && inlineCandidates++ < 16;
       try {
         await filePath(root, entry.path);
+        if (inline) {
+          try {
+            const stat = await import_promises10.default.lstat(import_node_path11.default.join(root, entry.path));
+            if (stat.size <= 16 * 1024) entry.stats = untrackedStat(entry.path, await readSnapshot(root, entry.path));
+          } catch {
+          }
+        }
       } catch (error) {
         entry.blocked = error.message;
       }
@@ -4046,6 +4055,7 @@ async function status(root) {
     entries.push(...batch);
   }
   const result = { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null, entries };
+  if (includeStats && Buffer.byteLength(JSON.stringify(result)) > 48e3) for (const entry of entries) delete entry.stats;
   if (Buffer.byteLength(JSON.stringify(result)) > 48e3) fail("GIT_LIMIT", "Status exceeds the panel budget. Use the Git CLI.");
   return result;
 }
@@ -4074,8 +4084,19 @@ async function checkedDiffPaths(root, args) {
   }
   return names;
 }
+function untrackedStat(rel, snapshot) {
+  if (!snapshot.exists) return { path: rel, additions: null, deletions: null, kind: "unknown" };
+  if (snapshot.kind === "large") return { path: rel, additions: null, deletions: null, kind: "large" };
+  if (snapshot.text === null) return { path: rel, additions: null, deletions: null, kind: snapshot.kind === "binary" ? "binary" : "unknown" };
+  let lines = 0;
+  for (let i = 0; i < snapshot.text.length; i++) if (snapshot.text.charCodeAt(i) === 10) lines++;
+  if (snapshot.text.length && !snapshot.text.endsWith("\n")) lines++;
+  return { path: rel, additions: lines, deletions: 0 };
+}
 async function stats2(root, scope, paths) {
-  const raw = (await git(root, ["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", ...scope === "staged" ? ["--cached"] : [], "--", ...paths])).stdout;
+  const indexed = scope === "workspace" ? new Set(records2((await git(root, ["ls-files", "-z", "--", ...paths])).stdout)) : new Set(paths);
+  const tracked = paths.filter((rel) => indexed.has(rel));
+  const raw = tracked.length ? (await git(root, ["diff", "--numstat", "-z", ...diffFlags, ...scope === "staged" ? ["--cached"] : [], "--", ...tracked])).stdout : Buffer.alloc(0);
   const fields = new TextDecoder("utf-8", { fatal: true }).decode(raw).split(String.fromCharCode(0));
   const entries = [];
   for (const record of fields.slice(0, -1)) {
@@ -4087,16 +4108,9 @@ async function stats2(root, scope, paths) {
     entries.push(adds === "-" || dels === "-" ? { path: name2, additions: null, deletions: null, kind: "binary" } : { path: name2, additions: Number(adds), deletions: Number(dels) });
   }
   if (scope === "workspace") {
-    const indexed = new Set(records2((await git(root, ["ls-files", "-z", "--", ...paths])).stdout));
-    for (const rel of paths) if (!indexed.has(rel)) {
-      const snapshot = await readSnapshot(root, rel);
-      if (!snapshot.exists) {
-        entries.push({ path: rel, additions: null, deletions: null, kind: "unknown" });
-        continue;
-      }
-      if (snapshot.kind === "large") entries.push({ path: rel, additions: null, deletions: null, kind: "large" });
-      else if (snapshot.text === null) entries.push({ path: rel, additions: null, deletions: null, kind: snapshot.kind === "binary" ? "binary" : "unknown" });
-      else entries.push({ path: rel, additions: snapshot.text.length === 0 ? 0 : snapshot.text.split(String.fromCharCode(10)).length - (snapshot.text.endsWith(String.fromCharCode(10)) ? 1 : 0), deletions: 0 });
+    const untracked = paths.filter((rel) => !indexed.has(rel));
+    for (let offset = 0; offset < untracked.length; offset += 8) {
+      entries.push(...await Promise.all(untracked.slice(offset, offset + 8).map(async (rel) => untrackedStat(rel, await readSnapshot(root, rel)))));
     }
   }
   for (const rel of paths) if (!entries.some((entry) => entry.path === rel)) entries.push({ path: rel, additions: 0, deletions: 0 });
@@ -4249,7 +4263,7 @@ var LocalGitManagement = class {
       for (const result of results) if (result.status === "rejected") throw result.reason;
       return { ...results[1].value, repository: results[0].value };
     }
-    if (op === "status") return args.summaryOnly === true ? { ...await repositorySummary(root), entries: [] } : status(root);
+    if (op === "status") return args.summaryOnly === true ? { ...await repositorySummary(root), entries: [] } : status(root, args.includeStats === true);
     if (op === "discardPreview" || op === "discard") {
       const target = await discardTarget(root, args.paths);
       if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };

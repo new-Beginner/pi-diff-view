@@ -63,7 +63,8 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const invoke = <T,>(args: ManagementArgs) => transport.invoke<T>('gitManage', { ...args, root });
   const fileScope = page === 'staged' ? 'staged' : 'workspace';
   const preview = useGitPreview(transport, root, fileScope);
-  const stats = useGitStats(transport, root, fileScope, filePage && loadedPage === page && !loading ? status : undefined);
+  const statsStatus = source.current.root === root && source.current.transport === transport && filePage ? status : undefined;
+  const { values: stats, refreshing: refreshingStats } = useGitStats(transport, root, fileScope, statsStatus, filePage && loadedPage === page && !loading && !busy);
   const readDetail = async (args: ManagementArgs) => {
     const id = ++detailTicket.current, current = generation.current;
     preview.collapse(); setDetailLoading(true); setError(''); setSwitchFailure(undefined);
@@ -76,7 +77,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const refreshData = async (current: number, target: Page, skip: number, retainSelection = false) => {
     const valid = () => current === generation.current;
     if (target === 'workspace' || target === 'staged' || target === 'blame') {
-      const next = await invoke<ManagementStatus>({ operation: 'status', ...(target === 'blame' ? { summaryOnly: true } : {}) });
+      const next = await invoke<ManagementStatus>({ operation: 'status', ...(target === 'blame' ? { summaryOnly: true } : { includeStats: target === 'workspace' }) });
       if (!valid()) return;
       setStatus(next);
       const paths = new Set(next.entries.map(entry => entry.path));
@@ -208,7 +209,8 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           <button className="gm-path gm-file" aria-label={entry.path} aria-expanded={preview.preview.path === entry.path} onClick={() => showDiff(entry)} onPointerEnter={() => { if (!busy) preview.prefetch(entry.path); }} onPointerLeave={preview.cancelPrefetch} onFocus={() => { if (!busy) preview.prefetch(entry.path); }} onBlur={preview.cancelPrefetch} title={entry.path}>
             <FileIcon path={entry.path} /><span className="gm-file-name"><FilePath path={entry.path} /></span><span className="gm-file-chevron"><ReviewIcon name="chevron" /></span>
           </button>
-          <span className="gm-file-stats" title={`暂存区 / 工作区状态：${entry.index}${entry.working}`} aria-label={`${entry.path} 增删行数`}>
+          <span className={`gm-file-stats${refreshingStats.has(entry.path) ? ' gm-stats-refreshing' : ''}`} aria-busy={refreshingStats.has(entry.path)} title={`暂存区 / 工作区状态：${entry.index}${entry.working}${refreshingStats.has(entry.path) ? ' · 正在更新行数' : ''}`} aria-label={`${entry.path} 增删行数${refreshingStats.has(entry.path) ? '（正在更新）' : ''}`}>
+            {stats.has(entry.path) && refreshingStats.has(entry.path) && <span className="gm-stats-indicator" aria-hidden="true"><ReviewIcon name="refresh" /></span>}
             {stats.get(entry.path)?.additions != null && stats.get(entry.path)?.deletions != null ? <><span className="gm-added">+{stats.get(entry.path)!.additions}</span><span className="gm-deleted">-{stats.get(entry.path)!.deletions}</span></> : <span className="gm-stats-unknown">{stats.has(entry.path) ? stats.get(entry.path)?.kind === 'binary' ? '二进制' : stats.get(entry.path)?.kind === 'large' ? '大文件' : '行数未知' : '…'}</span>}
           </span>
           <button className="gm-icon-button" aria-label={`${page === 'staged' ? '取消暂存' : '暂存'} ${entry.path}`} title={page === 'staged' ? '取消暂存' : '暂存'} onClick={() => changeFiles(page === 'staged' ? 'unstage' : 'stage', [entry.path])}><ReviewIcon name={page === 'staged' ? 'unstage' : 'stage'} /></button>
