@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import fs from 'node:fs/promises';
+import { checkPublicRuntime } from './check-public-runtime.mjs';
 const common = { bundle: true, sourcemap: false, logLevel: 'info', target: 'es2022' };
 await fs.mkdir('plugin/agent', { recursive: true });
 await fs.mkdir('plugin/views', { recursive: true });
@@ -20,3 +21,4 @@ for (const name of ['diff', 'highlight.js', 'react', 'react-dom']) await fs.copy
 await fs.copyFile('LICENSE', 'plugin/LICENSE');
 await fs.copyFile('README.md', 'plugin/README.md');
 await fs.copyFile('THIRD_PARTY_NOTICES.md', 'plugin/THIRD_PARTY_NOTICES.md');
+await checkPublicRuntime('plugin');

@@ -47,7 +47,7 @@ function trackSession(current: Hub): Promise<void> {
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
     if (current.activeSession !== sessionId) {
-      current.activeSession = sessionId; current.sessionVersion++;
+      current.activeSession = sessionId; current.sessionVersion++; current.evidenceContext = undefined;
     }
     current.surface?.update(sessionId);
     publisher.update(sessionId, context ?? (current.evidenceContext?.sessionId === sessionId ? current.evidenceContext : undefined));
@@ -197,7 +197,7 @@ export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapte
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
   const surface = options.adapter ? undefined : createReviewSurfaceClient(transport);
-  const current: Hub = { transport, surface, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new JsonCache(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter({ navigation: surface!.channel }) };
+  const current: Hub = { transport, surface, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new JsonCache(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter({ read: sessionId => transport.invoke<SessionContext>('sessionState', { sessionId }), navigation: surface!.channel }) };
   hub = current; realm.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summaryStyle + runningPillStyle)); disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
   disposers.push(pi.slots.register({ slot: 'composerControl', positions: ['left'], component: ComposerControl }));

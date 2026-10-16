@@ -1,3 +1,4 @@
+import { assertSessionScratchPath } from '../core/public-path';
 import { safeDelegation, safeTaskDetails } from '../core/delegation-lifecycle';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -114,6 +115,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
       // User-task boundary, not a model/tool-loop turn; prompts are never retained.
       await checkScratchAncestry(ctx.cwd);
       const root = await fs.realpath(ctx.cwd);
+      assertSessionScratchPath(root, ctx.sessionManager.getSessionId(), root);
       const identity = await readCaptureContext(locator.dataPath, locator.generation, ctx.sessionManager.getSessionId(), root);
       run = { version: 2, contentVersion: 0, boundary: uncertain && !identity ? 'uncertain' : 'user', id: randomUUID(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root, startedAt: Date.now(), state: 'running', fileCount: 0, incomplete: uncertain, changes: Object.create(null), replies: [], bindings: {} };
       run.execution = { id: randomUUID(), revision: 1, state: 'running' };
@@ -186,6 +188,7 @@ export function createCaptureExtension(options: Options): (pi: Extension) => voi
         if (targetSet.truncated || targets.length > 256) run.incomplete = true;
         for (const [index, target] of targets.slice(0, 256).entries()) {
           try {
+            assertSessionScratchPath(path.resolve(run.root, target), run.sessionId, run.root);
             const capture = await resolveCapturePath(run.root, target, privatePaths, name === 'write' || index > 0);
             if (!observed.has(capture.identity) && observed.size >= 256) throw new Error('Turn exceeds 256 explicitly captured files');
             observed.add(capture.identity);

@@ -13,7 +13,7 @@ import { useDiffDetail, prefetchDiffDetail, prepareDiffDetail } from './useDiffD
 import { captureScrollAnchor, restoreScrollAnchor, reconcileHunkViews, reviewFileVersion, type HunkView, type ScrollAnchor } from './live-diff';
 import './review.css';
 
-export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; navigationKey?: string; active?: boolean; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
+export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; autoSelectFile?: boolean; navigationKey?: string; active?: boolean; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
 type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' } | { kind: 'systemOpen'; file: ReviewFile; review: ReviewSummary; scope: string };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 function Modal({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
@@ -23,7 +23,7 @@ function Modal({ title, children, onClose, busy }: { title: string; children: Re
     <h2>{title}</h2>{children}
   </dialog>;
 }
-export function ReviewApp({ transport: source, initialRequest = {}, initialFileId, navigationKey, active: panelActive = true, onClose, locale: hostLocale, base: hostBase }: ReviewAppProps) {
+export function ReviewApp({ transport: source, initialRequest = {}, initialFileId, autoSelectFile = true, navigationKey, active: panelActive = true, onClose, locale: hostLocale, base: hostBase }: ReviewAppProps) {
   const transport = useMemo(() => ensureBounded(source), [source]);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [bootError, setBootError] = useState('');
@@ -151,7 +151,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     previousNavigation.current = navigationKey;
     const next: ReviewRequest = { ...initialRequest, scope: initialRequest.scope ?? 'turn' };
     const sameReview = review?.scope === next.scope && (!next.root || review?.root === next.root) && review?.sessionId === next.sessionId && (next.scope !== 'turn' || review?.runId === next.runId);
-    const target = initialFileId ?? (sameReview ? review?.files[0]?.id : undefined) ?? '';
+    const target = initialFileId ?? (sameReview && autoSelectFile ? review?.files[0]?.id : undefined) ?? '';
     setRequest(next); setSelected(target); setFileCollapsed(false); setQuery('');
     setCollapsed(new Set()); setConfirmation(null); setError('');
     // Only refresh the bounded file list when the target is outside it or a prior load is still pending.
@@ -213,7 +213,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       }
       if (review?.id === response.id && review.nextFileOffset == null) return;
       let data: ReviewSummary = { ...response, files: response.files.filter(file => !isImagePath(file.path)), nextFileOffset: response.nextFileOffset ?? null };
-      const targetId = (id: string) => data.files.some(file => file.id === id) ? id : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.nextFileOffset != null ? initialFileId ?? id : data.files[0]?.id ?? '';
+      // Latest-turn list navigation never opens a diff until the user selects a file.
+      const targetId = (id: string) => data.files.some(file => file.id === id) ? id : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.nextFileOffset != null ? initialFileId ?? id : autoSelectFile || request.scope !== 'lastTurn' ? data.files[0]?.id ?? '' : '';
       const publish = async () => {
         if (matchingReview) {
           // Prepare the replacement before publishing its metadata. Nothing currently visible is cleared.

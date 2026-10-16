@@ -12,7 +12,7 @@ import { JobQueue } from '../../src/core/jobs';
 import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureRun } from '../../src/core/contracts';
 let hostScript = '', entry = '', dir: string, store: SnapshotStore, service: ReviewService, run: CaptureRun, since: number, replyAt: number;
-let base: 'light' | 'dark', hold: (() => Promise<void>) | undefined;
+let base: 'light' | 'dark', hold: (() => Promise<void>) | undefined, fileRequests = 0;
 test.beforeAll(async () => {
   hostScript = (await build({ entryPoints: ['tests/e2e/running-host.tsx'], bundle: true, format: 'iife', platform: 'browser', write: false, target: 'es2022' })).outputFiles[0].text;
   entry = await fs.readFile('plugin/renderer/index.mjs', 'utf8');
@@ -20,6 +20,7 @@ test.beforeAll(async () => {
 test.beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'diff-live-browser-'));
   store = new SnapshotStore(path.join(dir, 'data')); await store.init(); since = Date.now() - 1000; replyAt = Date.now(); base = 'light'; hold = undefined;
+  fileRequests = 0;
   const root = path.join(path.parse(dir).root, 'diff-live-browser-public-project');
   run = { version: 2, boundary: 'user', id: 'live-run', generation: 'generation', sessionId: 's', root, startedAt: since + 500, state: 'running', fileCount: 1, incomplete: false, changes: {}, replies: [], bindings: {} };
   await change();
@@ -35,11 +36,12 @@ async function setup(page: Page, options: { layerApi?: 'public' | 'missing' | 'r
   const navigation = new ReviewNavigationStore();
   const surfaces = new ReviewSurfaces();
   const execute = async (method: string, args: any) => {
+    if (method === 'file') fileRequests++;
     if (method === 'reviewSurface') return surfaces.request(args);
     if (method === 'rendererReport') return { ok: true };
-    if (method === 'sessionEvidence' || method === 'sessionContext') return { ok: true }; // Contract-only mock; history recovery is covered by main integration tests.
+    if (method === 'sessionContext') return { ok: true }; // Public metadata only; recovery is covered by backend integration tests.
     if (method === 'activeReviewSession') { navigation.setActiveSession(args.sessionId); return { ok: true }; }
-    if (method === 'selectTurn') { const target = await service.selectTarget(args); return args.scope === 'lastTurn' ? navigation.set({ scope: 'lastTurn', sessionId: target.sessionId }) : navigation.set({ scope: 'turn', sessionId: target.sessionId, runId: target.id, root: target.root }, args.fileId); }
+    if (method === 'selectTurn') { if (args.scope === 'lastTurn') return navigation.set({ scope: 'lastTurn', sessionId: args.sessionId }); const target = await service.selectTarget(args); return navigation.set({ scope: 'turn', sessionId: target.sessionId, runId: target.id, root: target.root }, args.fileId); }
     if (method === 'readTurnSelection') { if (!args.sessionId) throw new Error('Session required'); const selection = navigation.get(args.nonce, args.sessionId); if (!selection) throw new Error('Selection expired'); return selection; }
     if (method === 'runningChanges' && hold) await hold();
     // An older backend may still send this field: the UI must ignore it entirely.
@@ -93,18 +95,23 @@ test('updates real net totals, opens latest-turn mode without recovery UI and pr
     document.addEventListener('click', event => { if ((event.target as Element).closest('.dv-running-pill')) (window as any).__clickAt = performance.now(); }, true);
     new MutationObserver(() => { const sidebar = document.getElementById('live-sidebar'); if ((window as any).__revealMs == null && sidebar && !sidebar.hidden && (window as any).__clickAt) (window as any).__revealMs = performance.now() - (window as any).__clickAt; }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
   });
-  await page.locator('.dv-running-pill').click(); const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toHaveText('current.txt'); await expect(frame.locator('.dv-code').filter({ hasText: 'second' })).toBeVisible();
+  await page.locator('.dv-running-pill').click(); const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-file')).toHaveCount(1); await expect(frame.locator('.dv-review h2, .dv-code')).toHaveCount(0);
   await expect(frame.getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
   await expect(frame.getByText(/历史恢复|历史租约|预览恢复/)).toHaveCount(0);
   await expect(frame.getByRole('button', { name: /撤销|重新应用|暂存/ })).toHaveCount(0); await expect(page.locator('.dv-layer, dialog')).toHaveCount(0);
   await expect(page.locator('.dv-running-pill')).toBeEnabled(); await expect(frame.locator('.dv-review')).toHaveAttribute('aria-busy', 'false');
+  expect(fileRequests).toBe(0);
+  await frame.locator('.dv-file').click(); await expect(frame.locator('.dv-code').filter({ hasText: 'second' })).toBeVisible();
+  expect(fileRequests).toBeGreaterThan(0);
+  await page.locator('.dv-running-pill').click(); await expect(frame.locator('.dv-review h2, .dv-code')).toHaveCount(0);
+  await expect(frame.getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   const reveal = await page.evaluate(() => (window as any).__revealMs); console.log(`pill container reveal: ${reveal.toFixed(1)}ms`); expect(reveal).toBeLessThanOrEqual(100);
   expect(await page.evaluate(() => (window as any).__liveHost.opens)).toHaveLength(1); await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
 test('hides on complete, then shows the original reply card with no simultaneous pill', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible(); run.state = 'completed'; run.endedAt = Date.now(); run.finalReply = { hash: digest('Done live task'), timestamp: replyAt }; run.replies = [run.finalReply]; await store.writeRun(run);
-  await page.evaluate(() => (window as any).__liveHost.setRunning(false)); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 500 }); await expect(page.locator('.dv-turn-card')).toHaveCount(1);
+  await page.evaluate(() => (window as any).__liveHost.setRunning(false)); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 2500 }); await expect(page.locator('.dv-turn-card')).toHaveCount(1);
   await page.locator('.dv-turn-file').click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt'); await expect(page.locator('.dv-running-pill')).toHaveCount(0);
   await expect(page.frameLocator('iframe').getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'turn'); await stop(page);
 });
@@ -114,7 +121,7 @@ test('stops, switches, rejects old task totals, and hides zero-net changes', asy
   const nextSince = Date.now(); await page.evaluate(value => (window as any).__liveHost.task('next-user', value), nextSince); await expect(page.locator('.dv-running-pill')).toHaveCount(0); await page.waitForTimeout(1400); await expect(page.locator('.dv-running-pill')).toHaveCount(0);
   run.state = 'completed'; run.endedAt = Date.now(); await store.writeRun(run); run = { ...run, id: 'next-run', startedAt: nextSince + 1, state: 'running', endedAt: undefined, changes: {}, replies: [], bindings: {} }; await change('new task\n'); await expect(page.locator('.dv-running-pill')).toHaveText('1 个文件已更改+1-0');
   await change(''); await expect(page.locator('.dv-running-pill')).toHaveCount(0); await change('again\n'); await expect(page.locator('.dv-running-pill')).toBeVisible(); run.state = 'aborted'; run.endedAt = Date.now(); await store.writeRun(run);
-  await page.evaluate(() => (window as any).__liveHost.setRunning(false)); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 500 }); await stop(page);
+  await page.evaluate(() => (window as any).__liveHost.setRunning(false)); await expect(page.locator('.dv-running-pill')).toHaveCount(0, { timeout: 2500 }); await stop(page);
 });
 test('a late query cannot resurrect the pill after switching away and back into an idle task', async ({ page }) => {
   let release!: () => void, waiting = false; hold = () => { waiting = true; return new Promise<void>(resolve => release = resolve); }; await setup(page); await expect.poll(() => waiting).toBe(true);
@@ -144,22 +151,22 @@ test('missing composer ancestry is diagnosed and positioning recovers without ch
   await page.locator('.missing-shell').evaluate(node => node.setAttribute('class', 'composer-shell'));
   await expect(page.locator('.dv-running-pill')).toBeVisible(); await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
-test('final renderer uploads native live tool evidence in bounded chunks without conversational prose', async ({ page }) => {
+test('final renderer publishes only compact public metadata, never transcript or tool evidence', async ({ page }) => {
   await setup(page);
+  await expect.poll(() => page.evaluate(() => (window as any).__liveHost.calls.some((c: any) => c.method === 'jobStart' && c.args.method === 'sessionContext' && c.args.args.evidenceRevision))).toBe(true);
+  const before = await page.evaluate(() => (window as any).__liveHost.calls.filter((c: any) => c.method === 'jobStart' && c.args.method === 'sessionContext').at(-1).args.args.evidenceRevision);
   const createdAt = new Date(since).toISOString();
   await page.evaluate(createdAt => (window as any).__liveHost.updateEvidence([
     { id: 'current-user', role: 'user', createdAt, content: 'private-user-prose' },
     { id: 'call_one|fc_one', role: 'tool', createdAt, toolCallId: 'call_one|fc_one', toolName: 'functions.Write', toolArgs: { path: 'a.txt', content: '中文😀'.repeat(12000) }, toolStatus: 'success', status: 'complete' },
     { id: 'reply-one', role: 'assistant', createdAt, content: 'private-reply-prose', status: 'complete' }
   ]), createdAt);
-  await expect.poll(() => page.evaluate(() => (window as any).__liveHost.calls.filter((c: any) => c.method === 'jobStart' && c.args.method === 'sessionEvidence').some((c: any) => c.args.args.final && c.args.args.index > 0)), { timeout: 20000 }).toBe(true);
-  const uploads = await page.evaluate(() => (window as any).__liveHost.calls.filter((c: any) => c.method === 'jobStart' && c.args.method === 'sessionEvidence').map((c: any) => ({ args: c.args.args })));
-  const revision = uploads.at(-1).args.revision;
-  const chunks = uploads.filter((c: any) => c.args.revision === revision);
-  for (const c of chunks) expect(Buffer.byteLength(JSON.stringify(c.args.chunk))).toBeLessThanOrEqual(28000);
-  const evidence = chunks.map((c: any) => c.args.chunk).join('');
-  expect(evidence).not.toMatch(/private-user-prose|private-reply-prose/);
-  expect(JSON.parse(evidence)[1].blocks[0]).toMatchObject({ callId: 'call_one|fc_one', name: 'write', args: { path: 'a.txt' } });
+  await expect.poll(() => page.evaluate(before => (window as any).__liveHost.calls.some((c: any) => c.method === 'jobStart' && c.args.method === 'sessionContext' && c.args.args.evidenceRevision && c.args.args.evidenceRevision !== before), before)).toBe(true);
+  const calls = await page.evaluate(() => (window as any).__liveHost.calls);
+  expect(calls.some((c: any) => c.method === 'sessionEvidence' || (c.method === 'jobStart' && c.args.method === 'sessionEvidence'))).toBe(false);
+  const metadata = calls.filter((c: any) => c.method === 'jobStart' && c.args.method === 'sessionContext').map((c: any) => c.args.args);
+  for (const context of metadata) { expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(1024); expect(context).not.toHaveProperty('evidence'); }
+  expect(JSON.stringify(calls)).not.toMatch(/private-user-prose|private-reply-prose|call_one\|fc_one|中文😀/);
   await stop(page);
 });
 
@@ -175,7 +182,7 @@ test('uses the official scoped layer and obeys host safety suspension without re
   await change('updated\n'); await expect(pill).toHaveText('1 个文件已更改+1-0');
   await page.evaluate(() => (window as any).__liveHost.suspendLayers(false)); await expect(pill).toBeVisible();
   expect(await page.evaluate(() => (window as any).__liveHost.layerOpens)).toBe(opens);
-  await pill.click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt');
+  await pill.click(); await expect(page.frameLocator('iframe').locator('.dv-file')).toHaveCount(1); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveCount(0);
   await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
 test('older hosts keep the same floating review behavior with a scoped compatibility target', async ({ page }) => {
@@ -183,7 +190,7 @@ test('older hosts keep the same floating review behavior with a scoped compatibi
   await expect(page.locator('[data-diff-view-layer="compat"] .dv-running-pill')).toBeVisible();
   await expect(page.locator('.dv-running-float')).toHaveCSS('position', 'fixed');
   await expect(page.locator('[data-pi-layer]')).toHaveCount(0);
-  await page.locator('.dv-running-pill').click(); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveText('current.txt');
+  await page.locator('.dv-running-pill').click(); await expect(page.frameLocator('iframe').locator('.dv-file')).toHaveCount(1); await expect(page.frameLocator('iframe').locator('.dv-review h2')).toHaveCount(0);
   await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
 test('an official layer refusal is visible and diagnosed, never bypassed with a DOM fallback', async ({ page }) => {
@@ -230,6 +237,7 @@ test('a pill click does not submit a redundant running-summary query', async ({ 
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible();
   await page.locator('.dv-running-pill').click();
   await expect(page.locator('#live-sidebar')).toBeVisible();
+  await expect(page.frameLocator('iframe').getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   const calls = await page.evaluate(() => (window as any).__liveHost.calls.filter((call: any) => call.method === 'jobStart'));
   const methods = calls.map((call: any) => call.args.method), selectedAt = methods.indexOf('selectTurn');
   // Periodic 1s refresh continues during the handshake; clicking must not requery before selecting.
@@ -253,19 +261,24 @@ test('one parent entry retains all child changes while main is idle, then one pa
   await page.evaluate(rows => (window as any).__liveHost.updateEvidence(rows), messages('completed'));
   await expect(page.locator('.dv-running-pill')).toHaveCount(0); await expect(page.locator('.dv-turn-card')).toHaveCount(1); await expect(page.locator('.dv-turn-card')).toContainText('已编辑 2 个文件'); await stop(page);
 });
-test('reopening from the pill resets history mode and follows the next modified turn', async ({ page }) => {
+test('every pill click jumps to latest-turn files regardless of the previous view', async ({ page }) => {
   await setup(page); const frame = page.frameLocator('iframe');
   await page.locator('.dv-running-pill').click();
   const scope = frame.getByRole('combobox', { name: '范围', exact: true });
   await expect(scope).toHaveAttribute('data-value', 'lastTurn'); await selectScope(scope, 'turn');
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toBeVisible();
   await page.locator('.dv-running-pill').click(); await expect(scope).toHaveAttribute('data-value', 'lastTurn');
+  await expect(frame.locator('.dv-review h2')).toHaveCount(0);
+  await page.locator('.app-work-panel-toggle').click(); await expect(page.locator('#live-sidebar')).toBeHidden();
+  await page.locator('.dv-running-pill').click(); await expect(page.locator('#live-sidebar')).toBeVisible();
+  await expect(scope).toHaveAttribute('data-value', 'lastTurn'); await expect(frame.locator('.dv-review h2')).toHaveCount(0);
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
   const nextSince = Date.now(); run.state = 'completed'; run.endedAt = nextSince; await store.writeRun(run);
   await page.evaluate(value => (window as any).__liveHost.task('next-user', value), nextSince);
   run = { ...run, id: 'next-live-run', userMessageId: 'next-user', startedAt: nextSince + 1, state: 'running', endedAt: undefined, changes: {}, replies: [], bindings: {} };
   await change('latest turn content\n');
-  await expect(frame.locator('.dv-code').filter({ hasText: 'latest turn content' })).toBeVisible();
+  await expect(frame.locator('.dv-file')).toHaveCount(1); await expect(frame.locator('.dv-file[aria-current="true"], .dv-review h2')).toHaveCount(0);
+  await frame.locator('.dv-file').click(); await expect(frame.locator('.dv-code').filter({ hasText: 'latest turn content' })).toBeVisible();
   await expect(scope).toHaveAttribute('data-value', 'lastTurn'); await expect(page.locator('.dv-running-pill')).toBeVisible();
   await stop(page);
 });

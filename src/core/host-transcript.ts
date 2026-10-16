@@ -1,12 +1,12 @@
 import { safeTaskDetails } from './delegation-lifecycle';
 import { isImagePath } from './review-file-policy';
-import { assertPublicPath } from './public-path';
+import { assertPublicPath, assertSessionScratchPath } from './public-path';
 // Pure DTO normalization shared with the renderer; never retains conversational prose.
 export interface HostEvidenceMessage {
   type: 'message'; id: string; role: string; createdAt: string | number;
   meta: Record<string, unknown>; blocks: Record<string, any>[];
 }
-export function hostEvidenceMessages(messages: unknown[]): HostEvidenceMessage[] {
+export function hostEvidenceMessages(messages: unknown[], sessionId?: string, projectRoot?: string): HostEvidenceMessage[] {
   return messages.flatMap((value: any) => {
     if (!value || typeof value.id !== 'string' || typeof value.role !== 'string') return [];
     const meta = { status: value.status ?? value.meta?.status, parentMessageId: value.parentToolCallId ?? value.meta?.parentMessageId, userMessageId: value.meta?.userMessageId, steering: value.steering ?? value.meta?.steering };
@@ -19,10 +19,11 @@ export function hostEvidenceMessages(messages: unknown[]): HostEvidenceMessage[]
       const args = b.args ?? {}, result = b.result ?? {}, review = result.details?.review;
       if (isImagePath(String(review?.path ?? args.path ?? args.file_path ?? ''))) continue;
       try {
-        if (args.path !== undefined || args.file_path !== undefined) assertPublicPath(args.path ?? args.file_path);
-        if (review?.path !== undefined) assertPublicPath(review.path);
-        if (review?.oldPath !== undefined) assertPublicPath(review.oldPath);
-        if (name === 'edit' && typeof args.ops === 'string') for (const line of args.ops.split('\n')) if (line.startsWith('MV ')) assertPublicPath(line.slice(3).trim());
+        const check = (value: string) => { assertPublicPath(value); if (sessionId) assertSessionScratchPath(value, sessionId, projectRoot); };
+        if (args.path !== undefined || args.file_path !== undefined) check(args.path ?? args.file_path);
+        if (review?.path !== undefined) check(review.path);
+        if (review?.oldPath !== undefined) check(review.oldPath);
+        if (name === 'edit' && typeof args.ops === 'string') for (const line of args.ops.split('\n')) if (line.startsWith('MV ')) check(line.slice(3).trim());
       } catch { continue; } // Do not send credential/private file content to the main process.
       const safeReview = review && typeof review === 'object' ? Object.fromEntries(['version', 'sessionId', 'messageId', 'path', 'oldPath', 'operation', 'status', 'state', 'beforeExists', 'afterExists', 'beforeHash', 'afterHash', 'hunks'].filter(key => review[key] !== undefined).map(key => [key, review[key]])) : undefined;
       const editArgs = name === 'edit' ? Object.fromEntries(['ops', 'old_string', 'new_string'].filter(key => typeof args[key] === 'string').map(key => [key, args[key]])) : {};

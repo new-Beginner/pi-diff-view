@@ -77,16 +77,19 @@ it('built main validates session-scoped navigation and restores selection after 
     }));
     await store.writeRun(liveRun);
     expect(await store.getRun(liveRun.id, false, false)).toMatchObject({ id: liveRun.id, state: 'running', boundary: 'user', userMessageId: 'current-user', source: 'host-history', bindings: {} });
-    const latestArgs = { scope: 'lastTurn', sessionId: 's', runId: liveRun.id, runningSince: since, taskId: 'current-user' };
+    const latestArgs = { scope: 'lastTurn', sessionId: 's' };
     const latest = await plugin.onRendererCall('selectTurn', latestArgs);
     expect(latest.request).toEqual({ scope: 'lastTurn', sessionId: 's' }); expect(latest.fileId).toBeUndefined();
     expect(latest.nonce).toBe(selection.nonce); expect(latest.revision).toBeGreaterThan(selection.revision);
     expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: latest.nonce, sessionId: 's' })).request).toEqual(latest.request);
     await expect(plugin.onPanelInvoke('diff.readTurnSelection', { nonce: latest.nonce, sessionId: 'other' })).rejects.toThrow('不存在');
-    await expect(plugin.onRendererCall('selectTurn', { ...latestArgs, runningSince: undefined })).rejects.toThrow('running task');
+    await expect(plugin.onRendererCall('selectTurn', { ...latestArgs, sessionId: '../invalid' })).rejects.toThrow('requires a session');
     await expect(plugin.onRendererCall('selectTurn', { ...latestArgs, fileId })).rejects.toThrow('fixed file');
     liveRun.state = 'completed'; liveRun.endedAt = Date.now(); await store.writeRun(liveRun);
-    await expect(plugin.onRendererCall('selectTurn', latestArgs)).rejects.toThrow('no longer current');
+    expect((await plugin.onRendererCall('selectTurn', latestArgs)).request).toEqual(latest.request);
+    const empty = await plugin.onRendererCall('selectTurn', { scope: 'lastTurn', sessionId: 'empty-session' });
+    expect(empty.request).toEqual({ scope: 'lastTurn', sessionId: 'empty-session' });
+    expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: empty.nonce, sessionId: 'empty-session' })).fileId).toBeUndefined();
     // A saved latest-mode entry still resolves after the task ends or plugin reloads.
     await plugin.onUnload(); loaded = false; await plugin.onLoad(); loaded = true;
     expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: latest.nonce, sessionId: 's' })).request).toEqual(latest.request);

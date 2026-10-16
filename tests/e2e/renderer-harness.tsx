@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { onLoad, onUnload, type RendererHost } from '../../src/renderer/index';
-import { createPluginReviewAdapter, resolvePluginReviewModules } from '../../src/renderer/plugin-review-adapter';
+import { createPluginReviewAdapter } from '../../src/renderer/plugin-review-adapter';
 import { createReviewSurfaceClient } from '../../src/renderer/review-surface-client';
 const sessionListeners = new Set<() => void>();
 let renderReplies: ((visible: boolean, sessionId?: string) => void) | undefined;
@@ -50,7 +50,7 @@ const host: RendererHost = {
 };
 const surface = createReviewSurfaceClient({ invoke: (method, args) => host.dispatch('plugin.call', { method, args }) });
 surface.update(nativeState.activeSessionId ?? null);
-const adapter = createPluginReviewAdapter({ navigation: surface.channel, load: async () => resolvePluginReviewModules({ R: { getState: () => nativeState, subscribe(listener: (value: typeof nativeState) => void) { const notify = () => listener(nativeState); sessionListeners.add(notify); state.subscriptions++; return () => { sessionListeners.delete(notify); state.subscriptions--; }; } }, r: React }) });
+const adapter = createPluginReviewAdapter({ navigation: surface.channel, read: async sessionId => ({ sessionId, running: false, statusKnown: true }), observe(callback) { sessionListeners.add(callback); state.subscriptions++; return { disconnect() { sessionListeners.delete(callback); state.subscriptions--; } }; } });
 (window as any).__rendererDemo = state;
 (state as any).followSession = (sessionId: string) => { state.sessionId = sessionId; nativeState.activeSessionId = sessionId; pane.dataset.sessionPane = sessionId; surface.update(sessionId); sessionListeners.forEach(listener => listener()); };
 (state as any).openSelection = (nonce: string) => adapter.open(nativeState.activeSessionId!, `diff-view:${nonce}`);

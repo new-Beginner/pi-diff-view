@@ -11,7 +11,7 @@ it('accepts fresh exact host identity and rejects stale, stopped, cross-root/ses
     await writeCaptureContexts(dir, 'generation', [context]);
     expect(await readCaptureContext(dir, 'generation', 's', root, now)).toEqual(context);
     for (const [generation, sessionId, project, time] of [['other', 's', root, now], ['generation', 'other', root, now], ['generation', 's', path.resolve(dir, 'other'), now], ['generation', 's', root, now + CAPTURE_CONTEXT_TTL + 1]] as const) expect(await readCaptureContext(dir, generation, sessionId, project, time)).toBeNull();
-    for (const changed of [{ running: false }, { taskId: 'turn:unverified' }, { since: now + 1 }, { updatedAt: now + 1 }]) {
+    for (const changed of [{ running: false }, { statusKnown: false }, { taskId: 'turn:unverified' }, { since: now + 1 }, { updatedAt: now + 1 }]) {
       await writeCaptureContexts(dir, 'generation', [{ ...context, ...changed }]);
       expect(await readCaptureContext(dir, 'generation', 's', root, now)).toBeNull();
     }

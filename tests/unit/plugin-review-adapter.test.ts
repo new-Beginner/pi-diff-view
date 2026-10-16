@@ -1,7 +1,7 @@
-import React from 'react';
-import { it, expect, vi } from 'vitest';
-import { createPluginReviewAdapter, domSession, hostEntryUrl, resolvePluginReviewModules, REVIEW_TAB_ID } from '../../src/renderer/plugin-review-adapter';
-import { createHostStateAdapter } from '../../src/renderer/host-state-adapter';
+import { afterEach, it, expect, vi } from 'vitest';
+import { createPluginReviewAdapter, domSession, REVIEW_TAB_ID, type SessionContext } from '../../src/renderer/plugin-review-adapter';
+const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 const location = 'diff-view:00000000-0000-4000-8000-000000000001';
 function fixture() {
   const attributes = (values: Record<string, string>) => ({ getAttribute: (key: string) => values[key] ?? null });
@@ -9,20 +9,20 @@ function fixture() {
   const document = { querySelectorAll: (selector: string) => nodes.get(selector) ?? [] } as unknown as Document;
   let notify = () => {}; const disconnect = vi.fn();
   const observe = (callback: () => void) => { notify = callback; return { disconnect }; };
-  const load = vi.fn(async (): Promise<any> => { throw new Error('Host store unavailable'); });
+  const read = vi.fn(async (sessionId: string): Promise<SessionContext> => ({ sessionId, running: false, statusKnown: true }));
   const navigation = { prepare: vi.fn(async () => 'ticket'), confirm: vi.fn(async () => {}) };
   const toggle = { ...attributes({ 'aria-pressed': 'true' }), closest: () => null, click: vi.fn() };
   const tab = { ...attributes({ 'aria-selected': 'true' }), closest: () => null, click: vi.fn() };
   nodes.set('.app-work-panel-toggle', [toggle]); nodes.set(`[data-work-panel-tab-id="${REVIEW_TAB_ID}"] button[role="tab"]`, [tab]);
-  const adapter = createPluginReviewAdapter({ document, observe, load, navigation });
-  return { adapter, document, nodes, attributes, notify: () => notify(), disconnect, load, navigation, toggle, tab };
+  const adapter = createPluginReviewAdapter({ document, observe, read, navigation });
+  return { adapter, document, nodes, attributes, notify: () => notify(), disconnect, read, navigation, toggle, tab };
 }
-it('follows DOM immediately without ever loading the host store; releases observers', async () => {
+it('follows DOM immediately without requesting state; releases observers', async () => {
   const f = fixture(), sessions: unknown[] = []; const stop = await f.adapter.subscribeSession(id => sessions.push(id));
   f.notify(); expect(sessions).toEqual(['s']);
   f.nodes.set('[data-session-pane][data-visible="true"]', []); f.notify();
   f.nodes.set('.thread-item.active[data-sidebar-session-row]', [f.attributes({ 'data-sidebar-session-row': 'other' })]); f.notify();
-  expect(sessions).toEqual(['s', null, 'other']); expect(f.load).not.toHaveBeenCalled();
+  expect(sessions).toEqual(['s', null, 'other']); expect(f.read).not.toHaveBeenCalled();
   f.adapter.close(); stop(); f.notify(); expect(f.disconnect).toHaveBeenCalledTimes(1); expect(sessions).toHaveLength(3);
 });
 it('refuses duplicate panes, duplicate rows, invalid ids and switching conflicts', () => {
@@ -31,9 +31,9 @@ it('refuses duplicate panes, duplicate rows, invalid ids and switching conflicts
   f.nodes.get('[data-session-pane][data-visible="true"]')!.push(f.attributes({ 'data-session-pane': 's' })); expect(domSession(f.document)).toBeNull();
   f.nodes.set('[data-session-pane][data-visible="true"]', [f.attributes({ 'data-session-pane': '../../secrets' })]); expect(domSession(f.document)).toBeNull();
 });
-it('opens an already active exact tab without touching store or clicking again, and confirms navigation', async () => {
+it('opens an already active exact tab without reading state or clicking again, and confirms navigation', async () => {
   const f = fixture(); await f.adapter.open('s', location);
-  expect(f.load).not.toHaveBeenCalled(); expect(f.tab.click).not.toHaveBeenCalled();
+  expect(f.read).not.toHaveBeenCalled(); expect(f.tab.click).not.toHaveBeenCalled();
   expect(f.navigation.prepare).toHaveBeenCalledWith('s', location, expect.any(Function)); expect(f.navigation.confirm).toHaveBeenCalledWith('ticket', expect.any(Function));
   f.adapter.close(); await expect(f.adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' });
   expect(f.adapter).not.toHaveProperty('openFile');
@@ -47,20 +47,28 @@ it('rejects wrong sessions, invalid tokens, duplicate controls and late navigati
   const pending = f.adapter.open('s', location); await expect(f.adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_BUSY' });
   f.adapter.close(); release('ticket'); await expect(pending).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' }); expect(f.navigation.confirm).not.toHaveBeenCalled();
 });
-it('retains private evidence/activity reads separately and validates React/store identity', async () => {
-  const state = { activeSessionId: 's', page: 'chat', isRunning: true, runningSessions: { other: true }, messages: [{ id: 'u', role: 'user', createdAt: Date.now() - 100 }] };
-  const load = async () => resolvePluginReviewModules({ R: { getState: () => state, subscribe: () => () => {} }, r: React });
-  const legacy = createHostStateAdapter({ load }); const contexts: any[] = [], activities: any[] = [];
-  await legacy.subscribeEvidence((_id, context) => contexts.push(context)); await legacy.subscribeActivity(value => activities.push(value));
-  expect(contexts[0]).toMatchObject({ sessionId: 's', running: false, statusKnown: false }); expect(activities).toEqual([null]); legacy.close();
-  const broken = createHostStateAdapter({ load: async () => resolvePluginReviewModules({ R: {}, r: React }) });
-  await expect(broken.subscribeEvidence(() => {})).rejects.toMatchObject({ code: 'SIDEBAR_CONTRACT' });
+it('reads public state using DOM ownership and shares it between evidence and activity', async () => {
+  vi.useFakeTimers(); const f = fixture();
+  f.read.mockResolvedValue({ sessionId: 's', running: true, mainRunning: false, statusKnown: true, taskId: 'original', since: 100, evidenceRevision: 'r1' });
+  const evidence = vi.fn(), activity = vi.fn();
+  try {
+    await f.adapter.subscribeEvidence!(evidence); await f.adapter.subscribeActivity(activity); await flush();
+    expect(f.read).toHaveBeenCalledTimes(1); expect(f.read).toHaveBeenCalledWith('s');
+    expect(evidence).toHaveBeenLastCalledWith('s', expect.objectContaining({ taskId: 'original', mainRunning: false, evidenceRevision: 'r1' }));
+    expect(activity).toHaveBeenLastCalledWith({ sessionId: 's', taskId: 'original', since: 100 });
+    f.nodes.set('[data-session-pane][data-visible="true"]', []); f.notify();
+    expect(evidence).toHaveBeenLastCalledWith(null, undefined); expect(activity).toHaveBeenLastCalledWith(null);
+  } finally { f.adapter.close(); }
 });
-it('keeps the remaining evidence import constrained to the local unique host entry', () => {
-  const page = 'file:///D:/PI/resources/app.asar/out/renderer/index.html';
-  expect(hostEntryUrl(page, ['./assets/index-new.js'])).toBe(new URL('./assets/index-new.js', page).href);
-  expect(() => hostEntryUrl(page, ['./assets/index-a.js', './assets/index-b.js'])).toThrow(/ambiguous/);
-  expect(() => hostEntryUrl('https://example.com', ['./assets/index.js'])).toThrow(/local host/);
+it('fails closed without a public reader, with no private-module fallback', async () => {
+  vi.useFakeTimers(); const f = fixture();
+  const adapter = createPluginReviewAdapter({ document: f.document, observe: () => ({ disconnect() {} }) });
+  const evidence = vi.fn(), activity = vi.fn(), diagnostic = vi.fn();
+  try {
+    await adapter.subscribeEvidence!(evidence); await adapter.subscribeActivity(activity, diagnostic); await flush();
+    expect(evidence).toHaveBeenLastCalledWith('s', { sessionId: 's', running: false, statusKnown: false });
+    expect(activity).toHaveBeenLastCalledWith(null); expect(diagnostic).toHaveBeenLastCalledWith('running-identity-missing');
+  } finally { adapter.close(); f.adapter.close(); }
 });
 
 it('expands the panel, opens the launcher and selects only its contributed view once', async () => {
@@ -73,7 +81,7 @@ it('expands the panel, opens the launcher and selects only its contributed view 
   f.nodes.set('.app-work-panel-toggle', [toggle]); f.nodes.set('.work-panel-new-tab', [plus]); f.nodes.delete(`[data-work-panel-tab-id="${REVIEW_TAB_ID}"] button[role="tab"]`);
   try {
     const opening = f.adapter.open('s', location); await vi.advanceTimersByTimeAsync(250); await opening;
-    expect(toggle.click).toHaveBeenCalledTimes(1); expect(plus.click).toHaveBeenCalledTimes(1); expect(launcher.click).toHaveBeenCalledTimes(1); expect(f.load).not.toHaveBeenCalled();
+    expect(toggle.click).toHaveBeenCalledTimes(1); expect(plus.click).toHaveBeenCalledTimes(1); expect(launcher.click).toHaveBeenCalledTimes(1); expect(f.read).not.toHaveBeenCalled();
   } finally { f.adapter.close(); vi.useRealTimers(); }
 });
 it('does not endlessly click or replay when a host control does not react', async () => {
@@ -83,17 +91,6 @@ it('does not endlessly click or replay when a host control does not react', asyn
     const pending = expect(f.adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_OPEN' });
     await vi.advanceTimersByTimeAsync(4100); await pending; expect(click).toHaveBeenCalledTimes(1); expect(f.navigation.confirm).not.toHaveBeenCalled();
   } finally { f.adapter.close(); vi.useRealTimers(); }
-});
-it('keeps delegated task ownership and late-load cancellation on the separate evidence path', async () => {
-  const since = Date.now() - 2000;
-  const state = { activeSessionId: 's', page: 'chat', runningSessions: { s: false }, messages: [{ id: 'original', role: 'user', createdAt: since }, { id: 'launch-row', role: 'tool', toolCallId: 'launch', toolName: 'Task', toolStatus: 'success', toolResult: { details: { delegationId: 'd', status: 'running', startedAt: since + 100 } } }, { id: 'newer', role: 'user', createdAt: since + 500 }] };
-  const modules = { store: { getState: () => state, subscribe: () => () => {} }, hostReact: React };
-  const adapter = createHostStateAdapter({ load: async () => modules }); let context: unknown;
-  await adapter.subscribeEvidence((_id, value) => { context = value; }); expect(context).toMatchObject({ sessionId: 's', running: true, mainRunning: false, taskId: 'original', since }); adapter.close();
-  let release!: (value: typeof modules) => void;
-  const late = createHostStateAdapter({ load: () => new Promise(resolve => release = resolve) });
-  const pending = late.subscribeEvidence(() => {}); late.close(); release(modules);
-  await expect(pending).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' });
 });
 it('does not synthesize an empty identity for unrelated same-session DOM mutations', async () => {
   const f = fixture(), sessions: unknown[] = []; let callback!: MutationCallback;
@@ -131,4 +128,30 @@ it('invalidates batched A → B → A identities/visibility, but ignores changes
     callback([mutation('data-visible', 'false', { 'data-session-pane': 's', 'data-visible': 'true' })], {} as MutationObserver);
     expect(sessions).toEqual(['s', null, 's', null, 's']);
   } finally { adapter.close(); vi.unstubAllGlobals(); }
+});
+it.each(['data-session-pane', 'data-visible', 'class'])('invalidates a batched %s excursion on the public polling source too', async attributeName => {
+  vi.useFakeTimers(); const f = fixture(), callbacks: MutationCallback[] = [];
+  vi.stubGlobal('MutationObserver', class { constructor(callback: MutationCallback) { callbacks.push(callback); } observe() {} disconnect() {} });
+  let release!: (context: SessionContext) => void;
+  const read = vi.fn(async (sessionId: string): Promise<SessionContext> => ({ sessionId, running: true, statusKnown: true, taskId: 'fresh', since: 100 }));
+  read.mockImplementationOnce(() => new Promise(resolve => release = resolve));
+  const adapter = createPluginReviewAdapter({ document: f.document, read }), sessions = vi.fn(), evidence = vi.fn(), activity = vi.fn();
+  const mutate = (oldValue: string) => {
+    const target = { ...f.attributes({ 'data-session-pane': 's', 'data-visible': 'true', 'data-sidebar-session-row': 's' }), classList: { contains: () => true } };
+    const records = [{ type: 'attributes', attributeName, oldValue, target } as unknown as MutationRecord];
+    for (const callback of callbacks) callback(records, {} as MutationObserver);
+  };
+  try {
+    await adapter.subscribeSession(sessions); await adapter.subscribeEvidence!(evidence); await adapter.subscribeActivity(activity); await flush();
+    // Unrelated same-session mutation must not invalidate or trigger another read.
+    mutate(attributeName === 'data-session-pane' ? 's' : attributeName === 'class' ? 'active' : 'true');
+    expect(sessions.mock.calls.map(([id]) => id)).toEqual(['s']); expect(evidence).toHaveBeenCalledTimes(1);
+    mutate(attributeName === 'data-session-pane' ? 'other' : attributeName === 'class' ? 'inactive' : 'false');
+    expect(sessions.mock.calls.map(([id]) => id)).toEqual(['s', null, 's']);
+    expect(evidence.mock.calls.map(([id]) => id)).toEqual(['s', null, 's']);
+    expect(activity).toHaveBeenLastCalledWith(null); expect(read).toHaveBeenCalledTimes(1);
+    release({ sessionId: 's', running: true, statusKnown: true, taskId: 'stale', since: 100 }); await flush();
+    expect(read).toHaveBeenCalledTimes(2); expect(evidence).toHaveBeenLastCalledWith('s', expect.objectContaining({ taskId: 'fresh' }));
+    expect(evidence.mock.calls.some(([, context]) => context?.taskId === 'stale')).toBe(false);
+  } finally { adapter.close(); f.adapter.close(); }
 });

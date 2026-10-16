@@ -15,6 +15,18 @@ export function hostScratchRoot(value: string): string | undefined {
   while ((found = match.exec(portable))) root = portable.slice(0, found.index + found[0].length);
   return root;
 }
+/** A session may not use another session's host scratch leaf as external evidence. */
+export function assertSessionScratchPath(value: string, sessionId: string, projectRoot?: string): void {
+  const scratch = hostScratchRoot(value);
+  if (!scratch || scratch.slice(scratch.lastIndexOf('/') + 1) === sessionId) return;
+  // A publicly assigned project may itself be a subdirectory of a scratch leaf.
+  // That explicit project scope is not permission to record sibling/parent paths.
+  const portable = (path: string) => { const value = path.replace(/\\/g, '/').replace(/\/$/, ''); return /^[a-z]:\//i.test(value) ? value.toLowerCase() : value; };
+  const assigned = projectRoot && hostScratchRoot(projectRoot);
+  if (projectRoot && assigned && portable(assigned) !== portable(scratch) && portable(assigned).startsWith(`${portable(scratch)}/`)) return;
+  if (projectRoot && assigned === scratch && portable(projectRoot) !== portable(scratch) && (portable(value) === portable(projectRoot) || portable(value).startsWith(`${portable(projectRoot)}/`))) return;
+  deny('PATH_DENIED', 'Scratch evidence belongs to another session');
+}
 export function assertPublicPath(value: string): void {
   assertPathSyntax(value);
   const portable = value.replace(/\\/g, '/'), parts = portable.split('/');

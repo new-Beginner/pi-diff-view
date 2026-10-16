@@ -1,187 +1,4 @@
-// src/core/delegation-lifecycle.ts
-var name = (value) => String(value).split(".").pop().toLowerCase();
-var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
-function safeDelegation(value) {
-  if (!value || !id(value.delegationId) || !["running", "completed", "failed", "aborted", "stopped"].includes(value.status) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0) return void 0;
-  return { delegationId: value.delegationId, status: value.status, startedAt: value.startedAt, ...Number.isSafeInteger(value.completedAt) && value.completedAt >= value.startedAt ? { completedAt: value.completedAt } : {} };
-}
-function safeTaskDetails(tool, details) {
-  if (!details || typeof details !== "object") return void 0;
-  if (name(tool) === "task") return safeDelegation(details);
-  if (!["taskwait", "task_wait", "tasklist", "taskstop"].includes(name(tool))) return void 0;
-  const output = {};
-  for (const key of ["delegations", "stopped", "stopPending", "settled"]) if (Array.isArray(details[key])) output[key] = details[key].slice(0, 256).map(safeDelegation).filter(Boolean);
-  return Object.keys(output).length ? output : void 0;
-}
-function messageOwners(messages) {
-  const aliases = /* @__PURE__ */ new Map(), sequential = /* @__PURE__ */ new Map();
-  let current;
-  for (const message of messages) {
-    if (message.role === "user" && !message.meta.parentMessageId && !message.meta.steering) current = message.id;
-    if (current && !message.meta.parentMessageId) sequential.set(message.id, current);
-    aliases.set(message.id, message);
-    for (const block of message.blocks) if (block.type === "tool_call" && id(block.callId)) aliases.set(block.callId, message);
-  }
-  const owner = (message, seen = /* @__PURE__ */ new Set()) => {
-    if (seen.has(message.id)) return void 0;
-    seen.add(message.id);
-    if (message.meta.userMessageId !== void 0) {
-      const user = aliases.get(message.meta.userMessageId);
-      return user?.role === "user" && !user.meta.parentMessageId ? user.id : void 0;
-    }
-    if (message.meta.parentMessageId) {
-      const parent = aliases.get(message.meta.parentMessageId);
-      return parent ? owner(parent, seen) : void 0;
-    }
-    return sequential.get(message.id);
-  };
-  const owners = /* @__PURE__ */ new Map();
-  for (const message of messages) {
-    const user = owner(message);
-    if (user) owners.set(message.id, user);
-  }
-  return owners;
-}
-function collectDelegations(messages, ownerOf) {
-  const owners = ownerOf ? void 0 : messageOwners(messages);
-  const resolveOwner = ownerOf ?? ((message) => owners.get(message.id));
-  const launches = /* @__PURE__ */ new Map();
-  for (const message of messages) for (const block of message.blocks) {
-    if (block.type !== "tool_call" || name(block.name) !== "task" || !id(block.callId)) continue;
-    const owner = resolveOwner(message);
-    if (!owner) continue;
-    const summary = safeDelegation(block.result?.details);
-    launches.set(block.callId, { callId: block.callId, owner, status: block.status === "error" || block.result?.isError ? "failed" : "running", ...summary });
-  }
-  for (const message of messages) for (const block of message.blocks) {
-    const details = safeTaskDetails(block.name, block.result?.details);
-    if (!details || name(block.name) === "task" || block.result?.isError) continue;
-    for (const sample of Object.values(details).flat()) {
-      const targets = [...launches.values()].filter((launch) => launch.delegationId === sample.delegationId && launch.startedAt === sample.startedAt);
-      if (targets.length !== 1) continue;
-      const target = targets[0];
-      if (target.status !== "running") continue;
-      Object.assign(target, sample);
-    }
-  }
-  return [...launches.values()];
-}
-
-// src/core/review-file-policy.ts
-var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
-  "png",
-  "apng",
-  "jpg",
-  "jpeg",
-  "jfif",
-  "pjpeg",
-  "pjp",
-  "gif",
-  "webp",
-  "bmp",
-  "dib",
-  "ico",
-  "cur",
-  "icns",
-  "tif",
-  "tiff",
-  "avif",
-  "avifs",
-  "heic",
-  "heif",
-  "heics",
-  "heifs",
-  "svg",
-  "svgz",
-  "jxl",
-  "psd",
-  "raw",
-  "dng",
-  "cr2",
-  "cr3",
-  "nef",
-  "nrw",
-  "arw",
-  "orf",
-  "raf",
-  "rw2",
-  "pef",
-  "srw",
-  "x3f",
-  "tga",
-  "qoi",
-  "exr",
-  "hdr",
-  "jp2",
-  "j2k",
-  "jpf",
-  "jpx",
-  "jpm",
-  "mj2",
-  "wmf",
-  "emf"
-]);
-function isImagePath(filePath) {
-  const basename = filePath.slice(Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1);
-  const dot = basename.lastIndexOf(".");
-  return dot > 0 && dot < basename.length - 1 && IMAGE_EXTENSIONS.has(basename.slice(dot + 1).toLowerCase());
-}
-
-// src/core/public-path.ts
-function deny(code, message) {
-  throw Object.assign(new Error(message), { code });
-}
-function assertPathSyntax(value) {
-  if (typeof value !== "string" || !value || value.length > 4096 || /[\0\r\n]/.test(value)) deny("INVALID_PATH", "Invalid file path");
-  const portable = value.replace(/\\/g, "/");
-  if (portable.split("/").includes("..")) deny("PATH_DENIED", "Traversal paths cannot be captured");
-  if (portable.startsWith("//") || portable.startsWith("/??/") || /^[a-z]:[^/]/i.test(portable) || portable.replace(/^[a-z]:\//i, "").includes(":")) deny("PATH_DENIED", "UNC, device, drive-relative and alternate-stream paths are not reviewable");
-}
-function assertPublicPath(value) {
-  assertPathSyntax(value);
-  const portable = value.replace(/\\/g, "/"), parts = portable.split("/");
-  for (const [index, part] of parts.entries()) {
-    const s = part.toLowerCase();
-    if ([".pi-desktoooop", ".pi-desktop"].includes(s) && /^(?:[a-z]:\/|\/[^/])/i.test(portable) && parts[index + 1]?.toLowerCase() === "data" && parts[index + 2]?.toLowerCase() === "scratch" && /^[a-zA-Z0-9-]{1,80}$/.test(parts[index + 3] ?? "")) continue;
-    if (s === ".." || /[. ]$/.test(s) && s !== "." || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/.test(s) || [".git", ".ssh", ".aws", ".gnupg", ".gpg", ".npmrc", ".git-credentials", ".netrc", "_netrc", ".pi", ".claude", ".codex", ".pi-desktoooop", ".pi-desktop", ".pi-diff-view", "node_modules"].includes(s) || s.startsWith(".env") || /^id_(rsa|dsa|ecdsa|ed25519)/.test(s) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(s)) deny("PATH_DENIED", "Credential, dependency, internal or escaping paths are not reviewable");
-  }
-}
-
 // src/core/host-transcript.ts
-function hostEvidenceMessages(messages) {
-  return messages.flatMap((value) => {
-    if (!value || typeof value.id !== "string" || typeof value.role !== "string") return [];
-    const meta = { status: value.status ?? value.meta?.status, parentMessageId: value.parentToolCallId ?? value.meta?.parentMessageId, userMessageId: value.meta?.userMessageId, steering: value.steering ?? value.meta?.steering };
-    const blocks = [];
-    if (value.role === "assistant" && (typeof value.content === "string" && value.content.trim() || value.blocks?.some((b) => b.type === "text"))) blocks.push({ type: "text" });
-    const candidates = value.toolCallId ? [{ type: "tool_call", callId: value.toolCallId, name: value.toolName, args: value.toolArgs, status: value.toolStatus, result: value.toolResult, isError: value.isError }] : value.blocks ?? [];
-    for (const b of candidates) {
-      if (b.type !== "tool_call" || typeof b.callId !== "string") continue;
-      const name2 = String(b.name).split(".").pop().toLowerCase();
-      const args = b.args ?? {}, result = b.result ?? {}, review = result.details?.review;
-      if (isImagePath(String(review?.path ?? args.path ?? args.file_path ?? ""))) continue;
-      try {
-        if (args.path !== void 0 || args.file_path !== void 0) assertPublicPath(args.path ?? args.file_path);
-        if (review?.path !== void 0) assertPublicPath(review.path);
-        if (review?.oldPath !== void 0) assertPublicPath(review.oldPath);
-        if (name2 === "edit" && typeof args.ops === "string") {
-          for (const line of args.ops.split("\n")) if (line.startsWith("MV ")) assertPublicPath(line.slice(3).trim());
-        }
-      } catch {
-        continue;
-      }
-      const safeReview = review && typeof review === "object" ? Object.fromEntries(["version", "sessionId", "messageId", "path", "oldPath", "operation", "status", "state", "beforeExists", "afterExists", "beforeHash", "afterHash", "hunks"].filter((key) => review[key] !== void 0).map((key) => [key, review[key]])) : void 0;
-      const editArgs = name2 === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
-      const lifecycle = safeTaskDetails(name2, result.details);
-      const details = { ...safeReview ? { review: safeReview } : {}, ...lifecycle };
-      blocks.push({ type: "tool_call", callId: b.callId, name: name2, status: b.status, args: ["write", "edit"].includes(name2) ? { path: args.path ?? args.file_path, ...editArgs, ...name2 === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...Object.keys(details).length ? { details } : {} } });
-    }
-    return [{ type: "message", id: value.id, role: value.role, createdAt: value.createdAt, meta, blocks }];
-  });
-}
-function transcriptEvidence(messages) {
-  return JSON.stringify(hostEvidenceMessages(messages));
-}
 function evidenceChunks(text) {
   const chunks = [], encoder2 = new TextEncoder();
   for (let offset = 0; offset < text.length; ) {
@@ -191,11 +8,6 @@ function evidenceChunks(text) {
     offset += length;
   }
   return chunks;
-}
-function evidenceRevision(text) {
-  let hash = 2166136261;
-  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
-  return `${text.length}-${hash >>> 0}`;
 }
 
 // src/renderer/session-context-publisher.ts
@@ -280,10 +92,10 @@ var surfaceStamp = (value) => JSON.stringify(value);
 
 // src/renderer/review-surface-client.ts
 function createReviewSurfaceClient(transport) {
-  const id2 = crypto.randomUUID();
+  const id = crypto.randomUUID();
   let seq = 0, sessionId = null, closed = false, timer;
   let version = 0, pending = false;
-  const exchange = (extra = {}) => transport.invoke("reviewSurface", { role: "renderer", id: id2, seq: ++seq, sessionId, sessionEpoch: version, ...extra });
+  const exchange = (extra = {}) => transport.invoke("reviewSurface", { role: "renderer", id, seq: ++seq, sessionId, sessionEpoch: version, ...extra });
   const heartbeat = async () => {
     if (closed || pending) return;
     pending = true;
@@ -367,7 +179,7 @@ function createReviewSurfaceClient(transport) {
 }
 
 // src/renderer/index.tsx
-import React5, { useEffect as useEffect3, useState as useState3 } from "react";
+import React4, { useEffect as useEffect3, useState as useState3 } from "react";
 
 // src/view/transport.ts
 var realm = globalThis;
@@ -686,176 +498,162 @@ var summary_style_default = `
 `;
 
 // src/renderer/host-state-adapter.ts
-import React3 from "react";
 var PluginReviewError = class extends Error {
   constructor(code, message) {
     super(message);
     this.code = code;
   }
 };
-function activityDiagnostic(state) {
-  const id2 = state.activeSessionId;
-  if (!id2 || state.selectingSessionId || state.page !== "chat") return "running-idle";
-  if (runningActivity(state)) return "running-ready";
-  if (state.runningSessions?.[id2] !== true) return "running-idle";
-  return (runningActivity(state)?.since ?? 0) > 0 ? "running-ready" : "running-identity-missing";
+function runningActivity(context) {
+  if (!context?.sessionId || !context.running || context.statusKnown === false) return null;
+  const { sessionId, taskId, since, turnId } = context;
+  if (typeof taskId === "string" && taskId.trim() && typeof since === "number" && Number.isSafeInteger(since) && since > 0 && since <= Date.now()) return { sessionId, taskId, since, ...turnId ? { turnId } : {} };
+  if (typeof turnId === "string" && turnId.trim() && (since === void 0 || since === 0)) return { sessionId, taskId: `turn:${turnId}`, since: 0, turnId };
+  return null;
 }
-function runningActivity(state) {
-  const sessionId = state.activeSessionId;
-  if (!sessionId || state.selectingSessionId || state.page !== "chat") return null;
-  if (state.runningSessions?.[sessionId] !== true) {
-    const rows = new Map((state.retainedTranscripts?.[sessionId] ?? []).map((message) => [message.id, message]));
-    for (const message of state.messages ?? []) rows.set(message.id, message);
-    const time2 = (value) => {
-      const n = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : 0;
-      return Number.isSafeInteger(n) && n > 0 ? n : 0;
-    };
-    const messageTime = (message) => time2(message.createdAt) || time2(message.blocks.find((block) => block.name === "task")?.result?.details?.startedAt);
-    const messages = hostEvidenceMessages([...rows.values()]).sort((a, b) => messageTime(a) - messageTime(b));
-    const owners = new Set(collectDelegations(messages).filter((child) => child.status === "running").map((child) => child.owner));
-    const user2 = messages.filter((message) => message.role === "user" && owners.has(message.id) && !message.meta.parentMessageId).at(-1);
-    const since2 = user2 ? time2(user2.createdAt) : 0;
-    return user2 && Number.isSafeInteger(since2) && since2 > 0 && since2 <= Date.now() ? { sessionId, taskId: user2.id, since: since2 } : null;
-  }
-  const sources = [state.messages ?? [], state.retainedTranscripts?.[sessionId] ?? []].map((messages) => messages.filter((message) => message.role === "user" && !message.steering && !message.parentToolCallId));
-  const users = sources.flat();
-  const time = (message) => {
-    const value = typeof message.createdAt === "number" ? message.createdAt : Date.parse(message.createdAt ?? "");
-    return Number.isSafeInteger(value) && value > 0 ? value : 0;
-  };
-  const turnId = state.agentStatuses?.[sessionId]?.currentTurnId;
-  const unavailable = () => turnId ? { sessionId, taskId: `turn:${turnId}`, since: 0, turnId } : null;
-  for (const source of sources) {
-    const last = source.at(-1);
-    if (last && (!last.id || !time(last)) && !users.some((other) => other.id === last.id && time(other) > 0)) return unavailable();
-  }
-  users.sort((a, b) => time(b) - time(a));
-  const user = users[0], since = user ? time(user) : 0;
-  if (!user?.id || since <= 0 || since > Date.now()) return unavailable();
-  if (users.some((other) => time(other) === since && other.id !== user.id)) return null;
-  return { sessionId, taskId: user.id, since, turnId };
+function activityDiagnostic(context) {
+  if (!context) return "running-idle";
+  if (context.statusKnown === false) return "running-identity-missing";
+  return runningActivity(context) ? "running-ready" : context.running ? "running-identity-missing" : "running-idle";
 }
-var denied = (code, message) => {
-  throw new PluginReviewError(code, message);
-};
-function hostEntryUrl(documentUrl, scriptUrls) {
-  const page = new URL(documentUrl);
-  if (page.protocol !== "file:") denied("SIDEBAR_ORIGIN", "\u4E0D\u662F\u672C\u5730\u5BBF\u4E3B\u9875 / Not a local host document");
-  const assets = new URL("assets/", page);
-  const entries = scriptUrls.map((url) => new URL(url, page)).filter((url) => url.protocol === "file:" && url.host === assets.host && url.pathname.startsWith(assets.pathname) && /^index(?:-[^/]+)?\.js$/.test(url.pathname.slice(assets.pathname.length)));
-  if (entries.length !== 1) denied("SIDEBAR_ENTRY", "\u5BBF\u4E3B\u4E3B\u6A21\u5757\u7F3A\u5931\u6216\u4E0D\u552F\u4E00 / Host entry module missing or ambiguous");
-  return entries[0].href;
-}
-function resolvePluginReviewModules(module) {
-  return { store: module.R, hostReact: module.r };
-}
-async function loadPinned() {
-  const scripts = Array.from(document.querySelectorAll('script[type="module"][src]')).map((script) => script.src);
-  const main = hostEntryUrl(document.location.href, scripts);
-  const module = await import(
-    /* @vite-ignore */
-    main
-  );
-  return resolvePluginReviewModules(module);
-}
-function createHostStateAdapter(options = {}) {
-  let closed = false, pending;
-  const subscriptions = /* @__PURE__ */ new Set();
+var unknownContext = (sessionId) => ({ sessionId, running: false, statusKnown: false });
+function createHostStateAdapter(options) {
+  const subscribers = /* @__PURE__ */ new Set();
+  let closed = false, started = false, generation = 0;
+  let sessionId, context;
+  let observer, timer;
+  let flight;
   const alive = () => {
-    if (closed) denied("SIDEBAR_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D / Plugin unloaded");
+    if (closed) throw new PluginReviewError("SIDEBAR_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D / Plugin unloaded");
   };
-  const inspect = () => pending ??= (async () => {
+  const publish = () => {
+    for (const subscriber of [...subscribers]) if (subscribers.has(subscriber)) subscriber.publish();
+  };
+  const cancelTimer = () => {
+    if (timer !== void 0) clearTimeout(timer);
+    timer = void 0;
+  };
+  const schedule = () => {
+    cancelTimer();
+    timer = setTimeout(() => {
+      timer = void 0;
+      poll();
+    }, 1e3);
+  };
+  const syncSession = () => {
+    const next = options.session();
+    if (next === sessionId) return false;
+    sessionId = next;
+    generation++;
+    cancelTimer();
+    context = next ? unknownContext(next) : void 0;
+    publish();
+    return true;
+  };
+  const poll = () => {
+    if (closed || !started) return;
+    syncSession();
+    if (closed || !started) return;
+    schedule();
+    if (flight || !sessionId) return;
+    const id = sessionId, version = generation;
+    flight = Promise.resolve().then(() => !closed && started && generation === version ? options.read(id) : void 0).then((result) => {
+      if (closed || !started) return;
+      syncSession();
+      if (generation !== version) return;
+      if (!result || result.sessionId !== id || typeof result.running !== "boolean" || typeof result.statusKnown !== "boolean") {
+        context = unknownContext(id);
+      } else {
+        context = { sessionId: id, root: result.root, running: result.running, mainRunning: result.mainRunning, statusKnown: result.statusKnown, taskId: result.taskId, since: result.since, turnId: result.turnId, evidenceRevision: result.evidenceRevision };
+      }
+      publish();
+    }, () => {
+      if (closed || !started) return;
+      syncSession();
+      if (generation !== version) return;
+      context = unknownContext(id);
+      publish();
+    }).finally(() => {
+      flight = void 0;
+      if (closed || !started) return;
+      syncSession();
+      if (generation !== version) poll();
+      else schedule();
+    });
+  };
+  const stop = () => {
+    started = false;
+    generation++;
+    cancelTimer();
+    observer?.disconnect();
+    observer = void 0;
+    sessionId = void 0;
+    context = void 0;
+  };
+  const subscribe = (subscriber) => {
     alive();
-    const result = await (options.load ?? loadPinned)();
-    alive();
-    if (typeof result.store?.getState !== "function" || result.hostReact?.createElement !== React3.createElement || result.hostReact?.useState !== React3.useState) denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u8BC1\u636E\u63A5\u53E3\u5DF2\u53D8\u5316 / Host evidence contract changed");
-    return result;
-  })().catch((error) => {
-    pending = void 0;
-    throw error;
-  });
+    subscribers.add(subscriber);
+    try {
+      if (!started) {
+        started = true;
+        syncSession();
+        alive();
+        observer = options.observe?.(() => {
+          if (started && !closed && syncSession()) poll();
+        });
+        poll();
+      } else {
+        if (syncSession()) poll();
+        if (!closed && started) subscriber.publish();
+      }
+    } catch (error) {
+      subscribers.delete(subscriber);
+      if (!subscribers.size) stop();
+      throw error;
+    }
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      subscribers.delete(subscriber);
+      if (!subscribers.size) stop();
+    };
+  };
   return {
     async subscribeEvidence(listener) {
-      const modules = await inspect();
-      alive();
-      if (typeof modules.store.subscribe !== "function") return denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u4F1A\u8BDD\u8BA2\u9605\u63A5\u53E3\u5DF2\u53D8\u5316 / Host session subscription unavailable");
-      let previous, stopped = false;
-      const publish = (state) => {
-        if (closed || stopped) return;
-        const sessionId = state.selectingSessionId ? null : state.activeSessionId ?? null;
-        if (sessionId !== null && typeof sessionId !== "string") denied("SIDEBAR_CONTRACT", "\u65E0\u6548\u7684\u5BBF\u4E3B\u4F1A\u8BDD\u72B6\u6001 / Invalid host session state");
-        const activity = runningActivity(state);
-        const context = sessionId ? { sessionId, root: state.sessions?.find((s) => s.id === sessionId)?.projectPath, running: state.runningSessions?.[sessionId] === true || activity !== null, mainRunning: state.runningSessions?.[sessionId] === true, statusKnown: typeof state.runningSessions?.[sessionId] === "boolean", taskId: activity?.taskId, since: activity?.since, turnId: activity?.turnId } : void 0;
-        if (context) {
-          const rows = new Map((state.retainedTranscripts?.[sessionId] ?? []).map((m) => [m.id, m]));
-          for (const m of state.messages ?? []) rows.set(m.id, m);
-          context.evidence = transcriptEvidence([...rows.values()]);
-          context.evidenceRevision = evidenceRevision(context.evidence);
-        }
-        const key = JSON.stringify([sessionId, context && { ...context, evidence: void 0 }]);
+      let previous;
+      return subscribe({ publish() {
+        const key = JSON.stringify([generation, sessionId, context]);
         if (key !== previous) {
           previous = key;
-          listener(sessionId, context);
+          listener(sessionId ?? null, context);
         }
-      };
-      const unsubscribe = modules.store.subscribe(publish);
-      const dispose = () => {
-        if (!stopped) {
-          stopped = true;
-          subscriptions.delete(dispose);
-          unsubscribe();
-        }
-      };
-      subscriptions.add(dispose);
-      try {
-        publish(modules.store.getState());
-        return dispose;
-      } catch (error) {
-        dispose();
-        throw error;
-      }
+      } });
     },
     async subscribeActivity(listener, diagnose) {
-      const modules = await inspect();
-      alive();
-      if (typeof modules.store.subscribe !== "function") return denied("SIDEBAR_CONTRACT", "Host activity subscription unavailable");
-      let previous, stopped = false;
-      const publish = (state) => {
-        if (closed || stopped) return;
-        const activity = runningActivity(state), key = JSON.stringify(activity);
+      let previous;
+      return subscribe({ publish() {
+        const activity = runningActivity(context), diagnostic = activityDiagnostic(context);
+        const key = JSON.stringify([generation, activity, diagnostic]);
         if (key !== previous) {
           previous = key;
-          diagnose?.(activityDiagnostic(state));
+          diagnose?.(diagnostic);
           listener(activity);
         }
-      };
-      const unsubscribe = modules.store.subscribe(publish);
-      const dispose = () => {
-        if (!stopped) {
-          stopped = true;
-          subscriptions.delete(dispose);
-          unsubscribe();
-        }
-      };
-      subscriptions.add(dispose);
-      try {
-        publish(modules.store.getState());
-        return dispose;
-      } catch (error) {
-        dispose();
-        throw error;
-      }
+      } });
     },
     close() {
+      if (closed) return;
       closed = true;
-      for (const dispose of [...subscriptions]) dispose();
+      stop();
+      subscribers.clear();
     }
   };
 }
 
 // src/renderer/plugin-review-adapter.ts
 var REVIEW_TAB_ID = "plugin:local.diff-view/review";
-var denied2 = (code, message) => {
+var denied = (code, message) => {
   throw new PluginReviewError(code, message);
 };
 var validId = (value) => !!value && /^[a-zA-Z0-9-]{1,80}$/.test(value);
@@ -869,30 +667,67 @@ function domSession(document2) {
   return pane ?? row;
 }
 function createPluginReviewAdapter(options = {}) {
-  const legacy = createHostStateAdapter({ load: options.load });
   let closed = false, opening = false;
   const subscriptions = /* @__PURE__ */ new Set();
   const doc = () => options.document ?? document;
+  const observeDom = (document2, publish, invalidate, current) => {
+    if (options.observe) return options.observe(publish);
+    const observer = new MutationObserver((records) => {
+      const previous = current();
+      const excursion = records.some((record) => {
+        if (record.type !== "attributes" || !previous) return false;
+        const node = record.target;
+        if (["data-session-pane", "data-sidebar-session-row"].includes(record.attributeName ?? "")) return node.getAttribute(record.attributeName) === previous && validId(record.oldValue) && record.oldValue !== previous;
+        if (record.attributeName === "data-visible") return node.getAttribute("data-session-pane") === previous && node.getAttribute("data-visible") === "true" && record.oldValue === "false";
+        return record.attributeName === "class" && node.getAttribute("data-sidebar-session-row") === previous && node.classList.contains("active") && !record.oldValue?.split(/\s+/).includes("active");
+      });
+      if (excursion && previous) invalidate();
+      publish();
+    });
+    observer.observe(document2.documentElement, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["data-session-pane", "data-visible", "data-sidebar-session-row", "class"] });
+    return observer;
+  };
+  let invalidating = false;
+  const source = createHostStateAdapter({
+    read: options.read ?? (async () => denied("SIDEBAR_CHANNEL", "\u516C\u5171\u4F1A\u8BDD\u72B6\u6001\u63A5\u53E3\u4E0D\u53EF\u7528 / Public session state unavailable")),
+    session: () => invalidating ? null : domSession(doc()),
+    observe: (callback) => {
+      const document2 = doc();
+      let previous = domSession(document2);
+      return observeDom(document2, () => {
+        previous = domSession(document2);
+        callback();
+      }, () => {
+        previous = null;
+        invalidating = true;
+        try {
+          callback();
+        } finally {
+          invalidating = false;
+        }
+      }, () => previous);
+    }
+  });
   const alive = () => {
-    if (closed) denied2("SIDEBAR_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D / Plugin unloaded");
+    if (closed) denied("SIDEBAR_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D / Plugin unloaded");
   };
   const checkSession = (sessionId, guard) => {
     alive();
     guard?.();
-    if (!validId(sessionId) || domSession(doc()) !== sessionId) denied2("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\u6216\u4E0D\u552F\u4E00\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u91CD\u8BD5 / Session changed or ambiguous");
+    if (!validId(sessionId) || domSession(doc()) !== sessionId) denied("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\u6216\u4E0D\u552F\u4E00\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u91CD\u8BD5 / Session changed or ambiguous");
   };
   const reveal = async (sessionId, guard) => {
     const document2 = doc(), check = () => checkSession(sessionId, guard), clicked = /* @__PURE__ */ new Set();
     check();
     const one = (selector) => {
       const nodes = [...document2.querySelectorAll(selector)].filter((node) => !node.closest("[hidden], [inert]"));
-      if (nodes.length > 1) denied2("SIDEBAR_AMBIGUOUS", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u552F\u4E00 / Ambiguous host controls");
+      if (nodes.length > 1) denied("SIDEBAR_AMBIGUOUS", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u552F\u4E00 / Ambiguous host controls");
       return nodes[0];
     };
     const click = (node) => {
       check();
       if (!node || clicked.has(node)) return;
-      if (node.getAttribute("aria-disabled") === "true" || node.disabled) denied2("SIDEBAR_OPEN", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u53EF\u7528");
+      if (node.getAttribute("aria-disabled") === "true" || node.disabled) denied("SIDEBAR_OPEN", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u53EF\u7528");
       clicked.add(node);
       node.click();
     };
@@ -900,7 +735,7 @@ function createPluginReviewAdapter(options = {}) {
     while (Date.now() < deadline) {
       check();
       const toggle = one(".app-work-panel-toggle");
-      if (!toggle || !["true", "false"].includes(toggle.getAttribute("aria-pressed") ?? "")) denied2("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u5DE5\u4F5C\u9762\u677F\u6807\u8BB0\u5DF2\u53D8\u5316 / Work panel markup changed");
+      if (!toggle || !["true", "false"].includes(toggle.getAttribute("aria-pressed") ?? "")) denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u5DE5\u4F5C\u9762\u677F\u6807\u8BB0\u5DF2\u53D8\u5316 / Work panel markup changed");
       if (toggle.getAttribute("aria-pressed") === "false") click(toggle);
       else {
         const tab = one(`[data-work-panel-tab-id="${REVIEW_TAB_ID}"] button[role="tab"]`);
@@ -914,7 +749,7 @@ function createPluginReviewAdapter(options = {}) {
       }
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
-    denied2("SIDEBAR_OPEN", "\u672A\u627E\u5230\u6216\u672A\u80FD\u6FC0\u6D3B Diff view \u9875\u7B7E\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Review tab did not open");
+    denied("SIDEBAR_OPEN", "\u672A\u627E\u5230\u6216\u672A\u80FD\u6FC0\u6D3B Diff view \u9875\u7B7E\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Review tab did not open");
   };
   return {
     async reveal(sessionId, guard) {
@@ -929,30 +764,18 @@ function createPluginReviewAdapter(options = {}) {
       let previous, stopped = false;
       const publish = () => {
         if (closed || stopped) return;
-        const id2 = domSession(document2);
-        if (id2 !== previous) {
-          previous = id2;
-          listener(id2);
+        const id = domSession(document2);
+        if (id !== previous) {
+          previous = id;
+          listener(id);
         }
       };
-      const observer = options.observe ? options.observe(publish) : (() => {
-        const observer2 = new MutationObserver((records) => {
-          const excursion = records.some((record) => {
-            if (record.type !== "attributes" || !previous) return false;
-            const node = record.target;
-            if (["data-session-pane", "data-sidebar-session-row"].includes(record.attributeName ?? "")) return node.getAttribute(record.attributeName) === previous && validId(record.oldValue) && record.oldValue !== previous;
-            if (record.attributeName === "data-visible") return node.getAttribute("data-session-pane") === previous && node.getAttribute("data-visible") === "true" && record.oldValue === "false";
-            return record.attributeName === "class" && node.getAttribute("data-sidebar-session-row") === previous && node.classList.contains("active") && !record.oldValue?.split(/\s+/).includes("active");
-          });
-          if (excursion && previous && !closed && !stopped) {
-            previous = null;
-            listener(null);
-          }
-          publish();
-        });
-        observer2.observe(document2.documentElement, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["data-session-pane", "data-visible", "data-sidebar-session-row", "class"] });
-        return observer2;
-      })();
+      const observer = observeDom(document2, publish, () => {
+        if (previous && !closed && !stopped) {
+          previous = null;
+          listener(null);
+        }
+      }, () => previous);
       const dispose = () => {
         if (stopped) return;
         stopped = true;
@@ -963,17 +786,17 @@ function createPluginReviewAdapter(options = {}) {
       publish();
       return dispose;
     },
-    subscribeEvidence: (listener) => legacy.subscribeEvidence(listener),
-    subscribeActivity: (listener, diagnose) => legacy.subscribeActivity(listener, diagnose),
+    subscribeEvidence: (listener) => source.subscribeEvidence(listener),
+    subscribeActivity: (listener, diagnose) => source.subscribeActivity(listener, diagnose),
     async open(sessionId, location, guard) {
       alive();
-      if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied2("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
-      if (opening) denied2("SIDEBAR_BUSY", "\u6B63\u5728\u6253\u5F00\u5BA1\u67E5\u9875\u7B7E\uFF0C\u8BF7\u52FF\u91CD\u590D\u70B9\u51FB");
+      if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
+      if (opening) denied("SIDEBAR_BUSY", "\u6B63\u5728\u6253\u5F00\u5BA1\u67E5\u9875\u7B7E\uFF0C\u8BF7\u52FF\u91CD\u590D\u70B9\u51FB");
       const check = () => checkSession(sessionId, guard);
       check();
       opening = true;
       try {
-        const navigation = options.navigation ?? denied2("SIDEBAR_CHANNEL", "\u5BA1\u67E5\u5BFC\u822A\u6865\u63A5\u4E0D\u53EF\u7528 / Review navigation unavailable");
+        const navigation = options.navigation ?? denied("SIDEBAR_CHANNEL", "\u5BA1\u67E5\u5BFC\u822A\u6865\u63A5\u4E0D\u53EF\u7528 / Review navigation unavailable");
         const [ticket] = await Promise.all([navigation.prepare(sessionId, location, check), reveal(sessionId, guard)]);
         check();
         await navigation.confirm(ticket, check);
@@ -985,13 +808,13 @@ function createPluginReviewAdapter(options = {}) {
     close() {
       closed = true;
       for (const dispose of [...subscriptions]) dispose();
-      legacy.close();
+      source.close();
     }
   };
 }
 
 // src/renderer/RunningChangePill.tsx
-import React4, { useEffect as useEffect2, useLayoutEffect as useLayoutEffect2, useRef as useRef2, useState as useState2 } from "react";
+import React3, { useEffect as useEffect2, useLayoutEffect as useLayoutEffect2, useRef as useRef2, useState as useState2 } from "react";
 import { createPortal } from "react-dom";
 
 // src/renderer/running-changes.ts
@@ -1056,28 +879,23 @@ function createRunningChangesController(transport, adapter, publish, report2 = (
       if (next) void poll(version, next);
     },
     async open() {
-      const task = activity, summary = view.summary, version = epoch;
-      if (!task || !summary || view.busy || disposed) return;
+      const sessionId = activity?.sessionId, version = epoch;
+      if (!sessionId || view.busy || disposed) return;
       const guard = () => {
-        if (!valid(version) || view.summary?.runId !== summary.runId) throw new Error("\u4EFB\u52A1\u5DF2\u7ED3\u675F\u6216\u5207\u6362 / Task ended or changed");
+        if (!valid(version)) throw new Error("\u4F1A\u8BDD\u6216\u4EFB\u52A1\u5DF2\u5207\u6362 / Session or task changed");
       };
       emit({ ...view, busy: true, error: "" });
       try {
-        await adapter.reveal?.(task.sessionId, guard);
+        await adapter.reveal?.(sessionId, guard);
         guard();
-        const selection = await transport.invoke("selectTurn", { scope: "lastTurn", sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
+        const selection = await transport.invoke("selectTurn", { scope: "lastTurn", sessionId });
         guard();
-        await adapter.open(task.sessionId, `diff-view:${selection.nonce}`, guard);
+        await adapter.open(sessionId, `diff-view:${selection.nonce}`, guard);
         guard();
       } catch (error) {
-        if (valid(version) && view.summary?.runId === summary.runId) {
-          if (["RUN_NOT_FOUND", "RUN_MISSING", "TASK_REQUIRED"].includes(String(error.code))) {
-            remember2(task, null);
-            emit({ summary: null, busy: false, error: "" });
-          } else {
-            diagnose("running-click-error");
-            emit({ ...view, error: String(error.message ?? error) });
-          }
+        if (valid(version)) {
+          diagnose("running-click-error");
+          emit({ ...view, error: String(error.message ?? error) });
         }
       } finally {
         if (valid(version)) emit({ ...view, busy: false });
@@ -1198,7 +1016,7 @@ function RunningChangePill({ transport, adapter, ui, report: report2 }) {
   }, [visible, ui, report2]);
   const summary = view.summary, zh = summary?.locale.startsWith("zh");
   const unknown = summary?.unknownFileCount ?? 0, allUnknown = !!summary && unknown >= summary.fileCount;
-  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { ref: anchor, className: "dv-running-anchor", "aria-hidden": "true" }), layerError && /* @__PURE__ */ React4.createElement("span", { className: "dv-running-error", role: "alert" }, layerError), summary && visible && layer && createPortal(/* @__PURE__ */ React4.createElement("div", { className: "dv-running-float", "data-base": summary.base, style: { left: position.left, top: position.top, maxWidth: position.width } }, /* @__PURE__ */ React4.createElement("button", { type: "button", className: "dv-running-pill", disabled: view.busy, "aria-busy": view.busy, title: zh ? "\u67E5\u770B\u672C\u4F1A\u8BDD\u6700\u8FD1\u8F6E\u6B21\u7684\u53D8\u66F4\uFF1B\u4EC5\u7EDF\u8BA1\u53EF\u9A8C\u8BC1\u6587\u672C" : "Review the latest turn in this session; verified text counts only", onClick: () => void controller.current?.open() }, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-label" }, zh ? `${summary.fileCount} \u4E2A\u6587\u4EF6\u5DF2\u66F4\u6539` : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} changed`), !allUnknown && /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("span", { className: "dv-running-add" }, "+", summary.additions), /* @__PURE__ */ React4.createElement("span", { className: "dv-running-del" }, "-", summary.deletions)), unknown > 0 && /* @__PURE__ */ React4.createElement("span", { className: "dv-running-unknown" }, zh ? allUnknown ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : allUnknown ? "Unknown lines" : "Partial totals")), view.error && /* @__PURE__ */ React4.createElement("p", { className: "dv-running-error", role: "alert" }, view.error)), layer.element));
+  return /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("span", { ref: anchor, className: "dv-running-anchor", "aria-hidden": "true" }), layerError && /* @__PURE__ */ React3.createElement("span", { className: "dv-running-error", role: "alert" }, layerError), summary && visible && layer && createPortal(/* @__PURE__ */ React3.createElement("div", { className: "dv-running-float", "data-base": summary.base, style: { left: position.left, top: position.top, maxWidth: position.width } }, /* @__PURE__ */ React3.createElement("button", { type: "button", className: "dv-running-pill", disabled: view.busy, "aria-busy": view.busy, title: zh ? "\u67E5\u770B\u672C\u4F1A\u8BDD\u6700\u8FD1\u8F6E\u6B21\u7684\u53D8\u66F4\uFF1B\u4EC5\u7EDF\u8BA1\u53EF\u9A8C\u8BC1\u6587\u672C" : "Review the latest turn in this session; verified text counts only", onClick: () => void controller.current?.open() }, /* @__PURE__ */ React3.createElement("span", { className: "dv-running-label" }, zh ? `${summary.fileCount} \u4E2A\u6587\u4EF6\u5DF2\u66F4\u6539` : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} changed`), !allUnknown && /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("span", { className: "dv-running-add" }, "+", summary.additions), /* @__PURE__ */ React3.createElement("span", { className: "dv-running-del" }, "-", summary.deletions)), unknown > 0 && /* @__PURE__ */ React3.createElement("span", { className: "dv-running-unknown" }, zh ? allUnknown ? "\u884C\u6570\u672A\u77E5" : "\u90E8\u5206\u7EDF\u8BA1" : allUnknown ? "Unknown lines" : "Partial totals")), view.error && /* @__PURE__ */ React3.createElement("p", { className: "dv-running-error", role: "alert" }, view.error)), layer.element));
 }
 var runningPillStyle = `
 .dv-running-anchor{display:none!important}
@@ -1266,6 +1084,7 @@ function trackSession(current) {
     if (current.activeSession !== sessionId) {
       current.activeSession = sessionId;
       current.sessionVersion++;
+      current.evidenceContext = void 0;
     }
     current.surface?.update(sessionId);
     publisher.update(sessionId, context ?? (current.evidenceContext?.sessionId === sessionId ? current.evidenceContext : void 0));
@@ -1361,7 +1180,7 @@ async function restoreFeed(current, sessionId) {
   feed.revision = first.revision;
   feed.pending = first.pending;
   while (current.feeds.size > 32) {
-    const removable = [...current.feeds.keys()].find((id2) => ![...current.cards.values()].some((item) => item.props.sessionId === id2));
+    const removable = [...current.feeds.keys()].find((id) => ![...current.cards.values()].some((item) => item.props.sessionId === id));
     if (!removable) break;
     current.feeds.delete(removable);
   }
@@ -1450,7 +1269,7 @@ function EntryExtra(props) {
   const card = value.key === key ? value.card : current?.cache.get(key);
   if (!card || !same(current) || props.message?.parentToolCallId || props.message?.meta?.parentMessageId) return null;
   const run = card.run;
-  return /* @__PURE__ */ React5.createElement(TurnChangeSummary, { run, initialSummary: card.summary, transport: current.transport, locale: current.appearance.locale, base: current.appearance.base, onOpen: async (file) => {
+  return /* @__PURE__ */ React4.createElement(TurnChangeSummary, { run, initialSummary: card.summary, transport: current.transport, locale: current.appearance.locale, base: current.appearance.base, onOpen: async (file) => {
     await trackSession(current);
     const version = current.sessionVersion;
     const guard = () => {
@@ -1471,7 +1290,7 @@ function composerReport(stage) {
 }
 function ComposerControl() {
   const current = hub;
-  return same(current) ? /* @__PURE__ */ React5.createElement(RunningChangePill, { transport: current.transport, adapter: current.adapter, ui: current.ui, report: composerReport }) : null;
+  return same(current) ? /* @__PURE__ */ React4.createElement(RunningChangePill, { transport: current.transport, adapter: current.adapter, ui: current.ui, report: composerReport }) : null;
 }
 function onLoad(pi, options = {}) {
   realm2.__piDiffRenderer?.dispose();
@@ -1481,7 +1300,7 @@ function onLoad(pi, options = {}) {
     return pi.dispatch("plugin.call", { method, args });
   } });
   const surface = options.adapter ? void 0 : createReviewSurfaceClient(transport);
-  const current = { transport, surface, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: new JsonCache(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter({ navigation: surface.channel }) };
+  const current = { transport, surface, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: new JsonCache(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter({ read: (sessionId) => transport.invoke("sessionState", { sessionId }), navigation: surface.channel }) };
   hub = current;
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summary_style_default + runningPillStyle));

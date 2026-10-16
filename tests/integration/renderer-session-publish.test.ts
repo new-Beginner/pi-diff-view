@@ -98,16 +98,17 @@ it('unload during a context RPC suppresses late completion and wake timers', asy
   expect(app.dispatch).toHaveBeenCalledTimes(count); expect(vi.getTimerCount()).toBe(0);
 });
 
-it('default renderer follows DOM even when the private evidence module is unavailable', async () => {
-  let id: string | null = 'a', notify = () => {};
+it('default renderer follows DOM while the public state source is unavailable', async () => {
+  let id: string | null = 'a'; const observers = new Set<() => void>(); const notify = () => observers.forEach(callback => callback());
   const document = { querySelectorAll(selector: string) {
     return selector.startsWith('[data-session-pane]') && id ? [{ getAttribute: () => id }] : [];
   }, documentElement: {}, location: { href: 'https://unsupported-host.invalid' } };
-  class Observer { constructor(callback: (records: unknown[]) => void) { notify = () => callback([]); } observe() {} disconnect() {} }
+  class Observer { readonly notify: () => void; constructor(callback: (records: unknown[]) => void) { this.notify = () => callback([]); observers.add(this.notify); } observe() {} disconnect() { observers.delete(this.notify); } }
   vi.stubGlobal('document', document); vi.stubGlobal('MutationObserver', Observer);
   const calls: any[] = [];
   const host = { dispatch: async (_action: string, payload: any) => {
     calls.push(payload);
+    if (payload.method === 'sessionState') throw new Error('Public state source unavailable');
     if (payload.method === 'replyCards') return { cards: [], revision: 'r', pending: [], nextOffset: null, locale: 'zh-CN', base: 'light' };
     return { ok: true };
   }, ui: { injectStyle: () => () => {} }, slots: { register: () => () => {} } } as unknown as RendererHost;
@@ -116,7 +117,8 @@ it('default renderer follows DOM even when the private evidence module is unavai
     expect(calls.some(row => row.method === 'reviewSurface' && row.args.sessionId === 'a')).toBe(true);
     id = 'b'; notify(); await flush();
     expect(calls.some(row => row.method === 'reviewSurface' && row.args.sessionId === 'b')).toBe(true);
-    expect(calls.filter(row => row.method === 'sessionContext')).toHaveLength(0);
+    expect(calls.filter(row => row.method === 'sessionContext').length).toBeGreaterThan(0);
+    expect(calls.filter(row => row.method === 'sessionContext').every(row => row.args.statusKnown === false)).toBe(true);
     onUnload(); const before = calls.length; notify(); await vi.advanceTimersByTimeAsync(10000);
     expect(calls).toHaveLength(before);
   } finally { onUnload(); vi.unstubAllGlobals(); }

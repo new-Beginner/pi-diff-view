@@ -50,6 +50,26 @@ function assertPathSyntax(value) {
   if (portable.split("/").includes("..")) deny("PATH_DENIED", "Traversal paths cannot be captured");
   if (portable.startsWith("//") || portable.startsWith("/??/") || /^[a-z]:[^/]/i.test(portable) || portable.replace(/^[a-z]:\//i, "").includes(":")) deny("PATH_DENIED", "UNC, device, drive-relative and alternate-stream paths are not reviewable");
 }
+function hostScratchRoot(value) {
+  const portable = value.replace(/\\/g, "/");
+  if (!/^(?:[a-z]:\/|\/[^/])/i.test(portable)) return void 0;
+  const match = /\/(?:\.pi-desktoooop|\.pi-desktop)\/data\/scratch\/[a-zA-Z0-9-]{1,80}(?=\/|$)/gi;
+  let found, root;
+  while (found = match.exec(portable)) root = portable.slice(0, found.index + found[0].length);
+  return root;
+}
+function assertSessionScratchPath(value, sessionId, projectRoot2) {
+  const scratch = hostScratchRoot(value);
+  if (!scratch || scratch.slice(scratch.lastIndexOf("/") + 1) === sessionId) return;
+  const portable = (path14) => {
+    const value2 = path14.replace(/\\/g, "/").replace(/\/$/, "");
+    return /^[a-z]:\//i.test(value2) ? value2.toLowerCase() : value2;
+  };
+  const assigned = projectRoot2 && hostScratchRoot(projectRoot2);
+  if (projectRoot2 && assigned && portable(assigned) !== portable(scratch) && portable(assigned).startsWith(`${portable(scratch)}/`)) return;
+  if (projectRoot2 && assigned === scratch && portable(projectRoot2) !== portable(scratch) && (portable(value) === portable(projectRoot2) || portable(value).startsWith(`${portable(projectRoot2)}/`))) return;
+  deny("PATH_DENIED", "Scratch evidence belongs to another session");
+}
 function assertPublicPath(value) {
   assertPathSyntax(value);
   const portable = value.replace(/\\/g, "/"), parts = portable.split("/");
@@ -138,8 +158,8 @@ async function resolveCapturePath(root, value, privatePaths, allowMissing = fals
   if (privatePaths.some((p) => inside(p, target))) fail("PATH_DENIED", "Plugin-private paths cannot be captured");
   if (origin === "workspace" && !inside(root, target)) fail("PATH_ESCAPE", "Capture escaped the workspace");
   if (origin === "workspace") assertPublicPath(import_node_path.default.relative(root, target));
-  const identity = canonical(target);
-  return { id: digest(identity).slice(0, 24), identity, origin, absolutePath: target, path: origin === "workspace" ? import_node_path.default.relative(root, target).split(import_node_path.default.sep).join("/") : target };
+  const identity2 = canonical(target);
+  return { id: digest(identity2).slice(0, 24), identity: identity2, origin, absolutePath: target, path: origin === "workspace" ? import_node_path.default.relative(root, target).split(import_node_path.default.sep).join("/") : target };
 }
 function absentSnapshot() {
   return { exists: false, text: null, hash: "absent", size: 0, mode: 0, kind: "text" };
@@ -321,16 +341,16 @@ var init_base = __esm({
           }
         }
       }
-      addToPath(path15, added, removed, oldPosInc, options) {
-        const last = path15.lastComponent;
+      addToPath(path14, added, removed, oldPosInc, options) {
+        const last = path14.lastComponent;
         if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
           return {
-            oldPos: path15.oldPos + oldPosInc,
+            oldPos: path14.oldPos + oldPosInc,
             lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
           };
         } else {
           return {
-            oldPos: path15.oldPos + oldPosInc,
+            oldPos: path14.oldPos + oldPosInc,
             lastComponent: { count: 1, added, removed, previousComponent: last }
           };
         }
@@ -1332,8 +1352,8 @@ var ReadWriteQueue = class {
 };
 
 // src/main.ts
-var import_promises12 = __toESM(require("node:fs/promises"), 1);
-var import_node_path14 = __toESM(require("node:path"), 1);
+var import_promises11 = __toESM(require("node:fs/promises"), 1);
+var import_node_path13 = __toESM(require("node:path"), 1);
 var import_node_crypto10 = require("node:crypto");
 init_storage();
 
@@ -1437,8 +1457,8 @@ async function replaceSnapshot(root, value, expected, desired, backupDir) {
   let backupBytes = 0;
   for (const file of backups) backupBytes += (await import_promises4.default.stat(import_node_path4.default.join(backupDir, file))).size;
   if (backups.length >= 998 || backupBytes + 2 * expected.size + desired.size + 8192 > 64 * 1024 * 1024) fail("BACKUP_LIMIT", "Recovery backup limit reached; export needed backups before clearing plugin history");
-  const id2 = (0, import_node_crypto4.randomUUID)(), record = import_node_path4.default.join(backupDir, `${id2}.json`);
-  await atomicJson(record, { version: 1, root, path: value, before: expected, after: desired });
+  const id2 = (0, import_node_crypto4.randomUUID)(), record2 = import_node_path4.default.join(backupDir, `${id2}.json`);
+  await atomicJson(record2, { version: 1, root, path: value, before: expected, after: desired });
   if (!expected.exists && !desired.exists) return;
   await import_promises4.default.mkdir(import_node_path4.default.dirname(target), { recursive: true });
   await safeResolve(root, value);
@@ -2312,11 +2332,11 @@ var ReviewService = class {
       const snapshots = /* @__PURE__ */ new Map();
       const hydrate = (snapshot) => {
         if (!snapshot.exists || snapshot.kind !== "text" || snapshot.text !== null) return this.hydrateSnapshot(snapshot);
-        const identity = `${snapshot.hash}:${snapshot.size}:${snapshot.mode}`;
-        let pending = snapshots.get(identity);
+        const identity2 = `${snapshot.hash}:${snapshot.size}:${snapshot.mode}`;
+        let pending = snapshots.get(identity2);
         if (!pending) {
           pending = this.hydrateSnapshot(snapshot);
-          snapshots.set(identity, pending);
+          snapshots.set(identity2, pending);
           if (snapshots.size > 32) snapshots.delete(snapshots.keys().next().value);
         }
         return pending;
@@ -2453,6 +2473,8 @@ var ReviewService = class {
   /** Snapshot-only reads never alter the shared workspace mutation authorization. */
   async savedReview(request) {
     if (request.scope !== "turn" || request.retrySync) return null;
+    const run2 = request.runId ? await this.store.getRun(request.runId, false, false) : null;
+    if (!run2 || run2.sessionId !== request.sessionId || run2.version !== 2 || run2.boundary !== "user" || run2.state !== "completed" || run2.incomplete || !run2.replyMessageId || !Number.isFinite(run2.endedAt) || request.root && canonical(run2.root) !== canonical(request.root)) return null;
     const summary = await this.review(request, true, void 0, true);
     return this.hasVerifiedReviewFiles(summary.id) ? summary : null;
   }
@@ -2843,64 +2865,6 @@ var JobQueue = class {
   }
 };
 
-// src/core/native-host-build.ts
-var import_promises7 = __toESM(require("node:fs/promises"), 1);
-var import_node_path8 = __toESM(require("node:path"), 1);
-init_path_policy();
-
-// src/core/native-build-contract.ts
-var NATIVE_BUILD = {
-  version: "0.17.0",
-  assets: {
-    main: { name: "index-DKEhNN1e.js", sha256: "f89d7fd4d428fc8ece04a65a7021af4983aa8ede1349eeddbe743f3865380e6b" },
-    transcript: { name: "use-transcript-view-BZJWhb9_.js", sha256: "92c227ce4c98bdeacc676163d6e1f0065f01c2d03f142122e86017d7c5cb34e4" },
-    panel: { name: "WorkPanel-C3oPGQMI.js", sha256: "6621ca03f19b3ccbf78777e7c05affaf79502facd356e9e77da41013508b8a79" }
-  }
-};
-function matchesNativeBuild(version, hashes) {
-  return version === NATIVE_BUILD.version && Object.values(NATIVE_BUILD.assets).every((asset) => hashes[asset.name] === asset.sha256);
-}
-
-// src/core/native-host-build.ts
-async function inspectNativeHostBuild(version, executable = process.execPath) {
-  const hashes = {};
-  if (version !== NATIVE_BUILD.version) return { version, hashes, supported: false, reason: `Only the inspected PI-Desktop ${NATIVE_BUILD.version} build is supported` };
-  let handle;
-  try {
-    let archiveFs = import_promises7.default;
-    try {
-      archiveFs = require("original-fs").promises;
-    } catch {
-    }
-    const archive = import_node_path8.default.join(import_node_path8.default.dirname(executable), "resources", "app.asar");
-    const stat = await archiveFs.lstat(archive);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Host archive is not a regular file");
-    handle = await archiveFs.open(archive, "r");
-    const header = Buffer.alloc(16);
-    if ((await handle.read(header, 0, header.length, 0)).bytesRead !== header.length) throw new Error("Short ASAR header");
-    const size = header.readUInt32LE(12), base = 8 + header.readUInt32LE(4);
-    if (size < 2 || size > 2 * 1024 * 1024 || base < 16 + size || base > stat.size) throw new Error("Invalid ASAR bounds");
-    const bytes = Buffer.alloc(size);
-    if ((await handle.read(bytes, 0, size, 16)).bytesRead !== size) throw new Error("Short ASAR index");
-    const index = JSON.parse(bytes.toString("utf8"));
-    for (const asset of Object.values(NATIVE_BUILD.assets)) {
-      let entry = index;
-      for (const part of ["out", "renderer", "assets", asset.name]) entry = entry?.files?.[part];
-      const offset = Number(entry?.offset), length = entry?.size;
-      if (entry?.unpacked || entry?.link || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 2 * 1024 * 1024 || base + offset + length > stat.size) throw new Error("Pinned asset missing or invalid");
-      const source = Buffer.alloc(length);
-      if ((await handle.read(source, 0, length, base + offset)).bytesRead !== length) throw new Error("Short asset");
-      hashes[asset.name] = digest(source);
-    }
-    const supported = matchesNativeBuild(version, hashes);
-    return { version, hashes, supported, ...supported ? {} : { reason: "Renderer build fingerprints do not match the inspected 0.17.0 build" } };
-  } catch (error) {
-    return { version, hashes, supported: false, reason: `Cannot verify pinned host assets: ${String(error.code ?? error.message).slice(0, 200)}` };
-  } finally {
-    await handle?.close();
-  }
-}
-
 // src/core/review-navigation.ts
 var import_node_crypto8 = require("node:crypto");
 init_path_policy();
@@ -3041,6 +3005,9 @@ var ReviewSurfaces = class {
   }
 };
 
+// src/core/host-history.ts
+init_public_path();
+
 // src/core/delegation-lifecycle.ts
 var name = (value) => String(value).split(".").pop().toLowerCase();
 var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
@@ -3111,9 +3078,8 @@ function collectDelegations(messages, ownerOf) {
 }
 
 // src/core/host-history.ts
-var import_promises8 = __toESM(require("node:fs/promises"), 1);
-var import_node_fs3 = require("node:fs");
-var import_node_path9 = __toESM(require("node:path"), 1);
+var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_node_path8 = __toESM(require("node:path"), 1);
 init_contracts();
 init_path_policy();
 
@@ -3210,71 +3176,33 @@ var time = (v) => {
 var hostHistoryRunId = (sessionId, userMessageId) => `host-${digest(`${sessionId}\0${userMessageId}`).slice(0, 48)}`;
 var unknownSnapshot = (exists, hash, label) => ({ exists, text: null, hash: typeof hash === "string" && HASH.test(hash) ? hash : `unavailable:${label}`, size: 0, mode: 0, kind: "unavailable" });
 var HostHistoryImporter = class {
-  constructor(store2, hostDataRoot) {
+  constructor(store2, archive) {
     this.store = store2;
-    if (!import_node_path9.default.isAbsolute(hostDataRoot)) throw new Error("Host data root must be absolute");
-    this.hostDataRoot = import_node_path9.default.resolve(hostDataRoot);
+    this.archive = archive;
   }
-  hostDataRoot;
-  /** Native session scratch contract; this root is for recording only, never disk actions. */
-  scratchRoot(sessionId) {
-    if (!ID.test(sessionId)) throw new Error("Invalid history session");
-    return import_node_path9.default.join(this.hostDataRoot, "scratch", sessionId);
-  }
-  async checked(relative, directory = false) {
-    const target = import_node_path9.default.resolve(this.hostDataRoot, relative);
-    if (!inside(this.hostDataRoot, target)) throw new Error("Host evidence escape");
-    let cursor = import_node_path9.default.parse(target).root;
-    for (const segment of target.slice(cursor.length).split(import_node_path9.default.sep)) {
-      cursor = import_node_path9.default.join(cursor, segment);
-      const stat2 = await import_promises8.default.lstat(cursor);
-      if (stat2.isSymbolicLink() || cursor !== target && !stat2.isDirectory()) throw new Error("Unsafe host evidence ancestry");
-    }
-    const stat = await import_promises8.default.lstat(target);
-    if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error("Invalid host evidence type");
-    return target;
-  }
-  async read(relative, limit) {
-    const file = await this.checked(relative);
-    const initial = await import_promises8.default.lstat(file);
-    const handle = await import_promises8.default.open(file, import_node_fs3.constants.O_RDONLY | (process.platform === "win32" ? 0 : import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_NONBLOCK));
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size > limit || stat.ino !== initial.ino || stat.dev !== initial.dev) throw new Error("Host evidence limit/identity");
-      const bytes = Buffer.alloc(Math.min(limit + 1, stat.size + 1));
-      let length = 0;
-      while (length < bytes.length) {
-        const r = await handle.read(bytes, length, bytes.length - length, length);
-        if (!r.bytesRead) break;
-        length += r.bytesRead;
-      }
-      const after = await handle.stat();
-      await this.checked(relative);
-      const live = await import_promises8.default.lstat(file);
-      if (length > limit || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || live.ino !== stat.ino || live.dev !== stat.dev) throw new Error("Host evidence changed; retry sync");
-      return bytes.subarray(0, length);
-    } finally {
-      await handle.close();
-    }
+  isScratch(root, sessionId) {
+    return !!this.archive && canonical(root) === canonical(this.archive.scratchRoot(sessionId));
   }
   capture(root, value, sessionId) {
     assertPublicPath(value);
-    const absolutePath = import_node_path9.default.resolve(root, value);
+    const absolutePath = import_node_path8.default.resolve(root, value);
+    assertSessionScratchPath(absolutePath, sessionId, root);
     assertPublicPath(absolutePath);
-    if (inside(this.hostDataRoot, absolutePath) && !inside(this.scratchRoot(sessionId), absolutePath) || inside(this.store.directory, absolutePath)) throw new Error("Private history path");
+    if (this.archive && inside(this.archive.privateRoot, absolutePath) && !inside(this.archive.scratchRoot(sessionId), absolutePath) || inside(this.store.directory, absolutePath)) throw new Error("Private history path");
     const origin = inside(root, absolutePath) ? "workspace" : "external";
-    if (origin === "external" && !import_node_path9.default.isAbsolute(value)) throw new Error("Relative external history path");
-    const display = origin === "workspace" ? import_node_path9.default.relative(root, absolutePath).split(import_node_path9.default.sep).join("/") : absolutePath;
+    if (origin === "external" && !import_node_path8.default.isAbsolute(value)) throw new Error("Relative external history path");
+    const display = origin === "workspace" ? import_node_path8.default.relative(root, absolutePath).split(import_node_path8.default.sep).join("/") : absolutePath;
     assertPublicPath(display);
-    const identity = canonical(absolutePath);
-    return { id: digest(identity).slice(0, 24), identity, path: display, absolutePath, origin };
+    const identity2 = canonical(absolutePath);
+    return { id: digest(identity2).slice(0, 24), identity: identity2, path: display, absolutePath, origin };
   }
   async snapshot(event, side) {
     const m = event.meta, exists = m[`${side}Exists`], hash = m[`${side}Hash`];
     if (exists === false) return absentSnapshot();
     if (event.directory) {
       try {
-        const bytes = await this.read(`${event.directory}/${side}`, MAX_TEXT_BYTES);
+        const bytes = await this.archive?.snapshot(event.directory, side);
+        if (!bytes || bytes.length > MAX_TEXT_BYTES) throw new Error("Snapshot unavailable");
         if (side === "before" && !hash || typeof hash === "string" && HASH.test(hash) && digest(bytes) === hash) return snapshotFromBytes(bytes, 0);
       } catch {
       }
@@ -3282,8 +3210,8 @@ var HostHistoryImporter = class {
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
   async syncSession(sessionId, root, options = {}) {
-    if (!ID.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid history session/root");
-    root = import_node_path9.default.resolve(root);
+    if (!ID.test(sessionId) || !import_node_path8.default.isAbsolute(root)) throw new Error("Invalid history session/root");
+    root = import_node_path8.default.resolve(root);
     const capture = (value) => this.capture(root, value, sessionId);
     const running = typeof options === "boolean" ? options : options.running === true;
     const mainRunning = typeof options === "boolean" ? options : options.mainRunning ?? running;
@@ -3291,7 +3219,7 @@ var HostHistoryImporter = class {
     const taskId = typeof options !== "boolean" && typeof options.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(options.taskId) ? options.taskId : void 0;
     const since = typeof options !== "boolean" && Number.isSafeInteger(options.since) && options.since > 0 && options.since <= Date.now() ? options.since : void 0;
     const d = { imported: 0, unchanged: 0, skipped: 0, events: 0, runIds: [], warnings: [] };
-    const warn = (value) => {
+    const warn2 = (value) => {
       if (d.warnings.length < 100 && !d.warnings.includes(value)) d.warnings.push(value);
     };
     if (statusKnown && (!running || taskId)) {
@@ -3305,15 +3233,16 @@ var HostHistoryImporter = class {
         }
       });
     }
-    let source;
-    try {
-      source = (await this.read(`sessions/${sessionId}.jsonl`, 64 * 1024 * 1024)).toString("utf8");
-    } catch {
-      if ((typeof options === "boolean" || !options.messages?.length) && !(taskId && since)) {
-        warn("Session evidence unavailable or unsafe");
-        return d;
+    let source = "";
+    if (this.archive) {
+      try {
+        source = await this.archive.transcript(sessionId);
+      } catch {
+        if ((typeof options === "boolean" || !options.messages?.length) && !(taskId && since)) {
+          warn2("Session evidence unavailable or unsafe");
+          return d;
+        }
       }
-      source = "";
     }
     const messages = /* @__PURE__ */ new Map();
     let malformed = false, order = 0;
@@ -3324,13 +3253,13 @@ var HostHistoryImporter = class {
         const r = JSON.parse(line);
         if (!object(r)) throw new Error();
         if (r.type === "session" && r.sessionId !== sessionId) {
-          warn("Session header mismatch");
+          warn2("Session header mismatch");
           return d;
         }
         if (r.type !== "message" || typeof r.id !== "string" || r.id.length > 512 || typeof r.role !== "string") continue;
         const meta = object(r.meta) ? r.meta : {};
         if (messages.size >= 1e5 && !messages.has(r.id)) {
-          warn("Session message limit exceeded");
+          warn2("Session message limit exceeded");
           return d;
         }
         messages.set(r.id, { id: r.id, role: r.role, blocks: Array.isArray(r.blocks) ? r.blocks.filter(object) : [], meta, createdAt: time(r.createdAt), order: messages.get(r.id)?.order ?? order++, parent: meta.parentMessageId ?? r.parentMessageId });
@@ -3339,7 +3268,7 @@ var HostHistoryImporter = class {
       }
     }
     if (malformed) {
-      warn("Malformed/truncated session lines; no turn attribution attempted");
+      warn2("Malformed/truncated session lines; no turn attribution attempted");
       return d;
     }
     if (taskId && since && !messages.has(taskId)) messages.set(taskId, { id: taskId, role: "user", blocks: [], meta: {}, createdAt: since, order: order++ });
@@ -3382,7 +3311,7 @@ var HostHistoryImporter = class {
       const message = aliases.get(meta.messageId);
       if (!message || !owner(message)) {
         d.skipped++;
-        warn("Unlinked host modification evidence");
+        warn2("Unlinked host modification evidence");
         return;
       }
       const block = message.blocks.find((b) => b.type === "tool_call" && b.callId === meta.messageId) ?? (message.id === meta.messageId && message.blocks.filter((b) => b.type === "tool_call").length === 1 ? message.blocks.find((b) => b.type === "tool_call") : void 0);
@@ -3391,38 +3320,23 @@ var HostHistoryImporter = class {
         d.skipped++;
         return;
       }
-      let identity;
+      let identity2;
       try {
-        identity = capture(meta.path).identity;
+        identity2 = capture(meta.path).identity;
         if (meta.oldPath) capture(meta.oldPath);
       } catch {
         d.skipped++;
         return;
       }
-      const key = `${block.callId}\0${identity}`;
+      const key = `${block.callId}\0${identity2}`;
       if (eventKeys.has(key)) return;
       eventKeys.add(key);
       events.push({ meta: { ...meta, messageId: block.callId }, directory, message, block, toolOnly });
     };
-    const relative = `review-changes/${sessionId}`;
-    try {
-      const dir = await this.checked(relative, true);
-      const entries = await import_promises8.default.readdir(dir, { withFileTypes: true });
-      if (entries.length > 4096) {
-        warn("Host modification directory limit exceeded");
-        return d;
-      }
-      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!ID.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
-        try {
-          const m = JSON.parse((await this.read(`${relative}/${entry.name}/meta.json`, 64 * 1024)).toString("utf8"));
-          if (object(m)) add(m, `${relative}/${entry.name}`);
-        } catch {
-          warn("Missing/corrupt host modification metadata");
-        }
-      }
+    if (this.archive) try {
+      for (const entry of await this.archive.changes(sessionId)) add(entry.meta, entry.directory);
     } catch (error) {
-      if (error.code !== "ENOENT") warn("Host modification directory unavailable or unsafe");
+      if (error.code !== "ENOENT") warn2("Host modification directory unavailable or unsafe");
     }
     for (const m of ordered) for (const b of m.blocks) {
       const review = b.result?.details?.review;
@@ -3435,7 +3349,7 @@ var HostHistoryImporter = class {
         add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
       } else {
         const name2 = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
-        if (!["write", "edit"].includes(name2) || typeof target !== "string" || !import_node_path9.default.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId)) || typeof b.callId !== "string") continue;
+        if (!["write", "edit"].includes(name2) || typeof target !== "string" || this.archive && !import_node_path8.default.isAbsolute(target) && !this.isScratch(root, sessionId) || typeof b.callId !== "string") continue;
         const text2 = name2 === "write" && typeof b.args.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name2, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
       }
@@ -3444,7 +3358,7 @@ var HostHistoryImporter = class {
     const capturedEndpoints = /* @__PURE__ */ new Map();
     const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
     const preparations = await inspectCaptureLeases(this.store).catch(() => {
-      warn("Capture preparation journal unavailable or unsafe");
+      warn2("Capture preparation journal unavailable or unsafe");
       return { fingerprint: "", leases: [] };
     });
     const preparedEvents = /* @__PURE__ */ new Map();
@@ -3496,7 +3410,7 @@ var HostHistoryImporter = class {
     }
     events.sort((a, b) => a.message.order - b.message.order);
     if (events.length > 4096) {
-      warn("Host event limit exceeded");
+      warn2("Host event limit exceeded");
       return d;
     }
     let evidenceBytes = 0;
@@ -3517,7 +3431,7 @@ var HostHistoryImporter = class {
           if (verified.kind === "text") {
             evidenceBytes += verified.size;
             if (evidenceBytes > 64 * 1024 * 1024) {
-              warn("Host candidate byte limit exceeded");
+              warn2("Host candidate byte limit exceeded");
               return d;
             }
             unique.set(key, verified);
@@ -3534,7 +3448,7 @@ var HostHistoryImporter = class {
       }
       evidenceBytes += e.before.size + e.after.size;
       if (evidenceBytes > 64 * 1024 * 1024) {
-        warn("Host snapshot byte limit exceeded");
+        warn2("Host snapshot byte limit exceeded");
         return d;
       }
     }
@@ -3571,7 +3485,7 @@ var HostHistoryImporter = class {
         if (restored.kind !== "text") continue;
         evidenceBytes += restored.size;
         if (evidenceBytes > 128 * 1024 * 1024) {
-          warn("Host recovered byte limit exceeded");
+          warn2("Host recovered byte limit exceeded");
           return d;
         }
         remember(restored);
@@ -3606,7 +3520,7 @@ var HostHistoryImporter = class {
       if (text2 !== void 0 && Buffer.byteLength(text2) <= MAX_TEXT_BYTES && digest(text2) === e.meta.afterHash) {
         evidenceBytes += Buffer.byteLength(text2);
         if (evidenceBytes > 128 * 1024 * 1024) {
-          warn("Host reconstructed byte limit exceeded");
+          warn2("Host reconstructed byte limit exceeded");
           return d;
         }
         e.after = snapshotFromBytes(Buffer.from(text2), 0);
@@ -3628,7 +3542,7 @@ var HostHistoryImporter = class {
     await this.store.init();
     await this.store.captureLock(async () => {
       if (preparedEvents.size && (await inspectCaptureLeases(this.store)).fingerprint !== preparations.fingerprint) {
-        warn("Capture preparation changed; retry recovery");
+        warn2("Capture preparation changed; retry recovery");
         return;
       }
       const existing = await this.store.listRuns(false, true);
@@ -3679,11 +3593,11 @@ var HostHistoryImporter = class {
         let migrating = false;
         if (previous && (previous.source !== "host-history" || previous.sessionId !== sessionId || previous.userMessageId !== user.id)) {
           d.skipped++;
-          warn("Existing run identity conflict; content preserved");
+          warn2("Existing run identity conflict; content preserved");
           continue;
         }
         if (previous && canonical(previous.root) !== canonical(root)) {
-          const verified = canonical(previous.root) === canonical(this.scratchRoot(sessionId)) && Object.values(previous.changes).every((change) => {
+          const verified = this.isScratch(previous.root, sessionId) && Object.values(previous.changes).every((change) => {
             const mapped = change.capture?.origin === "workspace" ? capture(change.capture.path).identity : change.capture?.identity;
             const linked = turnEvents.filter((e) => capture(e.meta.path).identity === mapped);
             return !!linked.length && !!change.evidence?.length && change.evidence.every((ref) => ref.startsWith("native:") && linked.some((e) => ref === `native:${e.meta.messageId}` && e.block?.status === "success")) && change.before.hash === linked[0].before.hash && linked.some((e) => e.after.hash === change.after.hash) && linked.every((e) => e.before.kind === "text" && e.after.kind === "text");
@@ -3700,14 +3614,14 @@ var HostHistoryImporter = class {
               await this.store.writeRun(previous);
             }
             d.skipped++;
-            warn("Existing run root conflict; content frozen; verified repair requires explicit approval");
+            warn2("Existing run root conflict; content frozen; verified repair requires explicit approval");
             continue;
           }
-          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises8.default.readFile(import_node_path9.default.join(this.store.directory, file), "utf8").catch((error) => {
+          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises7.default.readFile(import_node_path8.default.join(this.store.directory, file), "utf8").catch((error) => {
             if (error.code === "ENOENT") return null;
             throw error;
           })])));
-          await atomicJson(import_node_path9.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
+          await atomicJson(import_node_path8.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
         }
         if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
@@ -3734,7 +3648,7 @@ var HostHistoryImporter = class {
           for (const [value, change] of Object.entries(previous.changes)) if (!isImagePath(value) && !changes2[value] && (change.evidence ?? []).every(standardEvidence)) changes2[value] = change;
         }
         if (Object.keys(changes2).length > 256) {
-          warn("Turn exceeds 256 files; import skipped");
+          warn2("Turn exceeds 256 files; import skipped");
           d.skipped++;
           continue;
         }
@@ -3928,14 +3842,14 @@ function applyReview(before, hunks, expected) {
 }
 
 // src/core/host-evidence-store.ts
-var import_promises9 = __toESM(require("node:fs/promises"), 1);
-var import_node_path10 = __toESM(require("node:path"), 1);
+var import_promises8 = __toESM(require("node:fs/promises"), 1);
+var import_node_path9 = __toESM(require("node:path"), 1);
 init_storage();
 init_path_policy();
 
 // src/core/host-transcript.ts
 init_public_path();
-function hostEvidenceMessages(messages) {
+function hostEvidenceMessages(messages, sessionId, projectRoot2) {
   return messages.flatMap((value) => {
     if (!value || typeof value.id !== "string" || typeof value.role !== "string") return [];
     const meta = { status: value.status ?? value.meta?.status, parentMessageId: value.parentToolCallId ?? value.meta?.parentMessageId, userMessageId: value.meta?.userMessageId, steering: value.steering ?? value.meta?.steering };
@@ -3948,11 +3862,15 @@ function hostEvidenceMessages(messages) {
       const args = b.args ?? {}, result = b.result ?? {}, review = result.details?.review;
       if (isImagePath(String(review?.path ?? args.path ?? args.file_path ?? ""))) continue;
       try {
-        if (args.path !== void 0 || args.file_path !== void 0) assertPublicPath(args.path ?? args.file_path);
-        if (review?.path !== void 0) assertPublicPath(review.path);
-        if (review?.oldPath !== void 0) assertPublicPath(review.oldPath);
+        const check = (value2) => {
+          assertPublicPath(value2);
+          if (sessionId) assertSessionScratchPath(value2, sessionId, projectRoot2);
+        };
+        if (args.path !== void 0 || args.file_path !== void 0) check(args.path ?? args.file_path);
+        if (review?.path !== void 0) check(review.path);
+        if (review?.oldPath !== void 0) check(review.oldPath);
         if (name2 === "edit" && typeof args.ops === "string") {
-          for (const line of args.ops.split("\n")) if (line.startsWith("MV ")) assertPublicPath(line.slice(3).trim());
+          for (const line of args.ops.split("\n")) if (line.startsWith("MV ")) check(line.slice(3).trim());
         }
       } catch {
         continue;
@@ -3987,57 +3905,57 @@ var LIMIT = 8 * 1024 * 1024;
 var HostEvidenceStore = class {
   directory;
   constructor(dataPath) {
-    this.directory = import_node_path10.default.join(dataPath, "evidence");
+    this.directory = import_node_path9.default.join(dataPath, "evidence");
   }
   file(sessionId, root) {
-    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path10.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
-    return import_node_path10.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
+    return import_node_path9.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
   }
   async checkDirectory() {
-    const stat = await import_promises9.default.lstat(this.directory);
+    const stat = await import_promises8.default.lstat(this.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence directory");
   }
   async restore(buffer, sessionId, root) {
     const file = this.file(sessionId, root);
     if (buffer.messages(sessionId, canonical(root))) return;
     await this.checkDirectory();
-    let record;
+    let record2;
     try {
-      const stat = await import_promises9.default.lstat(file);
+      const stat = await import_promises8.default.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LIMIT) throw new Error("Unsafe persisted evidence record");
-      record = await readJson(file);
+      record2 = await readJson(file);
     } catch (error) {
       if (error.code === "ENOENT") return;
       throw error;
     }
-    if (record.version !== 1 || record.sessionId !== sessionId || record.root !== canonical(root) || !Array.isArray(record.messages) || record.messages.length > 1e5) throw new Error("Persisted evidence identity mismatch");
-    const source = JSON.stringify(hostEvidenceMessages(record.messages)), revision = evidenceRevision(source), chunks = evidenceChunks(source);
+    if (record2.version !== 1 || record2.sessionId !== sessionId || record2.root !== canonical(root) || !Array.isArray(record2.messages) || record2.messages.length > 1e5) throw new Error("Persisted evidence identity mismatch");
+    const source = JSON.stringify(hostEvidenceMessages(record2.messages)), revision = evidenceRevision(source), chunks = evidenceChunks(source);
     for (const [index, chunk] of chunks.entries()) buffer.append({ sessionId, root: canonical(root), revision, index, chunk, final: index === chunks.length - 1 });
   }
   async save(buffer, sessionId, root) {
     const file = this.file(sessionId, root), messages = buffer.messages(sessionId, canonical(root));
     if (!messages) return;
     await this.checkDirectory();
-    const record = { version: 1, sessionId, root: canonical(root), messages: hostEvidenceMessages(messages) };
-    const bytes = Buffer.byteLength(JSON.stringify(record));
+    const record2 = { version: 1, sessionId, root: canonical(root), messages: hostEvidenceMessages(messages) };
+    const bytes = Buffer.byteLength(JSON.stringify(record2));
     if (bytes > LIMIT) throw new Error("Persisted evidence exceeds 8 MiB limit");
-    const entries = (await import_promises9.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
-    const present = entries.includes(import_node_path10.default.basename(file));
+    const entries = (await import_promises8.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
+    const present = entries.includes(import_node_path9.default.basename(file));
     if (!present && entries.length >= MAX_RUNS) throw new Error("Persisted evidence session limit reached");
     let size = bytes;
-    for (const name2 of entries) if (name2 !== import_node_path10.default.basename(file)) {
-      const stat = await import_promises9.default.lstat(import_node_path10.default.join(this.directory, name2));
+    for (const name2 of entries) if (name2 !== import_node_path9.default.basename(file)) {
+      const stat = await import_promises8.default.lstat(import_node_path9.default.join(this.directory, name2));
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence record");
       size += stat.size;
     }
     if (size > MAX_HISTORY_BYTES) throw new Error("Persisted evidence exceeds 128 MiB capacity");
-    await atomicJson(file, record);
+    await atomicJson(file, record2);
   }
 };
 
 // src/git/local-management.ts
-var import_promises10 = __toESM(require("node:fs/promises"), 1);
-var import_node_path11 = __toESM(require("node:path"), 1);
+var import_promises9 = __toESM(require("node:fs/promises"), 1);
+var import_node_path10 = __toESM(require("node:path"), 1);
 var import_node_child_process2 = require("node:child_process");
 var import_node_crypto9 = require("node:crypto");
 init_libesm();
@@ -4095,9 +4013,9 @@ async function run(root, args, hooks = false, index) {
     );
     const out = [], err = [];
     let size = 0;
-    let failure;
+    let failure2;
     const abort = (code, message) => {
-      failure ??= Object.assign(new Error(message), { code });
+      failure2 ??= Object.assign(new Error(message), { code });
       child.kill();
     };
     const timer2 = setTimeout(() => abort("GIT_TIMEOUT", "Git timed out. Refresh and inspect the repository before retrying; a hook may have changed it."), hooks ? 9e4 : 3e4);
@@ -4109,12 +4027,12 @@ async function run(root, args, hooks = false, index) {
     child.stdout.on("data", (bytes) => collect(out, bytes));
     child.stderr.on("data", (bytes) => collect(err, bytes));
     child.on("error", (error) => {
-      failure ??= error;
+      failure2 ??= error;
     });
     child.on("close", (code) => {
       clearTimeout(timer2);
-      if (failure) {
-        reject(failure);
+      if (failure2) {
+        reject(failure2);
         return;
       }
       if (code !== 0) {
@@ -4127,10 +4045,10 @@ async function run(root, args, hooks = false, index) {
 }
 async function filePath(root, value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path11.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
+  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
   assertPublicPath(rel);
   const resolved = await safeResolve(root, rel);
-  const stat = await import_promises10.default.lstat(resolved).catch((error) => {
+  const stat = await import_promises9.default.lstat(resolved).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -4166,7 +4084,7 @@ async function status(root, includeStats = false) {
         await filePath(root, entry.path);
         if (inline) {
           try {
-            const stat = await import_promises10.default.lstat(import_node_path11.default.join(root, entry.path));
+            const stat = await import_promises9.default.lstat(import_node_path10.default.join(root, entry.path));
             if (stat.size <= 16 * 1024) entry.stats = untrackedStat(entry.path, await readSnapshot(root, entry.path));
           } catch {
           }
@@ -4196,7 +4114,7 @@ async function requireHead(root) {
 async function requireIdle(root) {
   for (const name2 of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
     const result = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", name2]);
-    if (await import_promises10.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
+    if (await import_promises9.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
   }
 }
 async function checkedDiffPaths(root, args) {
@@ -4210,7 +4128,7 @@ async function checkedDiffPaths(root, args) {
 }
 function historicalPath(value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path11.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file.");
+  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file.");
   assertPublicPath(rel);
   return rel;
 }
@@ -4269,8 +4187,8 @@ async function stats2(root, scope, paths) {
   const raw = tracked.length ? (await git(root, ["diff", "--numstat", "-z", ...diffFlags, ...scope === "staged" ? ["--cached"] : [], "--", ...tracked])).stdout : Buffer.alloc(0);
   const fields = new TextDecoder("utf-8", { fatal: true }).decode(raw).split(String.fromCharCode(0));
   const entries = [];
-  for (const record of fields.slice(0, -1)) {
-    const parts = record.split(String.fromCharCode(9));
+  for (const record2 of fields.slice(0, -1)) {
+    const parts = record2.split(String.fromCharCode(9));
     if (parts.length < 3) continue;
     const [adds, dels] = parts;
     const name2 = parts.slice(2).join(String.fromCharCode(9));
@@ -4320,7 +4238,7 @@ function commitMessage(args) {
 ${args.description.trim()}` : ""), "Commit message", 5e3);
 }
 async function indexBytes(index) {
-  return import_promises10.default.readFile(index).catch((error) => {
+  return import_promises9.default.readFile(index).catch((error) => {
     if (error.code === "ENOENT") return void 0;
     throw error;
   });
@@ -4338,7 +4256,7 @@ async function selectedCommit(root, args, message, state) {
   const previous = await headCommit(root);
   const realIndex = (await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).stdout.toString().trim();
   const original = await indexBytes(realIndex);
-  const token = `diff-view-commit-${(0, import_node_crypto9.randomUUID)()}`, isolated = import_node_path11.default.join(import_node_path11.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
+  const token = `diff-view-commit-${(0, import_node_crypto9.randomUUID)()}`, isolated = import_node_path10.default.join(import_node_path10.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
   let lock, ownsLock = false;
   try {
     await git(root, ["read-tree", ...previous ? [previous] : ["--empty"]], { index: isolated });
@@ -4358,17 +4276,17 @@ async function selectedCommit(root, args, message, state) {
     if (!oid || oid === previous) fail("COMMIT_NOT_CREATED", "Git did not create a new commit. Inspect hook output and refresh.");
     let notice;
     try {
-      if (original) await import_promises10.default.writeFile(nextIndex, original);
+      if (original) await import_promises9.default.writeFile(nextIndex, original);
       else await git(root, ["read-tree", "--empty"], { index: nextIndex });
       await git(root, ["reset", "-q", oid, "--", ...paths], { index: nextIndex });
-      lock = await import_promises10.default.open(`${realIndex}.lock`, "wx");
+      lock = await import_promises9.default.open(`${realIndex}.lock`, "wx");
       ownsLock = true;
       if (!sameIndex(original, await indexBytes(realIndex))) notice = "\u63D0\u4EA4\u5DF2\u6210\u529F\uFF0C\u4F46\u7D22\u5F15\u5728\u63D0\u4EA4\u671F\u95F4\u88AB\u5916\u90E8\u4FEE\u6539\uFF1B\u5DF2\u4FDD\u7559\u5916\u90E8\u6682\u5B58\uFF0C\u8BF7\u5237\u65B0\u6838\u5BF9\u3002";
       else {
-        await lock.writeFile(await import_promises10.default.readFile(nextIndex));
+        await lock.writeFile(await import_promises9.default.readFile(nextIndex));
         await lock.close();
         lock = void 0;
-        await import_promises10.default.rename(`${realIndex}.lock`, realIndex);
+        await import_promises9.default.rename(`${realIndex}.lock`, realIndex);
         ownsLock = false;
       }
     } catch {
@@ -4377,8 +4295,8 @@ async function selectedCommit(root, args, message, state) {
     return { ok: true, oid, ...output(result, notice) };
   } finally {
     await lock?.close().catch(() => void 0);
-    if (ownsLock) await import_promises10.default.unlink(`${realIndex}.lock`).catch(() => void 0);
-    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises10.default.unlink(file).catch(() => void 0);
+    if (ownsLock) await import_promises9.default.unlink(`${realIndex}.lock`).catch(() => void 0);
+    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises9.default.unlink(file).catch(() => void 0);
   }
 }
 async function discardTarget(root, values) {
@@ -4406,9 +4324,9 @@ var LocalGitManagement = class {
     if (!value || typeof value !== "object" || Array.isArray(value)) fail("INVALID_ARGUMENT", "Git management arguments are required.");
     const args = value;
     if (!operations.has(args.operation)) fail("INVALID_OPERATION", "Unsupported local-only Git operation.");
-    const roots = await Promise.all(allowedRoots.map((root2) => import_promises10.default.realpath(root2)));
+    const roots = await Promise.all(allowedRoots.map((root2) => import_promises9.default.realpath(root2)));
     const requested = args.root ?? (roots.length === 1 ? roots[0] : fail("ROOT_REQUIRED", "Select an authorized project root."));
-    const root = await import_promises10.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
+    const root = await import_promises9.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
     if (!roots.some((allowed) => canonical(allowed) === canonical(root))) fail("ROOT_DENIED", "Repository is not an authorized project root.");
     const key = canonical(root);
     const queue = queues.get(key) ?? new ReadWriteQueue(4);
@@ -4438,7 +4356,7 @@ var LocalGitManagement = class {
       const target = await discardTarget(root, args.paths);
       if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };
       if (args.fingerprint !== target.fingerprint) fail("FILE_CHANGED", "File or index changed since confirmation. Refresh and review before discarding.");
-      if (target.untracked) await import_promises10.default.unlink(await safeResolve(root, target.rel));
+      if (target.untracked) await import_promises9.default.unlink(await safeResolve(root, target.rel));
       else await run(root, ["restore", "--worktree", "--", target.rel]);
       return { ok: true };
     }
@@ -4590,13 +4508,13 @@ var dispatch = (method, args, allowedRoots) => localManagement.dispatch(method, 
 init_path_policy();
 
 // src/core/capture-context.ts
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_node_path11 = __toESM(require("node:path"), 1);
 init_path_policy();
 init_public_path();
 init_storage();
 var CAPTURE_CONTEXT_TTL = 6e3;
 async function writeCaptureContexts(directory, generation2, contexts2) {
-  await atomicJson(import_node_path12.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
+  await atomicJson(import_node_path11.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
 }
 
 // src/core/host-evidence-buffer.ts
@@ -4650,10 +4568,301 @@ var HostEvidenceBuffer = class {
   }
 };
 
+// src/core/public-host-source.ts
+init_public_path();
+var sessionIdPattern = /^[a-zA-Z0-9-]{1,80}$/;
+var MAX_BYTES = 8 * 1024 * 1024;
+var record = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var integer = (v) => Number.isSafeInteger(v) && v >= 0;
+var identity = (v) => typeof v === "string" && v.length > 0 && v.length <= 512 && !/[\0\r\n]/.test(v);
+function empty(sessionId, warning) {
+  return { sessionId, statusKnown: false, running: false, messages: [], complete: false, ...warning ? { warning } : {} };
+}
+function warn(snapshot, warning) {
+  const warnings = new Set(snapshot.warning?.split("; ") ?? []);
+  warnings.add(warning);
+  snapshot.warning = [...warnings].join("; ");
+}
+function failure(error, operation) {
+  const code = record(error) ? error.code ?? error.errorCode : void 0;
+  const message = error instanceof Error ? error.message : "";
+  return /denied|permission|forbidden|consent|权限/i.test(`${typeof code === "string" ? code : ""} ${message}`) ? "PUBLIC_HOST_PERMISSION_DENIED" : `PUBLIC_HOST_${operation}_FAILED`;
+}
+function projectRoot(value, sessionId) {
+  if (typeof value !== "string" || !/^(?:[a-z]:[\\/]|\/)/i.test(value)) return void 0;
+  try {
+    assertPublicPath(value);
+    assertSessionScratchPath(value, sessionId, value);
+    return value;
+  } catch {
+    return void 0;
+  }
+}
+function truncated(value, depth = 0) {
+  if (typeof value === "string") return value.includes("[truncated for display");
+  if (!value || typeof value !== "object") return false;
+  if (depth > 32) return true;
+  if (record(value) && (value.truncated === true || value._truncated === true || value.contentTruncated === true)) return true;
+  return Object.values(value).some((child) => truncated(child, depth + 1));
+}
+function createPublicHostSource(options = {}) {
+  const desktop = options.desktop, now = options.now ?? Date.now;
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 1500;
+  const ttlMs = Number.isFinite(options.ttlMs) ? Math.max(0, options.ttlMs) : 1e3;
+  const entries = /* @__PURE__ */ new Map(), queue = [];
+  let closed = false, active = 0;
+  function drain() {
+    while (!closed && active < 2 && queue.length) {
+      const next = queue.shift();
+      if (next.entry.done) next.cancel();
+      else next.start();
+    }
+  }
+  function discard(entry) {
+    for (let i = queue.length - 1; i >= 0; i--) if (queue[i].entry === entry) queue.splice(i, 1)[0].cancel();
+  }
+  function request(entry, call) {
+    return new Promise((resolve, reject) => {
+      const canceled = () => reject(new Error("PUBLIC_HOST_CANCELED"));
+      if (closed || entry.done) {
+        canceled();
+        return;
+      }
+      queue.push({ entry, cancel: canceled, start() {
+        active++;
+        Promise.resolve().then(() => {
+          if (closed || entry.done) throw new Error("PUBLIC_HOST_CANCELED");
+          return call();
+        }).then(resolve, reject).finally(() => {
+          active--;
+          drain();
+        });
+      } });
+      drain();
+    });
+  }
+  async function status2(entry) {
+    const snapshot = entry.snapshot;
+    try {
+      const value = await request(entry, () => desktop.invoke({ operation: "agent/getStatus", args: [snapshot.sessionId] }));
+      if (entry.done) return;
+      if (!record(value) || !record(value.status)) {
+        warn(snapshot, "PUBLIC_HOST_STATUS_FORMAT");
+        return;
+      }
+      const row = value.status;
+      if (row.sessionId !== snapshot.sessionId) {
+        warn(snapshot, "PUBLIC_HOST_STATUS_IDENTITY_MISMATCH");
+        return;
+      }
+      if (typeof row.isRunning !== "boolean" || row.currentTurnId != null && !identity(row.currentTurnId)) {
+        warn(snapshot, "PUBLIC_HOST_STATUS_FORMAT");
+        return;
+      }
+      snapshot.statusKnown = true;
+      snapshot.running = row.isRunning;
+      if (identity(row.currentTurnId)) snapshot.turnId = row.currentTurnId;
+    } catch (error) {
+      if (!entry.done) warn(snapshot, failure(error, "STATUS"));
+    }
+  }
+  async function transcript(entry) {
+    const snapshot = entry.snapshot;
+    let before, bytes = 2, count = 0, damaged = false;
+    const encoder2 = new TextEncoder();
+    for (let page = 0; page < 20 && !entry.done; page++) {
+      try {
+        const value = await request(entry, () => desktop.invoke({ operation: "session/get", args: [{
+          id: snapshot.sessionId,
+          messageLimit: 100,
+          contentLimit: 32768,
+          ...before === void 0 ? {} : { messageBefore: before }
+        }] }));
+        if (entry.done) return;
+        if (!record(value) || !record(value.session)) {
+          warn(snapshot, "PUBLIC_HOST_SESSION_FORMAT");
+          return;
+        }
+        const session = value.session;
+        if (session.id !== snapshot.sessionId) {
+          warn(snapshot, "PUBLIC_HOST_SESSION_IDENTITY_MISMATCH");
+          return;
+        }
+        if (!Array.isArray(session.messages)) {
+          warn(snapshot, "PUBLIC_HOST_SESSION_FORMAT");
+          return;
+        }
+        const field = (key) => session[key] ?? value[key];
+        const start = field("messageStart"), more = field("hasMoreBefore"), end = field("messageEnd");
+        const conflicts = ["messageStart", "hasMoreBefore", "messageEnd", "hasMoreAfter"].some((key) => session[key] !== void 0 && value[key] !== void 0 && session[key] !== value[key]);
+        if (conflicts || before !== void 0 && (!integer(start) || start >= before || end !== void 0 && end !== before)) {
+          warn(snapshot, "PUBLIC_HOST_PAGINATION_CURSOR");
+          return;
+        }
+        if (page === 0 && session.projectPath != null) {
+          snapshot.root = projectRoot(session.projectPath, snapshot.sessionId);
+          if (!snapshot.root) {
+            warn(snapshot, "PUBLIC_HOST_PROJECT_PATH_REJECTED");
+            damaged = true;
+          }
+        }
+        const rows = [];
+        if (truncated(session) || value.truncated === true || value._truncated === true) {
+          warn(snapshot, "PUBLIC_HOST_TRANSCRIPT_TRUNCATED");
+          damaged = true;
+        }
+        let limited = false;
+        for (const raw of session.messages) {
+          if (++count > 2e3) {
+            limited = true;
+            break;
+          }
+          try {
+            if (!record(raw) || !identity(raw.id) || !["user", "assistant", "tool", "system"].includes(raw.role) || raw.sessionId !== void 0 && raw.sessionId !== snapshot.sessionId) throw new Error();
+            const normalized = hostEvidenceMessages([raw], snapshot.root ? snapshot.sessionId : void 0, snapshot.root)[0];
+            if (!normalized || typeof normalized.createdAt !== "string" && typeof normalized.createdAt !== "number" && normalized.createdAt !== void 0 || Object.values(normalized.meta).some((v) => v !== void 0 && !["string", "boolean", "number"].includes(typeof v)) || normalized.blocks.some((b) => b.status !== void 0 && typeof b.status !== "string" || b.result?.isError !== void 0 && typeof b.result.isError !== "boolean")) throw new Error();
+            const text2 = JSON.stringify(normalized), size = encoder2.encode(text2).length + 1;
+            if (bytes + size > MAX_BYTES) {
+              limited = true;
+              break;
+            }
+            bytes += size;
+            rows.push(JSON.parse(text2));
+          } catch {
+            warn(snapshot, "PUBLIC_HOST_MESSAGE_FORMAT");
+            damaged = true;
+          }
+        }
+        snapshot.messages = [...rows, ...snapshot.messages];
+        if (limited) {
+          warn(snapshot, "PUBLIC_HOST_EVIDENCE_LIMIT");
+          return;
+        }
+        if (!integer(start) || typeof more !== "boolean" || end !== void 0 && (!integer(end) || end < start) || more && start === 0 || !more && start !== 0 || field("hasMoreAfter") !== void 0 && typeof field("hasMoreAfter") !== "boolean" || page === 0 && field("hasMoreAfter") === true) {
+          warn(snapshot, "PUBLIC_HOST_PAGINATION_INCOMPLETE");
+          return;
+        }
+        if (!more) {
+          snapshot.complete = !damaged;
+          return;
+        }
+        if (count >= 2e3 || page === 19) {
+          warn(snapshot, "PUBLIC_HOST_PAGE_LIMIT");
+          return;
+        }
+        before = start;
+      } catch (error) {
+        if (!entry.done) warn(snapshot, failure(error, "SESSION"));
+        return;
+      }
+    }
+  }
+  async function load(entry) {
+    try {
+      if (!desktop || typeof desktop.listOperations !== "function" || typeof desktop.invoke !== "function") {
+        entry.finish("PUBLIC_HOST_UNAVAILABLE");
+        return;
+      }
+      const directory = await request(entry, () => desktop.listOperations());
+      if (entry.done) return;
+      if (!Array.isArray(directory) || !directory.every((row) => record(row) && typeof row.id === "string" && typeof row.description === "string" && ["read", "write", "dangerous"].includes(row.risk))) {
+        entry.finish("PUBLIC_HOST_DIRECTORY_FORMAT");
+        return;
+      }
+      const operations2 = new Set(directory.filter((row) => row.risk === "read").map((row) => row.id));
+      const work = [];
+      if (operations2.has("agent/getStatus")) work.push(status2(entry));
+      else warn(entry.snapshot, "PUBLIC_HOST_STATUS_OPERATION_MISSING");
+      if (operations2.has("session/get")) work.push(transcript(entry));
+      else warn(entry.snapshot, "PUBLIC_HOST_SESSION_OPERATION_MISSING");
+      await Promise.all(work);
+      if (!entry.done) entry.finish();
+    } catch (error) {
+      if (!entry.done) entry.finish(failure(error, "DIRECTORY"));
+    }
+  }
+  function read(sessionId) {
+    if (closed) return Promise.resolve(empty(sessionId, "PUBLIC_HOST_CLOSED"));
+    if (typeof sessionId !== "string" || !sessionIdPattern.test(sessionId)) return Promise.resolve(empty("", "PUBLIC_HOST_INVALID_SESSION_ID"));
+    const cached = entries.get(sessionId);
+    if (cached && (!cached.done || cached.expires > now())) {
+      entries.delete(sessionId);
+      entries.set(sessionId, cached);
+      return cached.promise;
+    }
+    if (cached) entries.delete(sessionId);
+    if (entries.size >= 32) {
+      const oldest = [...entries].find(([, entry2]) => entry2.done);
+      if (oldest) entries.delete(oldest[0]);
+      else return Promise.resolve(empty(sessionId, "PUBLIC_HOST_CAPACITY"));
+    }
+    let resolve;
+    const promise = new Promise((done) => {
+      resolve = done;
+    });
+    const entry = { promise, snapshot: empty(sessionId), done: false, expires: 0, finish(warning, cache = true) {
+      if (entry.done) return;
+      entry.done = true;
+      clearTimeout(timer2);
+      discard(entry);
+      if (warning) {
+        warn(entry.snapshot, warning);
+        entry.snapshot.complete = false;
+      }
+      if (!cache || closed) {
+        if (entries.get(sessionId) === entry) entries.delete(sessionId);
+      } else entry.expires = now() + ttlMs;
+      resolve(entry.snapshot);
+    } };
+    const timer2 = setTimeout(() => entry.finish("PUBLIC_HOST_TIMEOUT", false), timeoutMs);
+    entries.set(sessionId, entry);
+    void load(entry);
+    return promise;
+  }
+  return {
+    read,
+    invalidate(sessionId) {
+      for (const [id2, entry] of entries) if (sessionId === void 0 || id2 === sessionId) {
+        entries.delete(id2);
+        entry.finish("PUBLIC_HOST_INVALIDATED", false);
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      for (const entry of entries.values()) entry.finish("PUBLIC_HOST_CLOSED", false);
+      entries.clear();
+    }
+  };
+}
+
+// src/core/public-session-context.ts
+function publicSessionContext(snapshot, now = Date.now()) {
+  const time2 = (value) => {
+    const n = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : 0;
+    return Number.isSafeInteger(n) && n > 0 && n <= now ? n : 0;
+  };
+  const users = snapshot.messages.filter((m) => m.role === "user" && !m.meta.parentMessageId && !m.meta.steering);
+  const children = collectDelegations(snapshot.messages).filter((child) => child.status === "running");
+  const candidates = snapshot.running ? users : users.filter((user2) => children.some((child) => child.owner === user2.id));
+  const user = candidates.at(-1), since = user ? time2(user.createdAt) : 0;
+  const valid = !!user && /^[a-zA-Z0-9-]{1,256}$/.test(user.id) && since > 0 && !candidates.some((other) => other.id !== user.id && time2(other.createdAt) === since);
+  return {
+    sessionId: snapshot.sessionId,
+    root: snapshot.root,
+    statusKnown: snapshot.statusKnown,
+    running: snapshot.running || children.length > 0,
+    mainRunning: snapshot.statusKnown ? snapshot.running : void 0,
+    ...valid ? { taskId: user.id, since } : {},
+    ...snapshot.turnId ? { turnId: snapshot.turnId } : {},
+    updatedAt: now
+  };
+}
+
 // src/core/system-open.ts
 var import_node_child_process3 = require("node:child_process");
-var import_promises11 = __toESM(require("node:fs/promises"), 1);
-var import_node_path13 = __toESM(require("node:path"), 1);
+var import_promises10 = __toESM(require("node:fs/promises"), 1);
+var import_node_path12 = __toESM(require("node:path"), 1);
 init_path_policy();
 var script = `
 $ErrorActionPreference = 'Stop'
@@ -4690,7 +4899,7 @@ function getLauncher() {
   if (launcher) return launcher;
   const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
   if (!/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) fail("SYSTEM_OPEN_FAILED", "Invalid Windows system directory");
-  const executable = import_node_path13.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const executable = import_node_path12.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const child = (0, import_node_child_process3.spawn)(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedScript], {
     shell: false,
     windowsHide: true,
@@ -4787,7 +4996,7 @@ function closeSystemOpener() {
   launcher?.stop(unloaded());
 }
 async function assertRegularFile(target) {
-  const stat = await import_promises11.default.lstat(target).catch((error) => {
+  const stat = await import_promises10.default.lstat(target).catch((error) => {
     if (error.code === "ENOENT") fail("FILE_NOT_FOUND", "\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u7CFB\u7EDF\u6253\u5F00\u3002 / The file no longer exists.");
     throw error;
   });
@@ -4797,7 +5006,7 @@ async function openSystemFile(target, options = {}) {
   if (process.platform !== "win32") fail("SYSTEM_OPEN_UNSUPPORTED", "\u7CFB\u7EDF\u6253\u5F00\u76EE\u524D\u4EC5\u652F\u6301 Windows\u3002 / System open currently supports Windows only.");
   if (options.signal?.aborted) throw unloaded();
   assertPublicPath(target);
-  if (!import_node_path13.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
+  if (!import_node_path12.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
   if (activeOpen) fail("SYSTEM_OPEN_BUSY", "A system-open request is already pending");
   const token = {}, generation2 = epoch;
   activeOpen = token;
@@ -4827,13 +5036,15 @@ async function openSystemFile(target, options = {}) {
 // src/main.ts
 var surfaces = new ReviewSurfaces();
 var evidenceStore = null;
+var publicSource = null;
+var publicUpdates = /* @__PURE__ */ new Map();
 var systemOpenController = new AbortController();
 var evidence = new HostEvidenceBuffer();
 var history = null;
 var contexts = /* @__PURE__ */ new Map();
 var reviewPreparations = /* @__PURE__ */ new Map();
 var sessionRoots = /* @__PURE__ */ new Map();
-var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
+var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown === true && context.evidenceComplete !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 var service = null;
 var store = null;
 var repositoryQueue = new ReadWriteQueue(4);
@@ -4856,7 +5067,7 @@ var rendererStages = {};
 var runningDiagnostic;
 var rendererDiagnostic;
 async function saveRendererStatus() {
-  if (store && !disposed) await atomicJson(import_node_path14.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+  if (store && !disposed) await atomicJson(import_node_path13.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
 }
 var navigation = new ReviewNavigationStore();
 function serial(work) {
@@ -4954,27 +5165,29 @@ async function heartbeat() {
 async function onLoad() {
   disposed = false;
   generation = (0, import_node_crypto10.randomUUID)();
-  pluginRoot = await import_promises12.default.realpath(__dirname);
+  pluginRoot = await import_promises11.default.realpath(__dirname);
   surfaces.clear();
   systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
   await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
-  const parent = import_node_path14.default.dirname(dataPath), plugins = import_node_path14.default.dirname(parent);
-  history = import_node_path14.default.basename(parent) === "data" && import_node_path14.default.basename(plugins) === "plugins" ? new HostHistoryImporter(store, import_node_path14.default.dirname(plugins)) : null;
+  history = new HostHistoryImporter(store);
+  publicSource?.close();
+  publicSource = createPublicHostSource({ desktop: pi.desktop ? { listOperations: () => pi.desktop.listOperations(), invoke: (input) => pi.desktop.invoke(input) } : void 0 });
+  publicUpdates.clear();
   contexts.clear();
   evidence.clear();
   reviewPreparations.clear();
   savedRefreshes.clear();
   sessionRoots.clear();
-  const savedRoots = await readJson(import_node_path14.default.join(store.directory, "session-roots.json"), {});
-  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path14.default.isAbsolute(root)) sessionRoots.set(id2, root);
+  const savedRoots = await readJson(import_node_path13.default.join(store.directory, "session-roots.json"), {});
+  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path13.default.isAbsolute(root)) sessionRoots.set(id2, root);
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
   navigation.clear();
-  navigation.restore(await readJson(import_node_path14.default.join(store.directory, "selections.json"), []));
+  navigation.restore(await readJson(import_node_path13.default.join(store.directory, "selections.json"), []));
   await saveRendererStatus();
   await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot);
@@ -5019,6 +5232,9 @@ async function onUnload() {
   disposed = true;
   if (timer) clearInterval(timer);
   timer = void 0;
+  publicSource?.close();
+  publicSource = null;
+  publicUpdates.clear();
   surfaces.clear();
   systemOpenController.abort();
   closeSystemOpener();
@@ -5035,7 +5251,7 @@ async function onUnload() {
   contexts.clear();
   reviewPreparations.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises12.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises11.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -5049,6 +5265,23 @@ async function onRendererCall(method, args) {
 }
 async function dispatch2(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
+  if (method === "sessionState") {
+    const source = publicSource, s = service, id2 = args?.sessionId;
+    if (typeof id2 !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(id2)) fail("SESSION_REQUIRED", "Invalid session identity");
+    const snapshot = await source.read(id2);
+    if (disposed || service !== s || publicSource !== source) fail("PLUGIN_UNLOADED", "Diff view unloaded");
+    const context = publicSessionContext(snapshot);
+    if (!publicUpdates.has(id2)) {
+      publicUpdates.set(id2, { snapshot, observedAt: Date.now() });
+      void serial(async () => {
+        const latest = publicUpdates.get(id2);
+        publicUpdates.delete(id2);
+        if (!disposed && service === s && latest) await applyPublicSnapshot(latest.snapshot, void 0, latest.observedAt);
+      }).catch(() => {
+      });
+    } else publicUpdates.set(id2, { snapshot, observedAt: Date.now() });
+    return { ...context, updatedAt: void 0, evidenceRevision: evidenceRevision(JSON.stringify(snapshot.messages)) };
+  }
   if (method === "reviewSurface") {
     const request = args;
     if (request?.nonce != null) {
@@ -5070,7 +5303,6 @@ async function dispatch2(method, args) {
     return result;
   }
   if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openSystemFile") return execute(service, method, args ?? {});
-  if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
     const stage = args?.stage;
     if (typeof stage !== "string" || !/^(entry-loaded|reply-slot-mounted|card-bound|session-ready|session-source-error|sidebar-opened|view-targeted|bootstrap-ok|bootstrap-error|card-query-error|composer-mounted|composer-source-error|composer-layer-error|composer-anchor-missing|composer-anchor-offscreen|composer-positioned|running-idle|running-identity-missing|running-ready|running-query-empty|running-query-error|running-visible|running-click-error)$/.test(stage)) fail("INVALID_STAGE", "Unknown renderer diagnostic stage");
@@ -5099,10 +5331,34 @@ async function sessionRoot(args) {
   const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
   if (roots.length && typeof args.root === "string" && roots.some((r) => canonical(r) === canonical(args.root))) return args.root;
   const retained = sessionRoots.get(args.sessionId) ?? contexts.get(args.sessionId)?.root;
-  if (retained && (canonical(retained) === canonical(history?.scratchRoot(args.sessionId) ?? "") || !args.root || canonical(args.root) === canonical(retained))) return retained;
-  if (roots.length || typeof args.root === "string" && history && canonical(args.root) !== canonical(history.scratchRoot(args.sessionId))) return void 0;
-  if (history && store && (await store.listRuns(false, true)).some((r) => r.sessionId === args.sessionId && canonical(r.root) !== canonical(history.scratchRoot(args.sessionId)))) return void 0;
-  return history?.scratchRoot(args.sessionId);
+  if (retained && (!args.root || canonical(args.root) === canonical(retained))) return retained;
+  const recorded = (await store.listRuns(false, true)).filter((run2) => run2.sessionId === args.sessionId && (!args.root || canonical(run2.root) === canonical(args.root)));
+  const candidates = [...new Set(recorded.map((run2) => canonical(run2.root)))];
+  return candidates.length === 1 ? recorded[0].root : void 0;
+}
+async function applyPublicSnapshot(snapshot, fallbackRoot, observedAt = Date.now()) {
+  const metadata2 = publicSessionContext(snapshot, observedAt);
+  if (metadata2.root) sessionRoots.set(snapshot.sessionId, metadata2.root);
+  const root = await sessionRoot({ sessionId: snapshot.sessionId, root: metadata2.root ?? fallbackRoot });
+  if (!root) {
+    contexts.delete(snapshot.sessionId);
+    await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
+    return;
+  }
+  sessionRoots.set(snapshot.sessionId, root);
+  while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
+  await atomicJson(import_node_path13.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
+  await evidenceStore.restore(evidence, snapshot.sessionId, root);
+  const text2 = JSON.stringify(hostEvidenceMessages(snapshot.messages, snapshot.sessionId, root)), revision = evidenceRevision(text2), chunks = evidenceChunks(text2);
+  for (const [index, chunk] of chunks.entries()) evidence.append({ sessionId: snapshot.sessionId, root: canonical(root), revision, index, chunk, final: index === chunks.length - 1 });
+  if (snapshot.messages.length) await evidenceStore.save(evidence, snapshot.sessionId, root);
+  const previous = contexts.get(snapshot.sessionId);
+  const context = { ...metadata2, root, syncedAt: previous?.syncedAt ?? 0, prepared: previous?.prepared, evidenceComplete: snapshot.complete };
+  contexts.delete(snapshot.sessionId);
+  contexts.set(snapshot.sessionId, context);
+  while (contexts.size > 200) contexts.delete(contexts.keys().next().value);
+  await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
+  return context;
 }
 async function recordedReview(s, args, context) {
   if (!history) return s.review(args);
@@ -5111,6 +5367,11 @@ async function recordedReview(s, args, context) {
   await store.importInbox(generation);
   const recorded = args.runId ? await store.getRun(args.runId, false, false) : (await store.listRuns(false, true)).find((run2) => run2.sessionId === args.sessionId && (!args.root || canonical(run2.root) === canonical(args.root)));
   const owned = recorded?.sessionId === args.sessionId ? recorded : void 0;
+  if (!context || Date.now() - context.updatedAt > 1e3 || args.retrySync) {
+    if (args.retrySync) publicSource.invalidate(args.sessionId);
+    const snapshot = await publicSource.read(args.sessionId);
+    context = await applyPublicSnapshot(snapshot, args.root ?? owned?.root) ?? context;
+  }
   const candidate = args.root ?? context?.root ?? sessionRoots.get(args.sessionId) ?? owned?.root;
   const root = await sessionRoot({ sessionId: args.sessionId, root: candidate }) ?? (owned && candidate && canonical(owned.root) === canonical(candidate) ? owned.root : void 0);
   if (!root && args.root) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
@@ -5169,61 +5430,24 @@ async function execute(s, method, args) {
       if (canonical(current.path) !== canonical(target.path)) fail("FILE_CHANGED", "File identity changed; refresh before opening");
     } });
   }
-  if (method === "sessionEvidence") {
-    const root = await sessionRoot(args);
-    if (!root) fail("ROOT_DENIED", "Unauthorized evidence project");
-    if (args.index === 0) await evidenceStore.restore(evidence, args.sessionId, root);
-    evidence.append({ ...args, root: canonical(root) });
-    if (args.final === true) {
-      await evidenceStore.save(evidence, args.sessionId, root);
-      const preparation = reviewPreparations.get(JSON.stringify([args.sessionId, canonical(root)]));
-      if (preparation) preparation.attemptedAt = 0;
-      const current = contexts.get(args.sessionId);
-      if (current && canonical(current.root) === canonical(root)) {
-        current.syncedAt = 0;
-        current.prepared = false;
-      }
-    }
-    return { ok: true };
-  }
+  if (method === "sessionEvidence") fail("PUBLIC_SOURCE_REQUIRED", "Evidence is collected by the backend public source");
   if (method === "gitManage") {
     const workspace = await pi.workspace.get();
     const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
     return dispatch(method, args, roots);
   }
   if (method === "sessionContext") {
-    const root = await sessionRoot(args);
-    if (!root) {
-      const warning = "\u4F1A\u8BDD\u9879\u76EE\u8DEF\u5F84\u7F3A\u5931\u6216\u672A\u6388\u6743\uFF0C\u672A\u5BFC\u5165\u5386\u53F2\u3002";
-      contexts.delete(args.sessionId);
-      await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
-      return { ok: false, warning };
-    }
-    sessionRoots.set(args.sessionId, root);
-    while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
-    await atomicJson(import_node_path14.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
-    const now = Date.now();
-    const taskId = typeof args.taskId === "string" && /^[a-zA-Z0-9-]{1,256}$/.test(args.taskId) ? args.taskId : void 0;
-    const since = Number.isSafeInteger(args.since) && args.since > 0 && args.since <= now ? args.since : void 0;
-    contexts.delete(args.sessionId);
-    contexts.set(args.sessionId, { sessionId: args.sessionId, root, running: args.running === true, mainRunning: typeof args.mainRunning === "boolean" ? args.mainRunning : void 0, statusKnown: args.statusKnown !== false, taskId, since, syncedAt: 0, prepared: false, updatedAt: now });
-    while (contexts.size > 200) contexts.delete(contexts.keys().next().value);
-    await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
-    await evidenceStore.restore(evidence, args.sessionId, root);
-    if (!history) return { ok: false, warning: "\u5BBF\u4E3B\u5386\u53F2\u8DEF\u5F84\u5951\u7EA6\u4E0D\u5339\u914D\uFF0C\u672A\u5BFC\u5165\u5386\u53F2\u3002" };
+    const snapshot = await publicSource.read(args.sessionId);
+    const current = await applyPublicSnapshot(snapshot, args.root);
+    if (!current) return { ok: false, warning: "\u4F1A\u8BDD\u9879\u76EE\u8DEF\u5F84\u7F3A\u5931\u6216\u672A\u6838\u9A8C\uFF1B\u672A\u5BFC\u5165\u5386\u53F2\u3002" };
     await store.importInbox(generation);
-    const current = contexts.get(args.sessionId);
-    const result = await history.syncSession(args.sessionId, root, freshHistoryContext(current));
+    const result = await history.syncSession(args.sessionId, current.root, freshHistoryContext(current));
     current.syncedAt = Date.now();
     current.prepared = result.warnings.length === 0;
     store.acknowledgeRecovery(args.sessionId);
     return result;
   }
   const context = typeof args?.sessionId === "string" ? contexts.get(args.sessionId) : void 0;
-  if (method === "runningChanges" && context?.running && context.taskId === args.taskId && context.since === args.since) {
-    context.updatedAt = Date.now();
-    await writeCaptureContexts(store.directory, generation, [...contexts.values()]);
-  }
   if (method === "review" && (args.scope === "turn" || args.scope === "lastTurn")) return recordedReview(s, args, context);
   if (history && context && ["runningChanges", "replyCards", "bootstrap", "turnSummary"].includes(method) && (store.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2e3)) {
     const result = await history.syncSession(args.sessionId, context.root, freshHistoryContext(context));
@@ -5251,15 +5475,20 @@ async function execute(s, method, args) {
     return { ok: true };
   }
   if (method === "selectTurn") {
+    if (args.scope === "lastTurn") {
+      if (typeof args.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId) || args.fileId != null || args.root != null) fail("NAVIGATION_INVALID", "Latest-turn entry requires a session without a fixed file or project");
+      const selection2 = navigation.set({ scope: "lastTurn", sessionId: args.sessionId });
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+      return selection2;
+    }
     if (typeof args?.sessionId !== "string" || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== "string" || !args.runId || args.runId.length > 128 || args.fileId != null && (typeof args.fileId !== "string" || args.fileId.length > 256)) fail("NAVIGATION_INVALID", "Invalid recorded-task target");
     if (args.scope != null && args.scope !== "turn" && args.scope !== "lastTurn") fail("NAVIGATION_INVALID", "Invalid recorded-task scope");
-    if (args.scope === "lastTurn" && (args.runningSince == null || args.fileId != null)) fail("NAVIGATION_INVALID", "Latest-turn entry requires a running task without a fixed file");
     const version = navigationVersion;
     const run2 = await s.selectTarget(args);
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
     if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
-    const selection = args.scope === "lastTurn" ? navigation.set({ scope: "lastTurn", sessionId: run2.sessionId }) : navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
-    await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), navigation.export());
+    const selection = navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
+    await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
   }
   if (method === "readTurnSelection") {
@@ -5271,7 +5500,7 @@ async function execute(s, method, args) {
     const target = await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
     if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
       const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store.resolveFileId(selection.request.runId, selection.fileId));
-      await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), navigation.export());
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
       return repaired;
     }
     return selection;
@@ -5287,7 +5516,7 @@ async function execute(s, method, args) {
       evidence.clear();
       reviewPreparations.clear();
       navigation.clear();
-      await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), []);
+      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {
       navigationClearing = false;

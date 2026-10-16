@@ -1,8 +1,9 @@
+import { publicSessionContext } from '../../src/core/public-session-context';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { HostHistoryImporter, hostHistoryRunId } from '../../src/core/host-history';
+import { HostHistoryImporter, hostHistoryRunId } from '../helpers/history-fixture';
 import { SnapshotStore } from '../../src/core/storage';
 import { ReviewService } from '../../src/core/review-service';
 import { canonical, digest, snapshotOfText } from '../../src/core/path-policy';
@@ -65,7 +66,7 @@ it('does not turn overlapping or discontinuous endpoints into an automatic merge
 it('keeps only safe delegation lifecycle metadata and follows the launch owner while the main is idle', () => {
   const messages = [{ id: 'u', role: 'user', createdAt: t }, { id: 'task-row', role: 'tool', createdAt: t + 1, toolCallId: 'task', toolName: 'Task', toolStatus: 'success', toolArgs: { task: 'SECRET' }, toolResult: { details: { delegationId: 'd', status: 'running', startedAt: t + 1, report: 'SECRET', agent: 'fixer' } } }, { id: 'u2', role: 'user', createdAt: t + 2 }];
   const normalized = hostEvidenceMessages(messages); expect(normalized[1].blocks[0].result.details).toMatchObject({ delegationId: 'd', status: 'running', startedAt: t + 1 }); expect(JSON.stringify(normalized)).not.toContain('SECRET');
-  expect(runningActivity({ activeSessionId: sid, page: 'chat', runningSessions: { [sid]: false }, messages } as any)).toMatchObject({ sessionId: sid, taskId: 'u', since: t });
+  expect(runningActivity(publicSessionContext({ sessionId: sid, running: false, statusKnown: true, complete: true, messages: normalized }))).toMatchObject({ sessionId: sid, taskId: 'u', since: t });
 });
 
 it('retains late aliased source endpoints without a duplicate entry or leaking into a newer USER', async () => {

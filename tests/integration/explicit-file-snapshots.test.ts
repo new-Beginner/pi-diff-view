@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { createCaptureExtension } from '../../src/agent/capture';
 import { SnapshotStore, atomicJson } from '../../src/core/storage';
 import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/core/path-policy';
-import { HostHistoryImporter, hostHistoryRunId } from '../../src/core/host-history';
+import { HostHistoryImporter, hostHistoryRunId } from '../helpers/history-fixture';
 import { ReviewService } from '../../src/core/review-service';
 import type { CaptureRun } from '../../src/core/contracts';
 import { inspectCaptureLeases } from '../../src/agent/workspace-capture';
