@@ -1,6 +1,6 @@
+import { assertSessionScratchPath } from './public-path';
 import { collectDelegations } from './delegation-lifecycle';
 import fs from 'node:fs/promises';
-import { constants } from 'node:fs';
 import path from 'node:path';
 import { MAX_CAPTURE_SEGMENTS, MAX_TEXT_BYTES, type CaptureRun, type CapturedChange, type CaptureIdentity, type FileSnapshot } from './contracts';
 import { absentSnapshot, assertPublicPath, canonical, digest, inside, snapshotFromBytes } from './path-policy';
@@ -23,55 +23,28 @@ const time = (v: unknown): number => { const n = typeof v === 'number' ? v : typ
 export const hostHistoryRunId = (sessionId: string, userMessageId: string): string => `host-${digest(`${sessionId}\0${userMessageId}`).slice(0, 48)}`;
 const unknownSnapshot = (exists: boolean, hash: unknown, label: string): FileSnapshot => ({ exists, text: null, hash: typeof hash === 'string' && HASH.test(hash) ? hash : `unavailable:${label}`, size: 0, mode: 0, kind: 'unavailable' });
 
-/** Trusted constructor root only; callers may select a session, never a source directory.
- * No workspace stat/read/realpath or Git operation is used to reconstruct history.
+/** Optional archive adapter is injected by offline migration/test callers only.
+ * Production passes no archive: evidence arrives via the official desktop API.
  */
+export interface HistoryEvidenceSource {
+  privateRoot: string;
+  scratchRoot(sessionId: string): string;
+  transcript(sessionId: string): Promise<string>;
+  changes(sessionId: string): Promise<{ meta: RecordValue; directory: string }[]>;
+  snapshot(directory: string, side: 'before' | 'after'): Promise<Buffer>;
+}
+/** Reconciles supplied structural evidence with plugin-owned capture blobs. */
 export class HostHistoryImporter {
-  private readonly hostDataRoot: string;
-  constructor(private readonly store: SnapshotStore, hostDataRoot: string) {
-    if (!path.isAbsolute(hostDataRoot)) throw new Error('Host data root must be absolute');
-    this.hostDataRoot = path.resolve(hostDataRoot);
-  }
-  /** Native session scratch contract; this root is for recording only, never disk actions. */
-  scratchRoot(sessionId: string): string {
-    if (!ID.test(sessionId)) throw new Error('Invalid history session');
-    return path.join(this.hostDataRoot, 'scratch', sessionId);
-  }
-  private async checked(relative: string, directory = false): Promise<string> {
-    const target = path.resolve(this.hostDataRoot, relative);
-    if (!inside(this.hostDataRoot, target)) throw new Error('Host evidence escape');
-    let cursor = path.parse(target).root;
-    for (const segment of target.slice(cursor.length).split(path.sep)) {
-      cursor = path.join(cursor, segment);
-      const stat = await fs.lstat(cursor);
-      if (stat.isSymbolicLink() || (cursor !== target && !stat.isDirectory())) throw new Error('Unsafe host evidence ancestry');
-    }
-    const stat = await fs.lstat(target);
-    if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error('Invalid host evidence type');
-    return target;
-  }
-  private async read(relative: string, limit: number): Promise<Buffer> {
-    const file = await this.checked(relative);
-    const initial = await fs.lstat(file);
-    const handle = await fs.open(file, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size > limit || stat.ino !== initial.ino || stat.dev !== initial.dev) throw new Error('Host evidence limit/identity');
-      const bytes = Buffer.alloc(Math.min(limit + 1, stat.size + 1));
-      let length = 0;
-      while (length < bytes.length) { const r = await handle.read(bytes, length, bytes.length - length, length); if (!r.bytesRead) break; length += r.bytesRead; }
-      const after = await handle.stat();
-      await this.checked(relative);
-      const live = await fs.lstat(file);
-      if (length > limit || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || live.ino !== stat.ino || live.dev !== stat.dev) throw new Error('Host evidence changed; retry sync');
-      return bytes.subarray(0, length);
-    } finally { await handle.close(); }
+  constructor(private readonly store: SnapshotStore, private readonly archive?: HistoryEvidenceSource) {}
+  private isScratch(root: string, sessionId: string): boolean {
+    return !!this.archive && canonical(root) === canonical(this.archive.scratchRoot(sessionId));
   }
   private capture(root: string, value: string, sessionId: string): CaptureIdentity {
     assertPublicPath(value);
     const absolutePath = path.resolve(root, value);
+    assertSessionScratchPath(absolutePath, sessionId, root);
     assertPublicPath(absolutePath);
-    if ((inside(this.hostDataRoot, absolutePath) && !inside(this.scratchRoot(sessionId), absolutePath)) || inside(this.store.directory, absolutePath)) throw new Error('Private history path');
+    if ((this.archive && inside(this.archive.privateRoot, absolutePath) && !inside(this.archive.scratchRoot(sessionId), absolutePath)) || inside(this.store.directory, absolutePath)) throw new Error('Private history path');
     const origin = inside(root, absolutePath) ? 'workspace' : 'external';
     if (origin === 'external' && !path.isAbsolute(value)) throw new Error('Relative external history path');
     const display = origin === 'workspace' ? path.relative(root, absolutePath).split(path.sep).join('/') : absolutePath;
@@ -84,7 +57,8 @@ export class HostHistoryImporter {
     if (exists === false) return absentSnapshot();
     if (event.directory) {
       try {
-        const bytes = await this.read(`${event.directory}/${side}`, MAX_TEXT_BYTES);
+        const bytes = await this.archive?.snapshot(event.directory, side);
+        if (!bytes || bytes.length > MAX_TEXT_BYTES) throw new Error('Snapshot unavailable');
         // A before file is itself host evidence; after requires a matching recorded hash.
         if ((side === 'before' && !hash) || (typeof hash === 'string' && HASH.test(hash) && digest(bytes) === hash)) return snapshotFromBytes(bytes, 0);
       } catch { /* Missing/corrupt/oversized evidence stays explicitly unavailable. */ }
@@ -114,9 +88,11 @@ export class HostHistoryImporter {
         }
       });
     }
-    let source: string;
-    try { source = (await this.read(`sessions/${sessionId}.jsonl`, 64 * 1024 * 1024)).toString('utf8'); }
-    catch { if ((typeof options === 'boolean' || !options.messages?.length) && !(taskId && since)) { warn('Session evidence unavailable or unsafe'); return d; } source = ''; }
+    let source = '';
+    if (this.archive) {
+      try { source = await this.archive.transcript(sessionId); }
+      catch { if ((typeof options === 'boolean' || !options.messages?.length) && !(taskId && since)) { warn('Session evidence unavailable or unsafe'); return d; } }
+    }
     const messages = new Map<string, Message>();
     let malformed = false, order = 0;
     const liveMessages = typeof options === 'boolean' ? [] : options.messages ?? [];
@@ -173,16 +149,8 @@ export class HostHistoryImporter {
       eventKeys.add(key);
       events.push({ meta: { ...meta, messageId: block.callId }, directory, message, block, toolOnly });
     };
-    const relative = `review-changes/${sessionId}`;
-    try {
-      const dir = await this.checked(relative, true);
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      if (entries.length > 4096) { warn('Host modification directory limit exceeded'); return d; }
-      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!ID.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
-        try { const m: unknown = JSON.parse((await this.read(`${relative}/${entry.name}/meta.json`, 64 * 1024)).toString('utf8')); if (object(m)) add(m, `${relative}/${entry.name}`); }
-        catch { warn('Missing/corrupt host modification metadata'); }
-      }
+    if (this.archive) try {
+      for (const entry of await this.archive.changes(sessionId)) add(entry.meta, entry.directory);
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warn('Host modification directory unavailable or unsafe'); }
     // Structured host reviews are evidence even when their snapshot folder has disappeared.
     // Never interpret Bash command strings/stdout as modification events.
@@ -196,7 +164,7 @@ export class HostHistoryImporter {
         // Successful native Write/Edit calls are evidence even without native review snapshots.
         // Missing before bytes stay unknown; never assume Write created an absent file.
         const name = String(b.name).split('.').pop()!.toLowerCase(), target = b.args?.path ?? b.args?.file_path;
-        if (!['write', 'edit'].includes(name) || typeof target !== 'string' || (!path.isAbsolute(target) && canonical(root) !== canonical(this.scratchRoot(sessionId))) || typeof b.callId !== 'string') continue;
+        if (!['write', 'edit'].includes(name) || typeof target !== 'string' || (this.archive && !path.isAbsolute(target) && !this.isScratch(root, sessionId)) || typeof b.callId !== 'string') continue;
         const text = name === 'write' && typeof b.args.content === 'string' && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : undefined;
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name, ...(text !== undefined ? { afterExists: true, afterHash: digest(text) } : {}) }, undefined, true);
       }
@@ -419,7 +387,7 @@ export class HostHistoryImporter {
         if (previous && canonical(previous.root) !== canonical(root)) {
           // Root migration is opt-in and restricted to a demonstrably mis-scoped scratch record.
           // Exact tool IDs, absolute path identity and native endpoint hashes must corroborate every old file.
-          const verified = canonical(previous.root) === canonical(this.scratchRoot(sessionId)) && Object.values(previous.changes).every(change => {
+          const verified = this.isScratch(previous.root, sessionId) && Object.values(previous.changes).every(change => {
             const mapped = change.capture?.origin === 'workspace' ? capture(change.capture.path).identity : change.capture?.identity;
             const linked = turnEvents.filter(e => capture(e.meta.path).identity === mapped);
             return !!linked.length && !!change.evidence?.length && change.evidence.every(ref => ref.startsWith('native:') && linked.some(e => ref === `native:${e.meta.messageId}` && e.block?.status === 'success'))

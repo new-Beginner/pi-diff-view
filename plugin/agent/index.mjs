@@ -8,16 +8,6 @@ var __export = (target, all) => {
     __defProp(target, name2, { get: all[name2], enumerable: true });
 };
 
-// src/core/contracts.ts
-var MAX_TEXT_BYTES, MAX_CAPTURE_SEGMENTS;
-var init_contracts = __esm({
-  "src/core/contracts.ts"() {
-    "use strict";
-    MAX_TEXT_BYTES = 2 * 1024 * 1024;
-    MAX_CAPTURE_SEGMENTS = 32;
-  }
-});
-
 // src/core/public-path.ts
 function deny(code, message) {
   throw Object.assign(new Error(message), { code });
@@ -36,6 +26,18 @@ function hostScratchRoot(value) {
   while (found = match.exec(portable)) root = portable.slice(0, found.index + found[0].length);
   return root;
 }
+function assertSessionScratchPath(value, sessionId, projectRoot) {
+  const scratch = hostScratchRoot(value);
+  if (!scratch || scratch.slice(scratch.lastIndexOf("/") + 1) === sessionId) return;
+  const portable = (path7) => {
+    const value2 = path7.replace(/\\/g, "/").replace(/\/$/, "");
+    return /^[a-z]:\//i.test(value2) ? value2.toLowerCase() : value2;
+  };
+  const assigned = projectRoot && hostScratchRoot(projectRoot);
+  if (projectRoot && assigned && portable(assigned) !== portable(scratch) && portable(assigned).startsWith(`${portable(scratch)}/`)) return;
+  if (projectRoot && assigned === scratch && portable(projectRoot) !== portable(scratch) && (portable(value) === portable(projectRoot) || portable(value).startsWith(`${portable(projectRoot)}/`))) return;
+  deny("PATH_DENIED", "Scratch evidence belongs to another session");
+}
 function assertPublicPath(value) {
   assertPathSyntax(value);
   const portable = value.replace(/\\/g, "/"), parts = portable.split("/");
@@ -48,6 +50,16 @@ function assertPublicPath(value) {
 var init_public_path = __esm({
   "src/core/public-path.ts"() {
     "use strict";
+  }
+});
+
+// src/core/contracts.ts
+var MAX_TEXT_BYTES, MAX_CAPTURE_SEGMENTS;
+var init_contracts = __esm({
+  "src/core/contracts.ts"() {
+    "use strict";
+    MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    MAX_CAPTURE_SEGMENTS = 32;
   }
 });
 
@@ -1197,6 +1209,9 @@ var init_storage = __esm({
   }
 });
 
+// src/agent/capture.ts
+init_public_path();
+
 // src/core/delegation-lifecycle.ts
 var name = (value) => String(value).split(".").pop().toLowerCase();
 var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\0\r\n]/.test(value);
@@ -1311,7 +1326,7 @@ async function readCaptureContext(directory, generation, sessionId, root, now = 
     const document = JSON.parse(await fs4.readFile(file, "utf8"));
     if (document.version !== 1 || document.generation !== generation || !Array.isArray(document.contexts) || document.contexts.length > 200) return null;
     const context = document.contexts.find((v) => v?.sessionId === sessionId);
-    if (!context || context.running !== true || !id2(context.taskId) || typeof context.root !== "string" || !path4.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
+    if (!context || context.running !== true || context.statusKnown === false || !id2(context.taskId) || typeof context.root !== "string" || !path4.isAbsolute(context.root) || canonical(context.root) !== canonical(root) || !Number.isSafeInteger(context.since) || context.since <= 0 || context.since > now || !Number.isSafeInteger(context.updatedAt) || context.updatedAt > now || now - context.updatedAt > CAPTURE_CONTEXT_TTL) return null;
     return context;
   } catch {
     return null;
@@ -1527,6 +1542,7 @@ function createCaptureExtension(options) {
       privatePaths = [await fs6.realpath(options.pluginRoot), locator.dataPath, options.locator ?? await locatorPath(options.pluginRoot)];
       await checkScratchAncestry(ctx.cwd);
       const root = await fs6.realpath(ctx.cwd);
+      assertSessionScratchPath(root, ctx.sessionManager.getSessionId(), root);
       const identity = await readCaptureContext(locator.dataPath, locator.generation, ctx.sessionManager.getSessionId(), root);
       run = { version: 2, contentVersion: 0, boundary: uncertain && !identity ? "uncertain" : "user", id: randomUUID3(), generation: locator.generation, sessionId: ctx.sessionManager.getSessionId(), root, startedAt: Date.now(), state: "running", fileCount: 0, incomplete: uncertain, changes: /* @__PURE__ */ Object.create(null), replies: [], bindings: {} };
       run.execution = { id: randomUUID3(), revision: 1, state: "running" };
@@ -1626,6 +1642,7 @@ function createCaptureExtension(options) {
         if (targetSet.truncated || targets.length > 256) run.incomplete = true;
         for (const [index, target] of targets.slice(0, 256).entries()) {
           try {
+            assertSessionScratchPath(path6.resolve(run.root, target), run.sessionId, run.root);
             const capture = await resolveCapturePath(run.root, target, privatePaths, name2 === "write" || index > 0);
             if (!observed.has(capture.identity) && observed.size >= 256) throw new Error("Turn exceeds 256 explicitly captured files");
             observed.add(capture.identity);

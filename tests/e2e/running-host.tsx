@@ -5,6 +5,8 @@ import * as ReactDom from 'react-dom';
 import * as ReactDomClient from 'react-dom/client';
 import { createPluginReviewAdapter } from '../../src/renderer/plugin-review-adapter';
 import { createReviewSurfaceClient } from '../../src/renderer/review-surface-client';
+import { publicSessionContext } from '../../src/core/public-session-context';
+import { hostEvidenceMessages, evidenceRevision } from '../../src/core/host-transcript';
 const config = (window as any).__liveFixture;
 const libraries = { react: ReactNamespace, 'react-dom': ReactDom, 'react-dom/client': ReactDomClient };
 const imports: Record<string, string> = {};
@@ -71,10 +73,18 @@ const host = {
 let surface: ReturnType<typeof createReviewSurfaceClient> | undefined;
 function adapter() {
   surface = createReviewSurfaceClient({ invoke: (method, args) => host.dispatch('plugin.call', { method, args }) }); surface.update(nativeState.activeSessionId);
-  return createPluginReviewAdapter({ navigation: surface.channel, load: async () => ({ store: { getState: () => nativeState, subscribe(listener) { subscribers.add(listener); return () => { subscribers.delete(listener); }; } }, hostReact: React }) });
+  return createPluginReviewAdapter({ navigation: surface.channel,
+    observe(callback) { const notify = () => callback(); subscribers.add(notify); return { disconnect() { subscribers.delete(notify); } }; },
+    read: async sessionId => {
+      const rows = new Map(((nativeState as any).retainedTranscripts?.[sessionId] ?? []).map((message: any) => [message.id, message]));
+      for (const message of nativeState.messages) rows.set(message.id, message);
+      const messages = hostEvidenceMessages([...rows.values()]);
+      return { ...publicSessionContext({ sessionId, root: '/live-test-project', running: nativeState.runningSessions[sessionId] === true, statusKnown: typeof nativeState.runningSessions[sessionId] === 'boolean', complete: true, turnId: 'host-turn', messages }), evidenceRevision: evidenceRevision(JSON.stringify(messages)) };
+    }
+  });
 }
 const pane = document.createElement('div'); pane.dataset.sessionPane = nativeState.activeSessionId; pane.dataset.visible = 'true'; document.body.append(pane);
-const toggle = document.createElement('button'); toggle.className = 'app-work-panel-toggle'; toggle.setAttribute('aria-pressed', 'false'); toggle.onclick = () => toggle.setAttribute('aria-pressed', 'true'); document.body.append(toggle);
+const toggle = document.createElement('button'); toggle.className = 'app-work-panel-toggle'; toggle.setAttribute('aria-pressed', 'false'); toggle.onclick = () => { const open = toggle.getAttribute('aria-pressed') !== 'true'; toggle.setAttribute('aria-pressed', String(open)); document.getElementById('live-sidebar')!.hidden = !open; }; document.body.append(toggle);
 const tab = document.createElement('div'); tab.dataset.workPanelTabId = 'plugin:local.diff-view/review'; tab.innerHTML = '<button role="tab" aria-selected="false">Diff view</button>'; document.body.append(tab);
 tab.querySelector('button')!.onclick = () => {
   tab.querySelector('button')!.setAttribute('aria-selected', 'true');

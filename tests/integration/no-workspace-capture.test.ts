@@ -9,8 +9,8 @@ import { createCaptureExtension } from '../../src/agent/capture';
 import { snapshotWorkspace } from '../../src/agent/workspace-capture';
 import { SnapshotStore, atomicJson } from '../../src/core/storage';
 import { checkScratchAncestry, writeCaptureContexts } from '../../src/core/capture-context';
-import { canonical, digest } from '../../src/core/path-policy';
-import { transcriptEvidence, evidenceChunks, evidenceRevision } from '../../src/core/host-transcript';
+import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/core/path-policy';
+import { capturedChange, expirePublicCache, publicDesktopFixture, seedCapture, unavailableText, type PublicSessionFixture } from '../helpers/public-desktop-fixture';
 
 const temporary = () => fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR ?? os.tmpdir(), 'no-workspace-'));
 it('captures real scratch Write/Edit and explicit external tools, with trusted running identity and private-path exclusions', async () => {
@@ -60,7 +60,7 @@ it('rejects scratch root/parent junctions before workspace discovery', async () 
   } finally { await fs.rm(temp, { recursive: true, force: true }); }
 });
 
-it('main imports and reopens no-project evidence without workspace/disk/Git authorization, before host transcript flush', async () => {
+it('main imports and reopens rootless public evidence without workspace/disk/Git authorization', async () => {
   const temp = await temporary(), sid = randomUUID(), other = randomUUID();
   const host = path.join(temp, '.pi-desktop', 'data'), data = path.join(host, 'plugins', 'data', 'diff-view'), root = path.join(host, 'scratch', sid), entry = path.join(temp, 'main.cjs');
   const file = path.join(root, 'notes.txt'), external = path.join(temp, 'external.txt'), unknown = path.join(temp, 'unknown.txt');
@@ -68,10 +68,7 @@ it('main imports and reopens no-project evidence without workspace/disk/Git auth
   let plugin: any, loaded = false;
   try {
     await fs.mkdir(root, { recursive: true }); await fs.writeFile(file, 'current disk is not history'); await fs.writeFile(external, 'unrelated disk bytes');
-    const beforeDir = path.join(host, 'review-changes', sid, 'external-call'); await fs.mkdir(beforeDir, { recursive: true });
-    await fs.writeFile(path.join(beforeDir, 'before'), 'old\n');
     const review = { version: 1, sessionId: sid, messageId: 'edit', path: external, beforeExists: true, beforeHash: digest('old\n'), afterExists: true, afterHash: digest('new\n') };
-    await fs.writeFile(path.join(beforeDir, 'meta.json'), JSON.stringify(review));
     const createdAt = Date.now() - 10000;
     const call = (id: string, name: string, target: string, args: any = {}, details?: any, status = 'success') => ({ id, role: 'tool', createdAt: createdAt + 1, toolCallId: id, toolName: name, toolStatus: status, toolArgs: { path: target, ...args }, toolResult: { isError: status === 'error', details } });
     const messages: any[] = [
@@ -84,19 +81,21 @@ it('main imports and reopens no-project evidence without workspace/disk/Git auth
       call('pending', 'Edit', path.join(temp, 'pending.txt'), {}, undefined, 'running'),
       call('bash', 'Bash', path.join(temp, 'shell.txt'), { command: 'echo fabricated' }),
       call('private', 'Write', path.join(root, '.env'), { content: 'credential secret' }),
-      call('cross-session', 'Write', path.join(host, 'scratch', other, 'other.txt'), { content: 'other session' }),
       { id: 'reply-one', role: 'assistant', createdAt: createdAt + 2, status: 'complete', content: 'private reply' },
     ];
+    // This same-session plugin capture, not a private scratch path guess, supplies the root and endpoint.
+    const store = new SnapshotStore(data);
+    await seedCapture(store, { id: 'external-capture', sessionId: sid, root, userMessageId: 'user-one', startedAt: createdAt, changes: { [external]: capturedChange(root, external, snapshotOfText('old\n'), unavailableText('new\n'), ['edit:edit']) } });
+    const desktop = publicDesktopFixture({ [sid]: { messages } });
     await build({ entryPoints: ['src/main.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true, external: ['original-fs'] });
-    (globalThis as any).pi = { plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => null }, app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} } };
+    (globalThis as any).pi = { desktop, plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => null }, app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} } };
     plugin = createRequire(import.meta.url)(entry); await plugin.onLoad(); loaded = true;
     const read = fs.readFile.bind(fs), diskReads = vi.spyOn(fs, 'readFile').mockImplementation(((value: any, ...args: any[]) => {
       if ([file, external, unknown].some(p => canonical(p) === canonical(String(value)))) throw new Error('Historical import must not read current disk');
       return (read as any)(value, ...args);
     }) as any);
-    const text = transcriptEvidence(messages), revision = evidenceRevision(text), chunks = evidenceChunks(text);
-    for (const [index, chunk] of chunks.entries()) await plugin.onRendererCall('sessionEvidence', { sessionId: sid, revision, index, chunk, final: index === chunks.length - 1 });
-    const recovered = await plugin.onRendererCall('sessionContext', { sessionId: sid, running: false, evidenceRevision: revision });
+    await expect(plugin.onRendererCall('sessionEvidence', { sessionId: sid, chunk: '[]', index: 0, final: true })).rejects.toThrow(/public source/i);
+    const recovered = await plugin.onRendererCall('sessionContext', { sessionId: sid, running: true, taskId: 'forged-user', since: Date.now() });
     expect(recovered).toMatchObject({ imported: 1, events: 4, warnings: [] });
     const boot = await plugin.onRendererCall('bootstrap', { sessionId: sid });
     expect(boot.repositories).toEqual([]); expect(boot.recoveryNotice).toBeUndefined(); expect(boot.runs).toHaveLength(1);
@@ -115,9 +114,10 @@ it('main imports and reopens no-project evidence without workspace/disk/Git auth
     expect((await plugin.onRendererCall('bootstrap', { sessionId: other })).runs).toEqual([]);
     await expect(plugin.onRendererCall('selectTurn', { sessionId: other, runId: boot.runs[0].id })).rejects.toThrow();
     await plugin.onUnload(); loaded = false;
-    await fs.rm(beforeDir, { recursive: true }); await fs.rm(root, { recursive: true });
+    await fs.rm(root, { recursive: true });
     await plugin.onLoad(); loaded = true;
-    const restored = await plugin.onRendererCall('sessionContext', { sessionId: sid, root: temp, running: false });
+    await expect(plugin.onRendererCall('sessionContext', { sessionId: sid, root: temp, running: false })).resolves.toMatchObject({ ok: false });
+    const restored = await plugin.onRendererCall('sessionContext', { sessionId: sid, running: false });
     expect(restored.warnings).toEqual([]);
     const again = await plugin.onRendererCall('review', { scope: 'turn', sessionId: sid, runId: boot.runs[0].id });
     expect(again.files.every((f: any) => f.actions.length === 0)).toBe(true);
@@ -129,33 +129,38 @@ it('main imports and reopens no-project evidence without workspace/disk/Git auth
   } finally { if (loaded) await plugin.onUnload(); vi.restoreAllMocks(); (globalThis as any).pi = oldPi; home.mockRestore(); await fs.rm(temp, { recursive: true, force: true }); }
 });
 
-it('imports rootless native JSONL running history and keeps even complete settled scratch captures read-only', async () => {
+it('imports rootless public running history and keeps even complete settled scratch captures read-only', async () => {
   const temp = await temporary(), sid = randomUUID();
   const host = path.join(temp, '.pi-desktop', 'data'), data = path.join(host, 'plugins', 'data', 'diff-view'), root = path.join(host, 'scratch', sid), entry = path.join(temp, 'main.cjs');
   const oldPi = (globalThis as any).pi, home = vi.spyOn(os, 'homedir').mockReturnValue(temp);
   let plugin: any, loaded = false;
   try {
-    await fs.mkdir(path.join(host, 'sessions'), { recursive: true });
+    const store = new SnapshotStore(data);
     const started = Date.now() - 1000;
     const messages = [
-      { type: 'session', sessionId: sid },
       { type: 'message', id: 'user-one', role: 'user', createdAt: started, blocks: [] },
       { type: 'message', id: 'call', role: 'tool', createdAt: started + 1, blocks: [{ type: 'tool_call', callId: 'call', name: 'Write', status: 'success', args: { path: path.join(root, 'new.txt'), content: 'recorded\n' }, result: { details: { review: { version: 1, messageId: 'call', path: path.join(root, 'new.txt'), status: 'added', afterHash: digest('recorded\n') } } } }] },
-      { type: 'message', id: 'edit-message', role: 'tool', createdAt: started + 2, blocks: [{ type: 'tool_call', callId: 'edit-call', name: 'Edit', status: 'success', args: { path: path.join(root, 'new.txt'), old_string: 'recorded', new_string: 'edited' }, result: {} }] },
+      { type: 'message', id: 'edit-message', role: 'tool', createdAt: started + 2, blocks: [{ type: 'tool_call', callId: 'edit-call', name: 'Edit', status: 'success', args: { path: path.join(root, 'new.txt'), old_string: 'recorded', new_string: 'edited' }, result: { details: { review: { version: 1, messageId: 'edit-message', path: 'new.txt', beforeExists: true, beforeHash: digest('recorded\n'), afterExists: true, afterHash: digest('edited\n') } } } }] },
       { type: 'message', id: 'reply', role: 'assistant', createdAt: started + 3, meta: { status: 'complete' }, blocks: [{ type: 'text' }] },
     ];
-    await fs.writeFile(path.join(host, 'sessions', `${sid}.jsonl`), messages.map(v => JSON.stringify(v)).join('\n'));
-    // Metadata uses a message alias and relative path; fallback must not overwrite its snapshots.
-    const evidence = path.join(host, 'review-changes', sid, 'edit-call'); await fs.mkdir(evidence, { recursive: true });
-    await fs.writeFile(path.join(evidence, 'meta.json'), JSON.stringify({ version: 1, sessionId: sid, messageId: 'edit-message', path: 'new.txt', beforeExists: true, beforeHash: digest('recorded\n'), afterExists: true, afterHash: digest('edited\n') }));
-    await fs.writeFile(path.join(evidence, 'before'), 'recorded\n'); await fs.writeFile(path.join(evidence, 'after'), 'edited\n');
+    // Exact tool IDs (not the edit-message alias) bind plugin-owned endpoints to public calls.
+    await seedCapture(store, { id: 'scratch-capture', sessionId: sid, root, userMessageId: 'user-one', startedAt: started, changes: { 'new.txt': {
+      ...capturedChange(root, 'new.txt', absentSnapshot(), snapshotOfText('edited\n'), ['write:call', 'edit:edit-call']),
+      segments: [
+        { before: absentSnapshot(), after: snapshotOfText('recorded\n'), evidence: 'write:call' },
+        { before: snapshotOfText('recorded\n'), after: snapshotOfText('edited\n'), evidence: 'edit:edit-call' },
+      ],
+    } } });
+    const session: PublicSessionFixture = { messages, isRunning: true, currentTurnId: 'native-turn' };
+    const desktop = publicDesktopFixture({ [sid]: session });
     await build({ entryPoints: ['src/main.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true, external: ['original-fs'] });
-    (globalThis as any).pi = { plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => null }, app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} } };
+    (globalThis as any).pi = { desktop, plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => null }, app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} } };
     plugin = createRequire(import.meta.url)(entry); await plugin.onLoad(); loaded = true;
-    expect((await plugin.onRendererCall('sessionContext', { sessionId: sid, running: true, taskId: 'user-one', since: started })).imported).toBe(1);
+    expect((await plugin.onRendererCall('sessionContext', { sessionId: sid, running: false, taskId: 'forged-user', since: started })).imported).toBe(1);
     const live = await plugin.onRendererCall('runningChanges', { sessionId: sid, taskId: 'user-one', since: started });
     expect(live).toMatchObject({ sessionId: sid, fileCount: 1, additions: 1, unknownFileCount: 0 });
-    await plugin.onRendererCall('sessionContext', { sessionId: sid, running: false });
+    session.isRunning = false; session.currentTurnId = undefined; await expirePublicCache();
+    await plugin.onRendererCall('sessionContext', { sessionId: sid, running: true });
     const review = await plugin.onRendererCall('review', { scope: 'turn', sessionId: sid, runId: live.runId });
     expect(review.run).toMatchObject({ root, state: 'completed', incomplete: false });
     const detail = await plugin.onRendererCall('file', { reviewId: review.id, fileId: review.files[0].id });
@@ -163,11 +168,40 @@ it('imports rootless native JSONL running history and keeps even complete settle
     expect((await new SnapshotStore(data).getRun(live.runId))!.changes['new.txt'].after.text).toBe('edited\n');
     await expect(plugin.onRendererCall('action', { reviewId: review.id, fileId: detail.file.id, fingerprint: detail.file.fingerprint, action: 'revert', confirmed: true })).rejects.toThrow();
     await expect(fs.stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
-    await fs.rm(evidence, { recursive: true });
+    session.messages = [];
     await plugin.onUnload(); loaded = false; await plugin.onLoad(); loaded = true;
     await plugin.onRendererCall('sessionContext', { sessionId: sid, running: false });
     const reopened = await plugin.onRendererCall('review', { scope: 'turn', sessionId: sid, runId: live.runId });
     expect(reopened.run).toMatchObject({ state: 'completed', incomplete: false });
     expect((await new SnapshotStore(data).getRun(live.runId))!.changes['new.txt'].after.text).toBe('edited\n');
+  } finally { if (loaded) await plugin.onUnload(); home.mockRestore(); (globalThis as any).pi = oldPi; await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+it('never guesses a rootless scratch root or imports another session scratch path as external', async () => {
+  const temp = await temporary(), sid = randomUUID(), other = randomUUID();
+  const host = path.join(temp, '.pi-desktop', 'data'), data = path.join(host, 'plugins', 'data', 'diff-view'), root = path.join(host, 'scratch', sid), entry = path.join(temp, 'main.cjs');
+  const foreign = path.join(host, 'scratch', other, 'other.txt'), started = Date.now() - 1000;
+  const oldPi = (globalThis as any).pi, home = vi.spyOn(os, 'homedir').mockReturnValue(temp);
+  const session: PublicSessionFixture = { messages: [
+    { id: 'user-one', role: 'user', createdAt: started, blocks: [] },
+    { id: 'own-call', role: 'tool', createdAt: started + 1, toolCallId: 'own-call', toolName: 'Write', toolStatus: 'success', toolArgs: { path: path.join(root, 'own.txt'), content: 'own\n' } },
+    { id: 'cross-session', role: 'tool', createdAt: started + 2, toolCallId: 'cross-session', toolName: 'Write', toolStatus: 'success', toolArgs: { path: foreign, content: 'other session\n' } },
+  ] };
+  const desktop = publicDesktopFixture({ [sid]: session });
+  let plugin: any, loaded = false;
+  try {
+    await build({ entryPoints: ['src/main.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true, external: ['original-fs'] });
+    (globalThis as any).pi = { desktop, plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => null }, app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} } };
+    plugin = createRequire(import.meta.url)(entry); await plugin.onLoad(); loaded = true;
+    expect(await plugin.onRendererCall('sessionContext', { sessionId: sid })).toMatchObject({ ok: false });
+    expect((await plugin.onRendererCall('bootstrap', { sessionId: sid })).runs).toEqual([]);
+    // A public projectPath may identify the exact cwd scratch leaf, but not a sibling session.
+    session.projectPath = root; await expirePublicCache();
+    const result = await plugin.onRendererCall('sessionContext', { sessionId: sid });
+    const [run] = (await plugin.onRendererCall('bootstrap', { sessionId: sid })).runs;
+    const saved = await new SnapshotStore(data).getRun(run.id);
+    expect.soft(Object.keys(saved!.changes)).not.toContain(foreign);
+    expect.soft(run).toMatchObject({ sessionId: sid, root, fileCount: 1 });
+    expect(result.events).toBe(1);
   } finally { if (loaded) await plugin.onUnload(); home.mockRestore(); (globalThis as any).pi = oldPi; await fs.rm(temp, { recursive: true, force: true }); }
 });

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostHistoryImporter, hostHistoryRunId, type HostHistoryRun } from '../../src/core/host-history';
+import { HostHistoryImporter, hostHistoryRunId, type HostHistoryRun } from '../helpers/history-fixture';
 import { hostEvidenceMessages } from '../../src/core/host-transcript';
 import { SnapshotStore } from '../../src/core/storage';
 import { canonical, digest, snapshotOfText } from '../../src/core/path-policy';

@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { SnapshotStore } from '../../src/core/storage';
-import { HostHistoryImporter, hostHistoryRunId } from '../../src/core/host-history';
+import { HostHistoryImporter, hostHistoryRunId } from '../helpers/history-fixture';
 import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureRun } from '../../src/core/contracts';
 

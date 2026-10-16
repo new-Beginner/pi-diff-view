@@ -255,6 +255,8 @@ export class ReviewService {
   /** Snapshot-only reads never alter the shared workspace mutation authorization. */
   async savedReview(request: ReviewRequest): Promise<ReviewSummary | null> {
     if (request.scope !== 'turn' || request.retrySync) return null;
+    const run = request.runId ? await this.store.getRun(request.runId, false, false) : null;
+    if (!run || run.sessionId !== request.sessionId || run.version !== 2 || run.boundary !== 'user' || run.state !== 'completed' || run.incomplete || !run.replyMessageId || !Number.isFinite(run.endedAt) || (request.root && canonical(run.root) !== canonical(request.root))) return null;
     const summary = await this.review(request, true, undefined, true);
     return this.hasVerifiedReviewFiles(summary.id) ? summary : null;
   }

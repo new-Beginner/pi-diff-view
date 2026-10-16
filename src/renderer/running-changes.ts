@@ -43,22 +43,16 @@ export function createRunningChangesController(transport: UiTransport, adapter: 
       if (next) void poll(version, next);
     },
     async open(): Promise<void> {
-      const task = activity, summary = view.summary, version = epoch;
-      if (!task || !summary || view.busy || disposed) return;
-      const guard = () => { if (!valid(version) || view.summary?.runId !== summary.runId) throw new Error('任务已结束或切换 / Task ended or changed'); };
+      const sessionId = activity?.sessionId, version = epoch;
+      if (!sessionId || view.busy || disposed) return;
+      const guard = () => { if (!valid(version)) throw new Error('会话或任务已切换 / Session or task changed'); };
       emit({ ...view, busy: true, error: '' });
       try {
-        await adapter.reveal?.(task.sessionId, guard); guard();
-        // Validate the running task, but open the session's latest-turn mode rather
-        // than pinning this captured run as a historical selection.
-        const selection = await transport.invoke<{ nonce: string }>('selectTurn', { scope: 'lastTurn', sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
-        guard(); await adapter.open(task.sessionId, `diff-view:${selection.nonce}`, guard); guard();
+        await adapter.reveal?.(sessionId, guard); guard();
+        const selection = await transport.invoke<{ nonce: string }>('selectTurn', { scope: 'lastTurn', sessionId });
+        guard(); await adapter.open(sessionId, `diff-view:${selection.nonce}`, guard); guard();
       } catch (error) {
-        if (valid(version) && view.summary?.runId === summary.runId) {
-          if (['RUN_NOT_FOUND', 'RUN_MISSING', 'TASK_REQUIRED'].includes(String((error as { code?: string }).code))) {
-            remember(task, null); emit({ summary: null, busy: false, error: '' });
-          } else { diagnose('running-click-error'); emit({ ...view, error: String((error as Error).message ?? error) }); }
-        }
+        if (valid(version)) { diagnose('running-click-error'); emit({ ...view, error: String((error as Error).message ?? error) }); }
       }
       finally { if (valid(version)) emit({ ...view, busy: false }); }
     },
