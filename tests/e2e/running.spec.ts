@@ -7,6 +7,7 @@ import path from 'node:path';
 import { SnapshotStore } from '../../src/core/storage';
 import { ReviewService } from '../../src/core/review-service';
 import { ReviewNavigationStore } from '../../src/core/review-navigation';
+import { ReviewSurfaces } from '../../src/core/review-surfaces';
 import { JobQueue } from '../../src/core/jobs';
 import { absentSnapshot, canonical, digest, snapshotOfText } from '../../src/core/path-policy';
 import type { CaptureRun } from '../../src/core/contracts';
@@ -32,7 +33,9 @@ async function change(text = Array.from({ length: 11 }, (_, i) => `line ${i + 1}
 }
 async function setup(page: Page, options: { layerApi?: 'public' | 'missing' | 'reject'; scopedStyles?: boolean } = {}) {
   const navigation = new ReviewNavigationStore();
+  const surfaces = new ReviewSurfaces();
   const execute = async (method: string, args: any) => {
+    if (method === 'reviewSurface') return surfaces.exchange(args);
     if (method === 'rendererReport') return { ok: true };
     if (method === 'sessionEvidence' || method === 'sessionContext') return { ok: true }; // Contract-only mock; history recovery is covered by main integration tests.
     if (method === 'activeReviewSession') { navigation.setActiveSession(args.sessionId); return { ok: true }; }
@@ -221,8 +224,10 @@ test('a pill click does not submit a redundant running-summary query', async ({ 
   await setup(page); await expect(page.locator('.dv-running-pill')).toBeVisible();
   await page.locator('.dv-running-pill').click();
   await expect(page.locator('#live-sidebar')).toBeVisible();
-  const methods = await page.evaluate(() => (window as any).__liveHost.calls.filter((call: any) => call.method === 'jobStart').map((call: any) => call.args.method));
-  expect(methods.filter((method: string) => method === 'runningChanges')).toHaveLength(1);
+  const calls = await page.evaluate(() => (window as any).__liveHost.calls.filter((call: any) => call.method === 'jobStart'));
+  const methods = calls.map((call: any) => call.args.method), selectedAt = methods.indexOf('selectTurn');
+  // Periodic 1s refresh continues during the handshake; clicking must not requery before selecting.
+  expect(methods.slice(0, selectedAt).filter((method: string) => method === 'runningChanges')).toHaveLength(1);
   expect(methods).toContain('selectTurn'); await stop(page);
 });
 

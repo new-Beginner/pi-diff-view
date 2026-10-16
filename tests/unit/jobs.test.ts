@@ -12,7 +12,7 @@ it('bounds jobs and returns coded errors without leaking a rejection', async () 
 it('reserves one bounded navigation job while four ordinary jobs are pending', async () => {
   let release!: () => void;
   const calls: string[] = [], q = new JobQueue(async method => { calls.push(method); if (method === 'review') await new Promise<void>(resolve => release = resolve); return method; });
-  const first = q.start('review', {}); q.start('action', {}); q.start('bootstrap', {}); q.start('replyCards', {});
+  const first = q.start('review', {}); q.start('action', {}); q.start('bootstrap', {}); q.start('turnSummary', {});
   expect(() => q.start('card', {})).toThrow('Too many');
   await vi.waitFor(() => expect(release).toBeTypeOf('function'));
   const selected = q.start('selectTurn', {});
@@ -30,4 +30,15 @@ it('reserves one independent system-open job without fencing navigation or ordin
   await vi.waitFor(() => { expect(q.poll(selected.jobId).result).toBe('selectTurn'); expect(q.poll(card.jobId).result).toBe('card'); });
   expect(q.poll(opened.jobId).state).toBe('pending');
   release(); await vi.waitFor(() => expect(q.poll(opened.jobId).state).toBe('done')); q.close();
+});
+it('starts saved-card reads beside blocked context work but keeps mutation jobs ordered', async () => {
+  let release!: () => void;
+  const calls: string[] = [], q = new JobQueue(async method => { calls.push(method); if (method === 'sessionContext') await new Promise<void>(resolve => release = resolve); return method; });
+  const context = q.start('sessionContext', {});
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  const cards = q.start('replyCards', {}), review = q.start('review', { scope: 'turn' });
+  q.start('action', {});
+  await vi.waitFor(() => { expect(q.poll(cards.jobId).state).toBe('done'); expect(q.poll(review.jobId).state).toBe('done'); });
+  expect(q.poll(context.jobId).state).toBe('pending'); expect(calls).not.toContain('action');
+  release(); await vi.waitFor(() => expect(calls).toContain('action')); q.close();
 });

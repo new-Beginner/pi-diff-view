@@ -1,4 +1,6 @@
 import { createSessionContextPublisher } from './session-context-publisher';
+import { createReviewSurfaceClient } from './review-surface-client';
+import type { SessionContext } from './plugin-review-adapter';
 import React, { useEffect, useState } from 'react';
 import { ensureBounded } from '../view/transport';
 import type { ReplyCard, ReplyCardsPage, RunSummary, TurnSummary, UiTransport } from '../core/contracts';
@@ -7,7 +9,6 @@ import TurnChangeSummary from './TurnChangeSummary';
 import summaryStyle from './summary-style';
 import { createPluginReviewAdapter, type PluginReviewAdapter } from './plugin-review-adapter';
 import RunningChangePill, { runningPillStyle } from './RunningChangePill';
-import { startFileOpenChannel } from './file-open-channel';
 import type { RendererHost, RendererUi } from './host-contract';
 import { JsonCache } from './json-cache';
 export type { RendererHost } from './host-contract';
@@ -20,7 +21,9 @@ interface Hub {
   appearance: { locale: string; base: 'light' | 'dark' }; listeners: Set<() => void>;
   cards: Map<string, CardItem>; cache: JsonCache<string, ReplyCard>; feeds: Map<string, Feed>;
   activeSession?: string | null; sessionVersion: number; sessionReady?: Promise<void>; sessionRetry?: ReturnType<typeof setTimeout>; unsubscribeSession?: Disposer; adapter: PluginReviewAdapter;
-  stopFileOpen?: Disposer; sessionPublisher?: ReturnType<typeof createSessionContextPublisher>;
+  sessionPublisher?: ReturnType<typeof createSessionContextPublisher>;
+  surface?: ReturnType<typeof createReviewSurfaceClient>;
+  evidenceContext?: SessionContext; evidenceReady?: Promise<void>; unsubscribeEvidence?: Disposer; evidenceRetry?: ReturnType<typeof setTimeout>;
   reported: Set<string>;
 }
 let hub: Hub | null = null;
@@ -44,17 +47,28 @@ function trackSession(current: Hub): Promise<void> {
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
     if (current.activeSession !== sessionId) {
-      current.stopFileOpen?.(); current.activeSession = sessionId; current.sessionVersion++;
-      const version = current.sessionVersion;
-      current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id, path, guard) => current.adapter.openFile(id, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : undefined;
+      current.activeSession = sessionId; current.sessionVersion++;
     }
-    publisher.update(sessionId, context);
+    current.surface?.update(sessionId);
+    publisher.update(sessionId, context ?? (current.evidenceContext?.sessionId === sessionId ? current.evidenceContext : undefined));
     void current.transport.invoke('activeReviewSession', { sessionId }).catch(() => {});
   }).then(dispose => {
     if (same(current)) { current.unsubscribeSession = dispose; report(current, 'session-ready'); } else dispose();
   }).catch(error => {
     if (same(current)) { current.sessionReady = undefined; report(current, 'session-source-error'); if (!current.sessionRetry) current.sessionRetry = setTimeout(() => { current.sessionRetry = undefined; if (same(current)) void trackSession(current).catch(() => {}); }, 2000); }
     throw error;
+  });
+}
+function trackEvidence(current: Hub): void {
+  if (!current.adapter.subscribeEvidence || current.evidenceReady) return;
+  current.evidenceReady = current.adapter.subscribeEvidence((_sessionId, context) => {
+    if (!same(current)) return;
+    current.evidenceContext = context;
+    if (context && context.sessionId === current.activeSession) current.sessionPublisher?.update(context.sessionId, context);
+  }).then(dispose => { if (same(current)) current.unsubscribeEvidence = dispose; else dispose(); }).catch(() => {
+    if (!same(current)) return;
+    current.evidenceReady = undefined; report(current, 'session-source-error');
+    current.evidenceRetry = setTimeout(() => { current.evidenceRetry = undefined; if (same(current)) trackEvidence(current); }, 2000);
   });
 }
 function remember(current: Hub, card: ReplyCard): void {
@@ -181,17 +195,20 @@ function ComposerControl() {
 export function onLoad(pi: RendererHost, options: { adapter?: PluginReviewAdapter } = {}) {
   realm.__piDiffRenderer?.dispose(); onUnload();
   const transport = ensureBounded({ invoke<T>(method: string, args?: unknown) { if (!same(current)) return Promise.reject(new Error('Renderer unloaded / 渲染扩展已卸载。')); return pi.dispatch<T>('plugin.call', { method, args }); } });
-  const current: Hub = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new JsonCache(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
+  const surface = options.adapter ? undefined : createReviewSurfaceClient(transport);
+  const current: Hub = { transport, surface, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: 'zh-CN', base: 'light' }, listeners: new Set(), cards: new Map(), cache: new JsonCache(), feeds: new Map(), sessionVersion: 0, reported: new Set(), adapter: options.adapter ?? createPluginReviewAdapter({ navigation: surface!.channel }) };
   hub = current; realm.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summaryStyle + runningPillStyle)); disposers.push(pi.slots.register({ slot: 'entryExtra', component: EntryExtra }));
   disposers.push(pi.slots.register({ slot: 'composerControl', positions: ['left'], component: ComposerControl }));
   void trackSession(current).catch(() => {});
+  trackEvidence(current);
   report(current, 'entry-loaded');
   wake(current);
 }
 export function onUnload() {
   const current = hub;
-  if (current) { current.sessionPublisher?.dispose(); current.stopFileOpen?.(); current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
+  if (current) { current.surface?.dispose(); if (current.evidenceRetry) clearTimeout(current.evidenceRetry); current.unsubscribeEvidence?.(); }
+  if (current) { current.sessionPublisher?.dispose(); current.disposed = true; if (current.timer) clearTimeout(current.timer); if (current.sessionRetry) clearTimeout(current.sessionRetry); current.unsubscribeSession?.(); current.cards.clear(); current.cache.clear(); current.feeds.clear(); current.listeners.clear(); current.adapter.close(); }
   for (const dispose of disposers.splice(0).reverse()) dispose();
   if (realm.__piDiffRenderer?.hub === current) delete realm.__piDiffRenderer;
   hub = null;

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 const nonce = '00000000-0000-4000-8000-000000000456';
-async function setup(page: Page, initial: 'pending' | 'ready' | 'unavailable') {
-  await page.addInitScript(({ initial, nonce }) => {
+async function setup(page: Page, initial: 'pending' | 'ready' | 'unavailable', saved = false) {
+  await page.addInitScript(({ initial, nonce, saved }) => {
     let bridge: any;
     Object.defineProperty(window, 'pluginBridge', { configurable: true, get: () => bridge, set(value) {
       bridge = value;
@@ -14,13 +14,13 @@ async function setup(page: Page, initial: 'pending' | 'ready' | 'unavailable') {
         if (args.retrySync) demo.syncState = 'ready';
         const result = await invoke(method, args, internal);
         result.runId = 'saved-run'; result.run = { id: 'saved-run', sessionId: args.sessionId, root: result.root, startedAt: 1, state: 'completed', fileCount: 1, incomplete: false };
-        result.sync = { state: demo.syncState }; result.files = result.files.slice(0, 1);
-        if (demo.syncState === 'pending') result.files = result.files.map((file: any) => ({ ...file, kind: 'unavailable', statsKnown: false, additions: 0, deletions: 0 }));
+        result.sync = { state: demo.syncState, saved: saved && demo.syncState === 'pending' }; result.files = result.files.slice(0, 1);
+        if (demo.syncState === 'pending') result.files = result.files.map((file: any) => saved ? { ...file, actions: [] } : { ...file, kind: 'unavailable', statsKnown: false, additions: 0, deletions: 0 });
         if (demo.genuinelyUnknown) result.files[0] = { ...result.files[0], kind: 'unavailable', statsKnown: false, additions: 0, deletions: 0, actions: [] };
         demo.review = result; return result;
       };
     } });
-  }, { initial, nonce });
+  }, { initial, nonce, saved });
   await page.goto('/?scenario=panel&lang=zh-CN&piViewOpen=' + encodeURIComponent(`diff-view:${nonce}?sessionId=session-a`));
 }
 test('cold pinned completed history stays syncing, then updates without a sidebar round-trip', async ({ page }) => {
@@ -78,4 +78,18 @@ test('pending automatically times out after 15 seconds and stops polling until r
   await page.getByRole('alert').getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.locator('.dv-hunk')).toHaveCount(2);
   await expect(page.getByText('修改记录同步未完成；当前仅展示已保存记录，可重试。', { exact: true })).toHaveCount(0);
+});
+test('saved completed history is readable while syncing and keeps selection and folds when ready', async ({ page }) => {
+  await setup(page, 'pending', true);
+  await expect(page.getByText('正在同步修改记录…', { exact: true })).toBeVisible();
+  await expect(page.locator('.dv-file')).toHaveCount(1);
+  await expect(page.locator('.dv-hunk')).toHaveCount(2);
+  await page.locator('[data-hunk-nav]').first().click();
+  await expect(page.locator('[data-hunk-nav]').first()).toHaveAttribute('aria-expanded', 'false');
+  await page.evaluate(() => { const d = (window as any).__demo; d.fileNode = document.querySelector('.dv-file'); d.hunkNode = document.querySelector('.dv-hunk'); });
+  await expect.poll(() => page.evaluate(() => (window as any).__demo.reviewCount)).toBeGreaterThanOrEqual(2);
+  await page.evaluate(() => { (window as any).__demo.syncState = 'ready'; });
+  await expect(page.getByText('正在同步修改记录…', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-hunk-nav]').first()).toHaveAttribute('aria-expanded', 'false');
+  expect(await page.evaluate(() => { const d = (window as any).__demo; return d.fileNode === document.querySelector('.dv-file') && d.hunkNode === document.querySelector('.dv-hunk'); })).toBe(true);
 });

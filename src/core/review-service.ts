@@ -11,7 +11,7 @@ import { replaceSnapshot } from './rollback';
 import { discoverRepository, readGitReview, type GitReview } from '../git/repository';
 import { applyGitAction } from '../git/actions';
 export interface ServiceHost { workspace(): Promise<{ path: string; roots?: (string | { path: string })[] } | null>; settings(): Promise<Record<string, unknown>>; setSettings(value: Record<string, unknown>): Promise<void>; appearance(): Promise<{ locale?: string; base?: string }>; clipboard(text: string): Promise<void>; openPanel(): Promise<void>; }
-interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; hunksCache?: Map<string, DiffHunk[]>; hydratedFiles?: Set<string>; }
+interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; hunksCache?: Map<string, DiffHunk[]>; hydratedFiles?: Set<string>; readOnly?: boolean; }
 function runSummary(run: CaptureRun): RunSummary { return { id: run.id, sessionId: run.sessionId, root: run.root, startedAt: run.startedAt, endedAt: run.endedAt, state: run.state, fileCount: Object.keys(run.changes).filter(value => !isImagePath(value)).length, incomplete: run.incomplete }; }
 function turnNotice(run: CaptureRun): string | undefined {
   const notices: string[] = [];
@@ -172,7 +172,7 @@ export class ReviewService {
     if (!summary.files.length && offset < cached.files.length) fail('SUMMARY_LIMIT', 'File metadata exceeds summary bridge budget');
     return summary;
   }
-  async review(request: ReviewRequest, inboxImported = false, _activity?: CaptureContext): Promise<ReviewSummary> {
+  async review(request: ReviewRequest, inboxImported = false, _activity?: CaptureContext, readOnly = false): Promise<ReviewSummary> {
     if (!request || !['unstaged', 'staged', 'commit', 'branch', 'lastTurn', 'turn'].includes(request.scope)) fail('INVALID_SCOPE', 'Unknown review scope');
     // Exact recorded-task opens do not enumerate unrelated history or run Git discovery.
     let root = request.root, files: InternalFile[] = [], git: GitReview | undefined, run: CaptureRun | undefined, notice: string | undefined;
@@ -188,11 +188,12 @@ export class ReviewService {
         run = runs.find(r => Object.keys(r.changes).some(value => !isImagePath(value)));
       }
       if (run?.sessionId !== request.sessionId || (root && run && canonical(run.root) !== canonical(root))) run = undefined;
-      await this.authorize(request.sessionId, run);
+      if (readOnly && (request.scope !== 'turn' || run?.version !== 2 || run.boundary !== 'user' || run.state !== 'completed' || run.incomplete || !run.replyMessageId || !Number.isFinite(run.endedAt))) run = undefined;
+      if (!readOnly) await this.authorize(request.sessionId, run);
       if (!run) { root = root ?? ''; notice = request.scope === 'lastTurn' ? '本会话在当前筛选范围内暂无可展示的修改记录；不会使用其他会话或 Git 状态补造历史。' : 'No recorded turn. History before installation is not reconstructed.'; }
       else {
         root = run.root;
-        if (!this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
+        if (!readOnly && !this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Recorded project is not authorized in this view');
         const states = await readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {});
         const entries = Object.entries(run.changes).filter(([value]) => !isImagePath(value));
         for (let offset = 0; offset < entries.length; offset += 16) {
@@ -200,7 +201,7 @@ export class ReviewService {
           const page = await Promise.all(entries.slice(offset, offset + 16).map(async ([value, change]) => {
             const indexed = (!change.before.exists || change.before.text === null) && (!change.after.exists || change.after.text === null) && change.diffStats?.beforeHash === change.before.hash && change.diffStats.afterHash === change.after.hash;
             const [before, after] = indexed ? await Promise.all([this.store.inspect(change.before), this.store.inspect(change.after)]) : await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after)]);
-            return this.turnFile(currentRun, value, { ...change, before, after }, states);
+            return this.turnFile(currentRun, value, { ...change, before, after }, states, !readOnly);
           }));
           files.push(...page);
         }
@@ -218,7 +219,7 @@ export class ReviewService {
       const index = files.findIndex(file => file.id === request.focusFileId);
       if (index < 0) fail('FILE_NOT_FOUND', 'Selected captured file is unavailable');
     }
-    const cached: CachedReview = { summary: null!, files, git, run, createdAt: Date.now(), hydratedFiles: new Set() };
+    const cached: CachedReview = { summary: null!, files, git, run, createdAt: Date.now(), hydratedFiles: new Set(), readOnly };
     // Focus controls eager hydration only; capture insertion order is chronological and immutable.
     const focused = files.find(file => file.id === request.focusFileId) ?? files[0];
     if (run && focused) await this.hydrateFile(cached, focused);
@@ -228,7 +229,7 @@ export class ReviewService {
     summary.files = first.files; summary.nextFileOffset = first.nextOffset;
     // Empty recorded scopes also need stable identities, otherwise every idle poll repaints.
     if (request.scope === 'turn' || request.scope === 'lastTurn') {
-      summary.id = digest(JSON.stringify([{ ...summary, id: undefined }, files.map(publicFile)])).slice(0, 32);
+      summary.id = (readOnly ? 'saved:' : '') + digest(JSON.stringify([{ ...summary, id: undefined }, files.map(publicFile)])).slice(0, 32);
       const previous = this.reviews.get(summary.id);
       if (previous) { previous.createdAt = Date.now(); this.reviews.delete(summary.id); this.reviews.set(summary.id, previous); return previous.summary; }
     }
@@ -251,6 +252,13 @@ export class ReviewService {
     if (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > review.files.length) fail('INVALID_OFFSET', 'Invalid file-list offset');
     return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
   }
+  /** Snapshot-only reads never alter the shared workspace mutation authorization. */
+  async savedReview(request: ReviewRequest): Promise<ReviewSummary | null> {
+    if (request.scope !== 'turn' || request.retrySync) return null;
+    const summary = await this.review(request, true, undefined, true);
+    return this.hasVerifiedReviewFiles(summary.id) ? summary : null;
+  }
+  isReadOnlyReview(id: unknown): boolean { return typeof id === 'string' && this.reviews.get(id)?.readOnly === true; }
   /** All metadata pages were verified by review(); never infer readiness from just page one. */
   hasVerifiedReviewFiles(reviewId: string): boolean {
     const { files } = this.get(reviewId);
@@ -267,7 +275,7 @@ export class ReviewService {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
     const [before, after, states] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson<Record<string, string>>(path.join(this.store.directory, 'restores.json'), {})]);
-    Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states));
+    Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states, !review.readOnly));
     review.hydratedFiles?.add(file.id);
   }
   async file(args: { reviewId: string; fileId: string; offset?: number; limit?: number; context?: number }): Promise<ReviewDetail> {
@@ -408,7 +416,7 @@ export class ReviewService {
     }
     run.cardPreview = { key, summary }; return summary;
   }
-  async replyCards(args: { sessionId: string; offset?: number; revision?: string }): Promise<ReplyCardsPage> {
+  async replyCards(args: { sessionId: string; offset?: number; revision?: string }, persist = true): Promise<ReplyCardsPage> {
     this.validateTurn(args, false);
     const runs = (await this.store.listRuns(false)).filter(run => run.sessionId === args.sessionId && this.cardEligible(run));
     const revision = digest(JSON.stringify(['stats-known-v1', 'host-fold-v1', runs.map(run => [run.id, run.contentVersion, run.state, run.incomplete, run.replyMessageId, run.finalReply, run.bindings, run.changes])]));
@@ -429,7 +437,7 @@ export class ReviewService {
         if (!page.cards.length) fail('SUMMARY_LIMIT', 'Reply card exceeds bridge budget');
         break;
       }
-      if (previousKey !== run.cardPreview?.key) await this.store.writeRun(run);
+      if (persist && previousKey !== run.cardPreview?.key) await this.store.writeRun(run);
     }
     return page;
   }

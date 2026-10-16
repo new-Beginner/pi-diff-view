@@ -1334,7 +1334,7 @@ var ReadWriteQueue = class {
 // src/main.ts
 var import_promises12 = __toESM(require("node:fs/promises"), 1);
 var import_node_path14 = __toESM(require("node:path"), 1);
-var import_node_crypto11 = require("node:crypto");
+var import_node_crypto10 = require("node:crypto");
 init_storage();
 
 // src/core/review-file-policy.ts
@@ -1605,14 +1605,14 @@ async function readGitBlobs(root, requested, options) {
   if (!oids.length) return result;
   if (oids.length > 2e4 || oids.some((oid) => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)))
     fail("GIT_LIMIT", "Invalid or excessive Git object request");
-  const timeout = () => {
+  const timeout2 = () => {
     const left = options.deadline - Date.now();
     if (left <= 0) fail("GIT_TIMEOUT", "Review exceeded the time budget");
     return Math.min(15e3, left);
   };
   const input = (values) => Buffer.from(`${values.join("\n")}
 `, "ascii");
-  const checked = await git(root, ["cat-file", "--batch-check"], { input: input(oids), timeout: timeout() });
+  const checked = await git(root, ["cat-file", "--batch-check"], { input: input(oids), timeout: timeout2() });
   const rows = checked.stdout.toString("ascii").split("\n");
   if (rows.pop() !== "" || rows.length !== oids.length) fail("GIT_FAILED", "Invalid Git batch size response");
   const selected2 = [];
@@ -1633,7 +1633,7 @@ async function readGitBlobs(root, requested, options) {
   if (!selected2.length) return result;
   const output2 = (await git(root, ["cat-file", "--batch"], {
     input: input(selected2),
-    timeout: timeout(),
+    timeout: timeout2(),
     limit: OUTPUT_LIMIT
   })).stdout;
   let offset = 0;
@@ -1789,19 +1789,19 @@ function changes(bytes) {
 }
 async function mapWorking(items, visit) {
   const results = new Array(items.length);
-  let next = 0, failed = false, error;
+  let next = 0, failed2 = false, error;
   await Promise.all(Array.from({ length: Math.min(16, items.length) }, async () => {
-    while (!failed && next < items.length) {
+    while (!failed2 && next < items.length) {
       const i = next++;
       try {
         results[i] = await visit(items[i], i);
       } catch (cause) {
-        failed = true;
+        failed2 = true;
         error ??= cause;
       }
     }
   }));
-  if (failed) throw error;
+  if (failed2) throw error;
   return results;
 }
 function signal() {
@@ -2362,7 +2362,7 @@ var ReviewService = class {
     if (!summary.files.length && offset < cached.files.length) fail("SUMMARY_LIMIT", "File metadata exceeds summary bridge budget");
     return summary;
   }
-  async review(request, inboxImported = false, _activity) {
+  async review(request, inboxImported = false, _activity, readOnly = false) {
     if (!request || !["unstaged", "staged", "commit", "branch", "lastTurn", "turn"].includes(request.scope)) fail("INVALID_SCOPE", "Unknown review scope");
     let root = request.root, files = [], git2, run2, notice;
     if (request.scope === "lastTurn" || request.scope === "turn") {
@@ -2376,13 +2376,14 @@ var ReviewService = class {
         run2 = runs.find((r) => Object.keys(r.changes).some((value) => !isImagePath(value)));
       }
       if (run2?.sessionId !== request.sessionId || root && run2 && canonical(run2.root) !== canonical(root)) run2 = void 0;
-      await this.authorize(request.sessionId, run2);
+      if (readOnly && (request.scope !== "turn" || run2?.version !== 2 || run2.boundary !== "user" || run2.state !== "completed" || run2.incomplete || !run2.replyMessageId || !Number.isFinite(run2.endedAt))) run2 = void 0;
+      if (!readOnly) await this.authorize(request.sessionId, run2);
       if (!run2) {
         root = root ?? "";
         notice = request.scope === "lastTurn" ? "\u672C\u4F1A\u8BDD\u5728\u5F53\u524D\u7B5B\u9009\u8303\u56F4\u5185\u6682\u65E0\u53EF\u5C55\u793A\u7684\u4FEE\u6539\u8BB0\u5F55\uFF1B\u4E0D\u4F1A\u4F7F\u7528\u5176\u4ED6\u4F1A\u8BDD\u6216 Git \u72B6\u6001\u8865\u9020\u5386\u53F2\u3002" : "No recorded turn. History before installation is not reconstructed.";
       } else {
         root = run2.root;
-        if (!this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
+        if (!readOnly && !this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
         const states2 = await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
         const entries = Object.entries(run2.changes).filter(([value]) => !isImagePath(value));
         for (let offset = 0; offset < entries.length; offset += 16) {
@@ -2390,7 +2391,7 @@ var ReviewService = class {
           const page = await Promise.all(entries.slice(offset, offset + 16).map(async ([value, change]) => {
             const indexed = (!change.before.exists || change.before.text === null) && (!change.after.exists || change.after.text === null) && change.diffStats?.beforeHash === change.before.hash && change.diffStats.afterHash === change.after.hash;
             const [before, after] = indexed ? await Promise.all([this.store.inspect(change.before), this.store.inspect(change.after)]) : await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after)]);
-            return this.turnFile(currentRun, value, { ...change, before, after }, states2);
+            return this.turnFile(currentRun, value, { ...change, before, after }, states2, !readOnly);
           }));
           files.push(...page);
         }
@@ -2410,7 +2411,7 @@ var ReviewService = class {
       const index = files.findIndex((file) => file.id === request.focusFileId);
       if (index < 0) fail("FILE_NOT_FOUND", "Selected captured file is unavailable");
     }
-    const cached = { summary: null, files, git: git2, run: run2, createdAt: Date.now(), hydratedFiles: /* @__PURE__ */ new Set() };
+    const cached = { summary: null, files, git: git2, run: run2, createdAt: Date.now(), hydratedFiles: /* @__PURE__ */ new Set(), readOnly };
     const focused = files.find((file) => file.id === request.focusFileId) ?? files[0];
     if (run2 && focused) await this.hydrateFile(cached, focused);
     const summary = { id: (0, import_node_crypto6.randomUUID)(), scope: request.scope, root: root ?? "", files: [], notice, sessionId: run2?.sessionId ?? request.sessionId, runId: run2?.id, ...run2 ? { run: runSummary(run2) } : {} };
@@ -2418,7 +2419,7 @@ var ReviewService = class {
     summary.files = first.files;
     summary.nextFileOffset = first.nextOffset;
     if (request.scope === "turn" || request.scope === "lastTurn") {
-      summary.id = digest(JSON.stringify([{ ...summary, id: void 0 }, files.map(publicFile)])).slice(0, 32);
+      summary.id = (readOnly ? "saved:" : "") + digest(JSON.stringify([{ ...summary, id: void 0 }, files.map(publicFile)])).slice(0, 32);
       const previous = this.reviews.get(summary.id);
       if (previous) {
         previous.createdAt = Date.now();
@@ -2449,6 +2450,15 @@ var ReviewService = class {
     if (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > review.files.length) fail("INVALID_OFFSET", "Invalid file-list offset");
     return { reviewId: args.reviewId, offset: args.offset, ...this.filePage(review, args.offset) };
   }
+  /** Snapshot-only reads never alter the shared workspace mutation authorization. */
+  async savedReview(request) {
+    if (request.scope !== "turn" || request.retrySync) return null;
+    const summary = await this.review(request, true, void 0, true);
+    return this.hasVerifiedReviewFiles(summary.id) ? summary : null;
+  }
+  isReadOnlyReview(id2) {
+    return typeof id2 === "string" && this.reviews.get(id2)?.readOnly === true;
+  }
   /** All metadata pages were verified by review(); never infer readiness from just page one. */
   hasVerifiedReviewFiles(reviewId) {
     const { files } = this.get(reviewId);
@@ -2469,7 +2479,7 @@ var ReviewService = class {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
     const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {})]);
-    Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states2));
+    Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states2, !review.readOnly));
     review.hydratedFiles?.add(file.id);
   }
   async file(args) {
@@ -2645,7 +2655,7 @@ ${text2}`;
     run2.cardPreview = { key, summary };
     return summary;
   }
-  async replyCards(args) {
+  async replyCards(args, persist = true) {
     this.validateTurn(args, false);
     const runs = (await this.store.listRuns(false)).filter((run2) => run2.sessionId === args.sessionId && this.cardEligible(run2));
     const revision = digest(JSON.stringify(["stats-known-v1", "host-fold-v1", runs.map((run2) => [run2.id, run2.contentVersion, run2.state, run2.incomplete, run2.replyMessageId, run2.finalReply, run2.bindings, run2.changes])]));
@@ -2668,7 +2678,7 @@ ${text2}`;
         if (!page.cards.length) fail("SUMMARY_LIMIT", "Reply card exceeds bridge budget");
         break;
       }
-      if (previousKey !== run2.cardPreview?.key) await this.store.writeRun(run2);
+      if (persist && previousKey !== run2.cardPreview?.key) await this.store.writeRun(run2);
     }
     return page;
   }
@@ -2804,7 +2814,8 @@ var JobQueue = class {
         }
       }
     };
-    if (navigation2 || systemOpen || method === "gitManage") void work();
+    const savedRead = method === "replyCards" || method === "review" && args?.scope === "turn";
+    if (navigation2 || systemOpen || method === "gitManage" || savedRead) void work();
     else this.tail = this.tail.then(work);
     return { jobId: id2 };
   }
@@ -2919,6 +2930,58 @@ var ReviewNavigationStore = class {
   clear() {
     this.selections.clear();
     this.activeSession = void 0;
+  }
+};
+
+// src/core/review-surfaces.ts
+init_path_policy();
+var ReviewSurfaces = class {
+  constructor(now = Date.now) {
+    this.now = now;
+  }
+  leases = /* @__PURE__ */ new Map();
+  revision = 0;
+  exchange(args) {
+    if (!args || !["renderer", "view"].includes(args.role) || typeof args.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.id) || !Number.isSafeInteger(args.seq) || args.seq < 1) fail("NAVIGATION_INVALID", "Invalid surface identity");
+    if (args.sessionId != null && (typeof args.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId))) fail("NAVIGATION_INVALID", "Invalid surface session");
+    if (args.nonce != null && (typeof args.nonce !== "string" || args.nonce.length > 80 || !Number.isSafeInteger(args.selectionRevision) || args.selectionRevision < 1)) fail("NAVIGATION_INVALID", "Invalid surface selection");
+    const now = this.now();
+    for (const [key2, value2] of this.leases) if (now - value2.at > 15e3) this.leases.delete(key2);
+    const id2 = `${args.role}:${args.id}`, old = this.leases.get(id2);
+    if (old && args.seq <= old.seq) return { state: "stale", sessionId: null };
+    if (args.release) {
+      this.leases.delete(id2);
+      return { state: "waiting", sessionId: null };
+    }
+    if (!old && this.leases.size >= 32) fail("NAVIGATION_BUSY", "Too many active review instances");
+    let value;
+    if (args.role === "renderer") {
+      const sessionId = args.sessionId ?? null;
+      const changed = !old || old.sessionId !== sessionId;
+      value = { ...old, role: args.role, id: args.id, seq: args.seq, sessionId, at: now, version: old?.version ?? ++this.revision };
+      if (changed) {
+        value.nonce = void 0;
+        value.selectionRevision = void 0;
+        value.version = ++this.revision;
+      }
+      if (args.nonce != null) {
+        value.nonce = args.nonce;
+        value.selectionRevision = args.selectionRevision;
+        value.version = ++this.revision;
+      }
+    } else value = { ...old, role: args.role, id: args.id, seq: args.seq, ack: args.ack, at: now, version: 0 };
+    this.leases.set(id2, value);
+    const renderers = [...this.leases.values()].filter((row) => row.role === "renderer");
+    const views = [...this.leases.values()].filter((row) => row.role === "view");
+    if (renderers.length > 1 || views.length > 1) return { state: "ambiguous", sessionId: null };
+    if (renderers.length !== 1) return { state: "waiting", sessionId: null };
+    const renderer = renderers[0];
+    const key = `${renderer.id}:${renderer.version}:${views[0]?.id ?? ""}`;
+    return { state: "ready", sessionId: renderer.sessionId ?? null, key, nonce: renderer.nonce, selectionRevision: renderer.selectionRevision, confirmed: views.length === 1 && views[0].ack === key };
+  }
+  clear() {
+    this.leases.clear();
+    this.revision++;
   }
 };
 
@@ -3620,10 +3683,10 @@ var HostHistoryImporter = class {
           continue;
         }
         const stopped = last?.meta.status === "aborted" || children.some((child) => ["aborted", "stopped"].includes(child.status));
-        const failed = last?.meta.status === "error" || children.some((child) => child.status === "failed");
-        const incomplete = stopped || failed || Object.values(changes2).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
+        const failed2 = last?.meta.status === "error" || children.some((child) => child.status === "failed");
+        const incomplete = stopped || failed2 || Object.values(changes2).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
         const unresolved = !statusKnown && !replyId && !live;
-        const run2 = { version: 2, id: id2, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live || unresolved ? void 0 : Math.max(retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map((child) => child.completedAt ?? 0)), state: live ? "running" : stopped ? "aborted" : failed ? "incomplete" : replyId ? "completed" : unresolved ? "unknown" : "incomplete", fileCount: Object.keys(changes2).length, incomplete: incomplete || unresolved, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? "\u6267\u884C\u72B6\u6001\u8BC1\u636E\u7F3A\u5931\u6216\u8FC7\u671F\uFF0C\u5F85\u6838\u9A8C\uFF1B\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5DF2\u7ED3\u675F\u3002" : incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
+        const run2 = { version: 2, id: id2, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live || unresolved ? void 0 : Math.max(retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map((child) => child.completedAt ?? 0)), state: live ? "running" : stopped ? "aborted" : failed2 ? "incomplete" : replyId ? "completed" : unresolved ? "unknown" : "incomplete", fileCount: Object.keys(changes2).length, incomplete: incomplete || unresolved, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? "\u6267\u884C\u72B6\u6001\u8BC1\u636E\u7F3A\u5931\u6216\u8FC7\u671F\uFF0C\u5F85\u6838\u9A8C\uFF1B\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5DF2\u7ED3\u675F\u3002" : incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
         run2.delegations = children.length ? children : void 0;
         if (live) run2.bindings = {};
         if (duplicates.length) {
@@ -4531,92 +4594,6 @@ var HostEvidenceBuffer = class {
   }
 };
 
-// src/core/file-open.ts
-var import_node_crypto10 = require("node:crypto");
-init_path_policy();
-var FileOpenRequests = class {
-  constructor(now = Date.now) {
-    this.now = now;
-  }
-  requests = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Map();
-  acknowledgements = /* @__PURE__ */ new Map();
-  add(target) {
-    for (const [id2, request] of this.requests) if (this.now() - request.at > 15e3) this.requests.delete(id2);
-    if (this.requests.size >= 16) fail("FILE_OPEN_BUSY", "\u6253\u5F00\u8BF7\u6C42\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
-    const requestId = (0, import_node_crypto10.randomUUID)();
-    this.requests.set(requestId, { target: { ...target, requestId }, at: this.now(), delivered: false, status: { state: "pending" } });
-    this.listeners.get(target.sessionId)?.finish(this.take(target.sessionId));
-    return { requestId };
-  }
-  take(sessionId) {
-    const targets = [];
-    for (const request of this.requests.values()) {
-      if (request.target.sessionId !== sessionId || request.delivered || request.status.state !== "pending" || this.now() - request.at > 1e4) continue;
-      request.delivered = true;
-      targets.push(request.target);
-    }
-    return targets;
-  }
-  listen(sessionId, listenerId) {
-    if (typeof sessionId !== "string" || !sessionId || sessionId.length > 256 || /[\0\r\n]/.test(sessionId) || typeof listenerId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(listenerId)) fail("FILE_OPEN_INVALID", "Invalid file navigation listener");
-    this.listeners.get(sessionId)?.finish([]);
-    if (this.listeners.size >= 16) fail("FILE_OPEN_BUSY", "Too many file navigation listeners");
-    const targets = this.take(sessionId);
-    if (targets.length) return Promise.resolve(targets);
-    return new Promise((resolve) => {
-      const listener = { id: listenerId, finish: (targets2) => {
-        clearTimeout(timer2);
-        if (this.listeners.get(sessionId) === listener) this.listeners.delete(sessionId);
-        resolve(targets2);
-      } };
-      const timer2 = setTimeout(() => listener.finish([]), 1500);
-      this.listeners.set(sessionId, listener);
-    });
-  }
-  cancelListen(sessionId, listenerId) {
-    const listener = this.listeners.get(sessionId);
-    if (listener?.id === listenerId) listener.finish([]);
-    return { ok: true };
-  }
-  status(requestId) {
-    const request = this.requests.get(requestId);
-    if (!request) fail("FILE_OPEN_MISSING", "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u8BD5\u3002");
-    if (request.status.state === "pending" && this.now() - request.at > 1e4) request.status = { state: "error", error: "\u6587\u4EF6\u7BA1\u7406\u5668\u6CA1\u6709\u54CD\u5E94\uFF0C\u8BF7\u786E\u8BA4 renderer \u6269\u5C55\u5DF2\u542F\u7528\u540E\u91CD\u8BD5\u3002" };
-    return request.status;
-  }
-  async waitStatus(requestId) {
-    const status2 = this.status(requestId);
-    if (status2.state !== "pending") return status2;
-    await new Promise((resolve) => {
-      const waiters = this.acknowledgements.get(requestId) ?? /* @__PURE__ */ new Set();
-      const finish = () => {
-        clearTimeout(timer2);
-        waiters.delete(finish);
-        if (!waiters.size) this.acknowledgements.delete(requestId);
-        resolve();
-      };
-      const timer2 = setTimeout(finish, 1500);
-      waiters.add(finish);
-      this.acknowledgements.set(requestId, waiters);
-    });
-    return this.status(requestId);
-  }
-  complete(requestId, sessionId, error) {
-    const request = this.requests.get(requestId);
-    if (!request || request.target.sessionId !== sessionId || !request.delivered || this.status(requestId).state !== "pending") fail("FILE_OPEN_MISSING", "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u5931\u6548\u3002");
-    request.status = error ? { state: "error", error: error.slice(0, 500) } : { state: "done" };
-    for (const finish of this.acknowledgements.get(requestId) ?? []) finish();
-    return { ok: true };
-  }
-  clear() {
-    for (const listener of this.listeners.values()) listener.finish([]);
-    for (const request of this.requests.values()) request.status = { state: "error", error: "\u6587\u4EF6\u6253\u5F00\u8BF7\u6C42\u5DF2\u53D6\u6D88\u3002" };
-    for (const waiters of this.acknowledgements.values()) for (const finish of waiters) finish();
-    this.requests.clear();
-  }
-};
-
 // src/core/system-open.ts
 var import_node_child_process3 = require("node:child_process");
 var import_promises11 = __toESM(require("node:fs/promises"), 1);
@@ -4624,73 +4601,177 @@ var import_node_path13 = __toESM(require("node:path"), 1);
 init_path_policy();
 var script = `
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-try {
-  $info = New-Object System.Diagnostics.ProcessStartInfo
-  $info.FileName = $env:PI_DIFF_SYSTEM_OPEN_TARGET
-  [Environment]::SetEnvironmentVariable('PI_DIFF_SYSTEM_OPEN_TARGET', $null, 'Process')
-  $info.UseShellExecute = $true
-  [System.Diagnostics.Process]::Start($info) | Out-Null
-  exit 0
-} catch {
-  [Console]::Error.WriteLine($_.Exception.Message)
-  exit 1
+$ProgressPreference = 'SilentlyContinue'
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$null = ConvertFrom-Json -InputObject '{"id":0}'
+$null = New-Object System.Diagnostics.ProcessStartInfo
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject @{ready=$true} -Compress))
+while ($null -ne ($line = [Console]::ReadLine())) {
+  $request = $null
+  try {
+    $request = ConvertFrom-Json -InputObject $line
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = [string]$request.path
+    $info.UseShellExecute = $true
+    $opened = [System.Diagnostics.Process]::Start($info)
+    if ($null -ne $opened) { $opened.Dispose() }
+    $response = @{id=$request.id; ok=$true}
+  } catch {
+    $response = @{id=$request.id; ok=$false; error=$_.Exception.Message}
+  }
+  [Console]::Out.WriteLine((ConvertTo-Json -InputObject $response -Compress))
 }`;
 var encodedScript = Buffer.from(script, "utf16le").toString("base64");
-async function openSystemFile(target, options = {}) {
-  if (process.platform !== "win32") fail("SYSTEM_OPEN_UNSUPPORTED", "\u7CFB\u7EDF\u6253\u5F00\u76EE\u524D\u4EC5\u652F\u6301 Windows\u3002 / System open currently supports Windows only.");
-  assertPublicPath(target);
-  if (!import_node_path13.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
+var coded = (code, message) => Object.assign(new Error(message), { code });
+var unloaded = () => coded("PLUGIN_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D\uFF1B\u7CFB\u7EDF\u6253\u5F00\u7ED3\u679C\u672A\u786E\u8BA4\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\u3002 / Plugin unloaded; open result unknown. No automatic retry.");
+var timeout = () => coded("SYSTEM_OPEN_TIMEOUT", "\u7CFB\u7EDF\u6253\u5F00\u8D85\u65F6\uFF0C\u7ED3\u679C\u672A\u786E\u8BA4\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\uFF0C\u8BF7\u68C0\u67E5\u9ED8\u8BA4\u7A0B\u5E8F\u3002 / System open timed out; result unknown. No automatic retry.");
+var failed = (reason) => coded("SYSTEM_OPEN_FAILED", `\u7CFB\u7EDF\u6253\u5F00\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6587\u4EF6\u5173\u8054\uFF1B\u7ED3\u679C\u672A\u786E\u8BA4\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\u3002 / System open failed; result unknown. No automatic retry. ${reason}`);
+var launcher;
+var activeOpen;
+var epoch = 0;
+function getLauncher() {
+  if (launcher) return launcher;
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
+  if (!/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) fail("SYSTEM_OPEN_FAILED", "Invalid Windows system directory");
+  const executable = import_node_path13.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const child = (0, import_node_child_process3.spawn)(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedScript], {
+    shell: false,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  let resolveReady, rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  void ready.catch(() => {
+  });
+  let closed = false, warmed = false, buffer = "", stderr = "", sequence = 0;
+  let pending;
+  const startupTimer = setTimeout(() => state.stop(timeout()), 15e3);
+  const state = {
+    ready,
+    stop(error) {
+      if (closed) return;
+      closed = true;
+      clearTimeout(startupTimer);
+      if (launcher === state) launcher = void 0;
+      rejectReady(error);
+      pending?.finish(error);
+      child.kill();
+    },
+    send(target) {
+      if (closed || !warmed) return Promise.reject(failed("Launcher unavailable"));
+      if (pending) return Promise.reject(coded("SYSTEM_OPEN_BUSY", "A system-open request is already pending"));
+      return new Promise((resolve, reject) => {
+        const timer2 = setTimeout(() => state.stop(timeout()), 15e3);
+        const request = { id: ++sequence, finish(error) {
+          if (pending !== request) return;
+          pending = void 0;
+          clearTimeout(timer2);
+          if (error) reject(error);
+          else resolve({ ok: true });
+        } };
+        pending = request;
+        try {
+          child.stdin.write(JSON.stringify({ id: request.id, path: target }) + "\n", "utf8");
+        } catch (error) {
+          state.stop(failed(String(error.message)));
+        }
+      });
+    }
+  };
+  launcher = state;
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (value) => {
+    stderr = (stderr + value).slice(0, 4096);
+  });
+  child.stdout.on("data", (value) => {
+    if (closed) return;
+    buffer += value;
+    if (buffer.length > 16384) {
+      state.stop(failed("Launcher response too large"));
+      return;
+    }
+    let end;
+    while ((end = buffer.indexOf("\n")) >= 0 && !closed) {
+      const line = buffer.slice(0, end).trim();
+      buffer = buffer.slice(end + 1);
+      if (!line) continue;
+      try {
+        const response = JSON.parse(line);
+        if (!warmed && response.ready === true) {
+          warmed = true;
+          clearTimeout(startupTimer);
+          resolveReady();
+        } else if (pending && response.id === pending.id && typeof response.ok === "boolean") pending.finish(response.ok ? void 0 : failed(String(response.error ?? "").slice(0, 4096)));
+        else state.stop(failed("Unexpected launcher acknowledgement"));
+      } catch {
+        state.stop(failed("Invalid launcher response"));
+      }
+    }
+  });
+  child.stdin.on("error", (error) => state.stop(failed(error.message)));
+  child.once("error", (error) => state.stop(failed(error.message)));
+  child.once("exit", () => state.stop(failed(stderr.trim() || "Launcher exited")));
+  return state;
+}
+function warmSystemOpener() {
+  if (process.platform !== "win32") return;
+  try {
+    getLauncher();
+  } catch {
+  }
+}
+function closeSystemOpener() {
+  epoch++;
+  activeOpen = void 0;
+  launcher?.stop(unloaded());
+}
+async function assertRegularFile(target) {
   const stat = await import_promises11.default.lstat(target).catch((error) => {
     if (error.code === "ENOENT") fail("FILE_NOT_FOUND", "\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u7CFB\u7EDF\u6253\u5F00\u3002 / The file no longer exists.");
     throw error;
   });
   if (stat.isSymbolicLink() || !stat.isFile()) fail("NOT_FILE", "Only regular files can be opened");
-  const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
-  if (!/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) fail("SYSTEM_OPEN_FAILED", "Invalid Windows system directory");
-  const executable = import_node_path13.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  await options.validate?.();
-  if (options.signal?.aborted) fail("PLUGIN_UNLOADED", "Diff view unloaded; the file was not opened");
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const child = (0, import_node_child_process3.spawn)(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedScript], {
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "ignore", "pipe"],
-      env: { ...process.env, PI_DIFF_SYSTEM_OPEN_TARGET: target }
-    });
-    let stderr = "";
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer2);
-      options.signal?.removeEventListener("abort", abort);
-      if (error) reject(error);
-      else resolve({ ok: true });
-    };
-    const abort = () => {
-      finish(Object.assign(new Error("\u63D2\u4EF6\u5DF2\u5378\u8F7D\uFF1B\u7CFB\u7EDF\u6253\u5F00\u7ED3\u679C\u672A\u786E\u8BA4\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\u3002 / Plugin unloaded; open result unknown. No automatic retry."), { code: "PLUGIN_UNLOADED" }));
-      child.kill();
-    };
-    const timer2 = setTimeout(() => {
-      finish(Object.assign(new Error("\u7CFB\u7EDF\u6253\u5F00\u8D85\u65F6\uFF0C\u7ED3\u679C\u672A\u786E\u8BA4\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5\uFF0C\u8BF7\u68C0\u67E5\u9ED8\u8BA4\u7A0B\u5E8F\u3002 / System open timed out; result unknown. No automatic retry."), { code: "SYSTEM_OPEN_TIMEOUT" }));
-      child.kill();
-    }, 15e3);
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (value) => {
-      stderr = (stderr + value).slice(0, 4096);
-    });
-    child.once("error", (error) => finish(Object.assign(new Error(`\u65E0\u6CD5\u542F\u52A8\u7CFB\u7EDF\u6253\u5F00\u3002 / Could not start system open: ${error.message}`), { code: "SYSTEM_OPEN_FAILED" })));
-    child.once("exit", (code) => finish(code === 0 ? void 0 : Object.assign(new Error(`\u7CFB\u7EDF\u6253\u5F00\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6587\u4EF6\u5173\u8054\u3002 / System open failed; check the default app.${stderr.trim() ? ` ${stderr.trim()}` : ""}`), { code: "SYSTEM_OPEN_FAILED" })));
+}
+async function openSystemFile(target, options = {}) {
+  if (process.platform !== "win32") fail("SYSTEM_OPEN_UNSUPPORTED", "\u7CFB\u7EDF\u6253\u5F00\u76EE\u524D\u4EC5\u652F\u6301 Windows\u3002 / System open currently supports Windows only.");
+  if (options.signal?.aborted) throw unloaded();
+  assertPublicPath(target);
+  if (!import_node_path13.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
+  if (activeOpen) fail("SYSTEM_OPEN_BUSY", "A system-open request is already pending");
+  const token = {}, generation2 = epoch;
+  activeOpen = token;
+  let worker;
+  const guard2 = () => {
+    if (options.signal?.aborted || generation2 !== epoch) throw unloaded();
+  };
+  const abort = () => worker?.stop(unloaded());
+  try {
+    await assertRegularFile(target);
+    guard2();
+    worker = getLauncher();
     options.signal?.addEventListener("abort", abort, { once: true });
-    if (options.signal?.aborted) abort();
-  });
+    guard2();
+    await worker.ready;
+    guard2();
+    await options.validate?.();
+    await assertRegularFile(target);
+    guard2();
+    return await worker.send(target);
+  } finally {
+    options.signal?.removeEventListener("abort", abort);
+    if (activeOpen === token) activeOpen = void 0;
+  }
 }
 
 // src/main.ts
+var surfaces = new ReviewSurfaces();
 var evidenceStore = null;
 var systemOpenController = new AbortController();
-var fileOpens = new FileOpenRequests();
 var evidence = new HostEvidenceBuffer();
 var history = null;
 var contexts = /* @__PURE__ */ new Map();
@@ -4710,6 +4791,8 @@ var timer;
 var turnEnded;
 var tail = Promise.resolve();
 var navigationTail = Promise.resolve();
+var savedReads = /* @__PURE__ */ new Set();
+var savedRefreshes = /* @__PURE__ */ new Map();
 var navigationVersion = 0;
 var navigationClearing = false;
 var disposed = false;
@@ -4726,12 +4809,68 @@ function serial(work) {
   });
   return result;
 }
+function queueSavedRefresh(s, method, args, root) {
+  const key = JSON.stringify([args.sessionId, canonical(root)]);
+  if (savedRefreshes.has(key)) return;
+  const version = navigationVersion;
+  const task = serial(async () => {
+    if (disposed || service !== s || navigationClearing || version !== navigationVersion) return;
+    await execute(s, method, args);
+  });
+  savedRefreshes.set(key, task);
+  const settled = () => {
+    if (savedRefreshes.get(key) === task) savedRefreshes.delete(key);
+  };
+  void task.then(settled, settled);
+}
+function trySavedRead(s, method, args) {
+  const version = navigationVersion;
+  const current = () => {
+    if (disposed || service !== s || navigationClearing || version !== navigationVersion) fail("SELECTION_MISSING", "Saved history cleared or plugin unloaded");
+  };
+  const task = (async () => {
+    current();
+    if (method === "replyCards") {
+      const result = await s.replyCards(args, false);
+      current();
+      const context2 = contexts.get(args.sessionId);
+      if (history && context2 && (store.needsRecovery(args.sessionId) || Date.now() - context2.syncedAt > 2e3)) queueSavedRefresh(s, method, args, context2.root);
+      return { result };
+    }
+    if (["file", "reviewFiles"].includes(method) && s.isReadOnlyReview(args.reviewId)) {
+      const result = await s.invoke(method, args);
+      current();
+      return { result };
+    }
+    if (!history || method !== "review" || args.scope !== "turn" || args.retrySync) return;
+    const summary = await s.savedReview(args);
+    current();
+    if (!summary) return;
+    const key = JSON.stringify([args.sessionId, canonical(summary.root)]), now = Date.now();
+    const context = contexts.get(args.sessionId), preparation = reviewPreparations.get(key);
+    const ready = context && canonical(context.root) === canonical(summary.root) && context.prepared && now - context.syncedAt <= 2e3;
+    if (!store.needsRecovery(args.sessionId) && (ready || preparation?.prepared && now - preparation.attemptedAt <= 2e3)) return;
+    if (!preparation) {
+      reviewPreparations.set(key, { startedAt: now, attemptedAt: 0, prepared: false });
+      while (reviewPreparations.size > 200) reviewPreparations.delete(reviewPreparations.keys().next().value);
+    }
+    queueSavedRefresh(s, method, args, summary.root);
+    const state = now - (preparation?.startedAt ?? now) >= 15e3 ? "unavailable" : "pending";
+    return { result: { ...summary, sync: { state, saved: true } } };
+  })();
+  savedReads.add(task);
+  void task.then(() => savedReads.delete(task), () => savedReads.delete(task));
+  return task;
+}
 function schedule(s, method, args) {
   const work = async () => {
     if (disposed || service !== s) fail("PLUGIN_UNLOADED", "Diff view unloaded");
     return execute(s, method, args);
   };
   if (method === "openSystemFile") return work();
+  if (method === "replyCards" || method === "review" && args?.scope === "turn" && !args.retrySync || ["file", "reviewFiles"].includes(method) && s.isReadOnlyReview(args?.reviewId)) {
+    return trySavedRead(s, method, args).then((saved) => saved ? saved.result : serial(work));
+  }
   if (method === "gitManage") {
     const result = repositoryQueue.run(work, !managementReads.has(args?.operation));
     repositoryTasks.add(result);
@@ -4758,8 +4897,9 @@ async function heartbeat() {
 }
 async function onLoad() {
   disposed = false;
-  generation = (0, import_node_crypto11.randomUUID)();
+  generation = (0, import_node_crypto10.randomUUID)();
   pluginRoot = await import_promises12.default.realpath(__dirname);
+  surfaces.clear();
   systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath();
   store = new SnapshotStore(dataPath);
@@ -4770,10 +4910,10 @@ async function onLoad() {
   contexts.clear();
   evidence.clear();
   reviewPreparations.clear();
+  savedRefreshes.clear();
   sessionRoots.clear();
   const savedRoots = await readJson(import_node_path14.default.join(store.directory, "session-roots.json"), {});
   for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path14.default.isAbsolute(root)) sessionRoots.set(id2, root);
-  fileOpens.clear();
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
@@ -4817,19 +4957,22 @@ async function onLoad() {
     });
   }, 2e3);
   timer.unref?.();
+  warmSystemOpener();
 }
 async function onUnload() {
   disposed = true;
   if (timer) clearInterval(timer);
   timer = void 0;
+  surfaces.clear();
   systemOpenController.abort();
+  closeSystemOpener();
   if (turnEnded) pi.events.off("session:turnEnded", turnEnded);
   turnEnded = void 0;
   jobs?.close();
   jobs = null;
   navigation.clear();
-  fileOpens.clear();
   await tail;
+  await Promise.allSettled([...savedReads]);
   await navigationTail;
   await Promise.allSettled([...repositoryTasks]);
   evidence.clear();
@@ -4850,6 +4993,14 @@ async function onRendererCall(method, args) {
 }
 async function dispatch2(method, args) {
   if (!service || disposed) fail("PLUGIN_UNLOADED", "Diff view is not loaded");
+  if (method === "reviewSurface") {
+    const request = args;
+    if (request?.nonce != null) {
+      const selection = navigation.get(request.nonce, request.sessionId);
+      if (!selection || selection.revision !== request.selectionRevision) fail("SELECTION_MISSING", "Selection changed; click again");
+    }
+    return surfaces.exchange(request);
+  }
   if (method === "selectTurn") {
     if (navigationClearing) fail("SELECTION_MISSING", "History is being cleared");
     const s = service;
@@ -4862,7 +5013,7 @@ async function dispatch2(method, args) {
     });
     return result;
   }
-  if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openFile" || method === "openSystemFile") return execute(service, method, args ?? {});
+  if (method === "activeReviewSession" || method === "readTurnSelection" || method === "openSystemFile") return execute(service, method, args ?? {});
   if (method === "nativeProbeInfo") return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === "rendererReport") {
     const stage = args?.stage;
@@ -4923,16 +5074,17 @@ async function recordedReview(s, args, context) {
       const result = await history.syncSession(args.sessionId, root, context ? freshHistoryContext(context) : { statusKnown: false, messages: evidence.messages(args.sessionId, canonical(root)) });
       preparation.prepared = result.warnings.length === 0;
       if (context) {
-        context.syncedAt = now;
+        context.syncedAt = Date.now();
         context.prepared = preparation.prepared;
       }
     } catch {
       preparation.prepared = false;
       if (context) {
-        context.syncedAt = now;
+        context.syncedAt = Date.now();
         context.prepared = false;
       }
     }
+    preparation.attemptedAt = Date.now();
     store.acknowledgeRecovery(args.sessionId);
   }
   const ready = context?.prepared === true;
@@ -4959,17 +5111,6 @@ async function execute(s, method, args) {
       const current = await resolveTarget();
       if (canonical(current.path) !== canonical(target.path)) fail("FILE_CHANGED", "File identity changed; refresh before opening");
     } });
-  }
-  if (method === "openFile") {
-    if (args.listen === true) return fileOpens.listen(args.sessionId, args.listenerId);
-    if (typeof args.cancelListen === "string") return fileOpens.cancelListen(args.sessionId, args.cancelListen);
-    if (typeof args.requestId === "string") {
-      if (args.complete === true) return fileOpens.complete(args.requestId, args.sessionId, typeof args.error === "string" ? args.error : void 0);
-      return args.wait === true ? fileOpens.waitStatus(args.requestId) : fileOpens.status(args.requestId);
-    }
-    const target = await s.fileOpenTarget(args);
-    if (disposed || service !== s) fail("PLUGIN_UNLOADED", "Diff view unloaded");
-    return fileOpens.add(target);
   }
   if (method === "sessionEvidence") {
     const root = await sessionRoot(args);
@@ -5081,13 +5222,14 @@ async function execute(s, method, args) {
   if (method === "clearHistory" && args?.confirmed === true) {
     navigationClearing = true;
     navigationVersion++;
+    surfaces.clear();
     try {
       await navigationTail;
+      await Promise.allSettled([...savedReads]);
       const result = await s.invoke(method, args);
       evidence.clear();
       reviewPreparations.clear();
       navigation.clear();
-      fileOpens.clear();
       await atomicJson(import_node_path14.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {

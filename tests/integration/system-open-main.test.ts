@@ -27,10 +27,12 @@ it('built main opens only validated current session files, including unavailable
   const opened: string[] = [], launch = vi.fn(async (value: string, options: { validate: () => Promise<void>; signal: AbortSignal }) => {
     await options.validate(); if (options.signal.aborted) throw new Error('unloaded'); opened.push(value); return { ok: true };
   });
-  const previousPi = (globalThis as any).pi, previousLaunch = (globalThis as any).__systemOpenTest;
+  const previousPi = (globalThis as any).pi, previousLaunch = (globalThis as any).__systemOpenTest, previousLifecycle = (globalThis as any).__systemOpenLifecycle;
+  const lifecycle: string[] = [];
+  (globalThis as any).__systemOpenLifecycle = (phase: string) => lifecycle.push(phase);
   (globalThis as any).__systemOpenTest = launch;
   await build({ entryPoints: ['src/main.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true, external: ['original-fs'], plugins: [{ name: 'mock-os-launch', setup(builder) {
-    builder.onLoad({ filter: /[\\/]system-open\.ts$/ }, () => ({ contents: 'export const openSystemFile = (path, options) => globalThis.__systemOpenTest(path, options);', loader: 'js' }));
+    builder.onLoad({ filter: /[\\/]system-open\.ts$/ }, () => ({ contents: 'export const openSystemFile = (path, options) => globalThis.__systemOpenTest(path, options); export const warmSystemOpener = () => globalThis.__systemOpenLifecycle("warm"); export const closeSystemOpener = () => globalThis.__systemOpenLifecycle("close");', loader: 'js' }));
   } }] });
   const home = vi.spyOn(os, 'homedir').mockReturnValue(directory);
   const workspace = vi.fn(async () => ({ path: root }));
@@ -40,6 +42,7 @@ it('built main opens only validated current session files, including unavailable
     await plugin.onLoad(); loaded = true;
     const review: ReviewSummary = await plugin.onPanelInvoke('diff.review', { scope: 'turn', sessionId: 's', runId: run.id, root });
     const args = (value: string) => ({ reviewId: review.id, fileId: review.files.find(file => file.path === value)!.id, sessionId: 's' });
+    expect(lifecycle).toEqual(['warm']); expect(opened).toEqual([]);
     let release!: () => void;
     workspace.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ path: root }); }));
     const blocked = plugin.onPanelInvoke('diff.bootstrap', {});
@@ -68,10 +71,11 @@ it('built main opens only validated current session files, including unavailable
     try { await expect(plugin.onPanelInvoke('diff.openSystemFile', args('report.pdf'))).rejects.toMatchObject({ code: 'REVIEW_EXPIRED' }); }
     finally { clock.mockRestore(); }
     await plugin.onUnload(); loaded = false;
+    expect(lifecycle).toEqual(['warm', 'close']);
     await expect(plugin.onRendererCall('openSystemFile', args('report.pdf'))).rejects.toMatchObject({ code: 'PLUGIN_UNLOADED' });
   } finally {
     if (loaded) await plugin.onUnload(); home.mockRestore();
-    (globalThis as any).pi = previousPi; (globalThis as any).__systemOpenTest = previousLaunch;
+    (globalThis as any).pi = previousPi; (globalThis as any).__systemOpenTest = previousLaunch; (globalThis as any).__systemOpenLifecycle = previousLifecycle;
     await fs.rm(directory, { recursive: true, force: true });
   }
 });

@@ -7,7 +7,7 @@ const queue: NonNullable<typeof realm.__piDiffBurstQueue> = realm.__piDiffBurstQ
 const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards']);
 const reads = new Set(['bootstrap', 'review', 'reviewFiles', 'turnSummary', 'runningChanges', 'file', 'comments', 'feedback', 'replyCards', 'rendererReport', 'nativeProbeInfo']);
 const gitReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitFiles', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
-const navigationMethods = new Set(['openFile', 'openSystemFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn']);
+const navigationMethods = new Set(['openSystemFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn', 'reviewSurface']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
   const wire = <T,>(method: string, args?: unknown, navigation = navigationMethods.has(method)): Promise<T> => {
@@ -59,6 +59,10 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
   };
   return { invoke<T>(method: string, args?: unknown): Promise<T> {
     if (navigationMethods.has(method)) return call<T>(method, args);
+    // Saved history is immutable/read-only while sync runs. Backend still validates ownership.
+    const savedRead = method === 'replyCards' || (method === 'review' && (args as { scope?: string; retrySync?: boolean })?.scope === 'turn' && !(args as { retrySync?: boolean }).retrySync)
+      || (['file', 'reviewFiles'].includes(method) && String((args as { reviewId?: string })?.reviewId ?? '').startsWith('saved:'));
+    if (savedRead) return call<T>(method, args);
     const read = reads.has(method) || (method === 'gitManage' && gitReads.has((args as { operation?: string } | undefined)?.operation ?? ''));
     const repository = method === 'gitManage' || method === 'action' || method === 'batchAction';
     const lane = repository ? 'gitTail' : 'mutationTail';

@@ -2,11 +2,14 @@ import { test, expect, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { ReviewSurfaces } from '../../src/core/review-surfaces';
 let harness = '';
 test.beforeAll(async () => {
   harness = (await build({ entryPoints: ['tests/e2e/renderer-harness.tsx'], bundle: true, platform: 'browser', format: 'iife', target: 'es2022', write: false, loader: { '.css': 'empty' } })).outputFiles[0].text;
 });
 async function setup(page: Page, locale = 'en', query = '', filesPerCard = 4, expectedCards?: number) {
+  const surfaces = new ReviewSurfaces();
+  await page.route('**/surface-rpc', async route => { const result = surfaces.exchange(route.request().postDataJSON()); await route.fulfill({ contentType: 'application/json', body: JSON.stringify(result) }); });
   await page.route('**/renderer-demo*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"><script src="/mock.js"></script><style>body{margin:0;font:14px/1.7 'Segoe UI',system-ui;background:#fff;color:#30343b}#mock-chat{padding:30px;width:min(880px,100%);box-sizing:border-box;transition:none}body.sidebar-open #mock-chat{width:calc(100% - 640px)}h1{font-size:17px;margin:0 0 26px}.demo-label{color:#7b8290;font-size:12px;padding:8px 16px;background:#f4f6f9}.mock-reply-text{padding:60px 0 12px}.mock-composer{margin-top:90px;border:1px solid #e4e7ec;border-radius:20px;padding:18px 20px;color:#8a929e}#demo-plugin-sidebar{position:fixed;right:0;top:0;bottom:0;width:640px;border-left:1px solid #e4e7ec;background:#fff;display:flex;flex-direction:column}#demo-plugin-sidebar header{padding:10px 14px;border-bottom:1px solid #e4e7ec;display:flex;justify-content:space-between}#demo-plugin-sidebar header button{background:transparent;border:0;cursor:pointer}#demo-plugin-sidebar iframe{width:100%;flex:1;border:0;min-height:0}</style></head><body><div class="demo-label">界面预览 · 测试数据与模拟宿主，不是实际会话验收</div><main id="mock-chat"><h1>Diff view 文末文件变更</h1><div class="mock-reply-text"><p>已完成本次修改，文件变更与检查结果如下。</p><p>点击下面的文件名，在右侧 Diff view 页签查看对应差异。</p></div><article id="mock-reply"></article><div class="mock-composer">与 PI 协作…</div></main></body></html>` }));
   await page.route('**/sidebar-demo*', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><script src="/mock.js"></script><link rel="stylesheet" href="/index.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/index.js"></script></body></html>' }));
   await page.goto(`/renderer-demo?scenario=renderer&lang=${locale}${query}`);
@@ -58,7 +61,7 @@ test('reply-end summary opens the plugin sidebar at the clicked file with no idl
   expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.find((call: any) => call.method === 'diff.review').args)).toMatchObject({ scope: 'turn', sessionId: 'session-demo' });
   const opens = await page.evaluate(() => (window as any).__rendererDemo.opens);
   expect(opens).toHaveLength(1); expect(opens[0]).toMatchObject({ sessionId: 'session-demo', tab: { id: 'plugin:local.diff-view/review', resource: 'local.diff-view/review' } });
-  expect(opens[0].tab.location).toMatch(/^diff-view:[0-9a-f-]{36}\?sessionId=session-demo$/);
+  expect(await frame.locator('body').evaluate(() => new URLSearchParams(location.search).has('piViewOpen'))).toBe(false);
   expect(await page.evaluate(() => (window as any).__rendererDemo.draft)).toBe('Existing draft. ');
   await page.evaluate(() => (window as any).__rendererDemo.unload());
   await expect(page.locator('.dv-turn-card, #demo-plugin-sidebar')).toHaveCount(0);
@@ -90,12 +93,14 @@ test('chat summary and sidebar visual preview uses the implemented components', 
   await page.screenshot({ path: destination });
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
-test('an existing plugin view receives a new selection through view:open without reloading', async ({ page }) => {
+test('an existing plugin view receives a new selection through the plugin handshake without reloading', async ({ page }) => {
   await setup(page); await page.locator('.dv-turn-file').filter({ hasText: 'src/theme/index.ts' }).click();
   const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toHaveText('src/theme/index.ts');
-  const nonce = await page.evaluate(async () => (await (window as any).pluginBridge.invoke('diff.selectTurn', { sessionId: 'session-demo', runId: 'run-demo', fileId: 'review' })).nonce);
-  await frame.locator('body').evaluate((_element, value) => (window as any).__demo.openLocation(`diff-view:${value}?sessionId=session-demo`), nonce);
+  await expect(page.locator('.dv-turn-file').first()).toBeEnabled();
+  await frame.locator('body').evaluate(() => (window as any).__retainedInstance = 'same');
+  await page.locator('.dv-turn-file').filter({ hasText: 'src/review/index.ts' }).click();
   await expect(frame.locator('.dv-review h2')).toHaveText('src/review/index.ts');
+  expect(await frame.locator('body').evaluate(() => (window as any).__retainedInstance)).toBe('same');
   expect(await page.evaluate(() => (window as any).__rendererDemo.opens.length)).toBe(1);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
@@ -177,6 +182,8 @@ test('successive chat-file clicks reuse the panel and only expand the target dif
   await setup(page); await page.locator('.dv-turn-file').filter({ hasText: 'src/review/index.ts' }).click();
   const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-hunk')).toHaveCount(2);
   await frame.locator('.dv-top .dv-menu > summary').click(); await frame.getByRole('button', { name: 'Split', exact: true }).click(); await frame.locator('.dv-top .dv-menu > summary').click();
+  await expect(frame.locator('.dv-split')).toHaveCount(2);
+  await expect.poll(() => frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.bootstrap').length)).toBe(1);
   await frame.locator('.dv-app').evaluate(node => { (window as any).__originalApp = node; (window as any).__originalDocument = document; });
   const before = await frame.locator('body').evaluate(() => ({ bootstrap: (window as any).__demo.calls.filter((call: any) => call.method === 'diff.bootstrap').length, review: (window as any).__demo.calls.filter((call: any) => call.method === 'diff.review').length }));
   await page.locator('.dv-turn-file').filter({ hasText: 'src/theme/index.ts' }).click();
@@ -198,12 +205,13 @@ test('a different recorded turn switches in place and refreshes only its file li
   await setup(page); await page.locator('.dv-turn-file').first().click();
   const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-hunk')).toHaveCount(2);
   await frame.locator('.dv-app').evaluate(node => { (window as any).__originalApp = node; });
-  const nonce = await page.evaluate(async () => (await (window as any).pluginBridge.invoke('diff.selectTurn', { sessionId: 'session-demo', runId: 'another-run', fileId: 'created' })).nonce);
+  await expect(page.locator('.dv-turn-file').first()).toBeEnabled();
+  await page.evaluate(async () => { const selection = await (window as any).pluginBridge.invoke('diff.selectTurn', { sessionId: 'session-demo', runId: 'another-run', fileId: 'created' }); await (window as any).__rendererDemo.openSelection(selection.nonce); });
   await expect(frame.locator('.dv-file[aria-current="true"]')).toContainText('src/theme/index.ts'); await expect(frame.locator('.dv-hunk')).toHaveCount(1);
   expect(await frame.locator('.dv-app').evaluate(node => node === (window as any).__originalApp)).toBe(true);
   expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.bootstrap').length)).toBe(1);
   expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((call: any) => call.method === 'diff.review').at(-1).args.runId)).toBe('another-run');
-  expect(await page.evaluate(value => (window as any).__rendererDemo.opens[0].tab.location === `diff-view:${value}?sessionId=session-demo`, nonce)).toBe(true);
+  expect(await page.evaluate(() => (window as any).__rendererDemo.opens.length)).toBe(1);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
 
@@ -461,5 +469,40 @@ for (const base of ['light', 'dark']) test(`host cards share the control scale a
   expect(await page.locator('#unrelated-host-control').evaluate(node => getComputedStyle(node).getPropertyValue('--dv-radius-control').trim())).toBe('');
   await openButton.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
   await expect(openButton).toBeFocused(); await expect(openButton).toHaveCSS('outline-width', '2px');
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+
+test('one existing view follows session changes without host view:open or reloading', async ({ page }) => {
+  await setup(page); await page.getByRole('button', { name: 'View changes', exact: true }).click();
+  const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toBeVisible();
+  await expect(page.locator('.dv-turn-file').first()).toBeEnabled();
+  await frame.locator('body').evaluate(() => (window as any).__instance = 'retained');
+  await page.evaluate(() => (window as any).__rendererDemo.followSession('session-other'));
+  await expect.poll(() => frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((row: any) => row.method === 'diff.review').at(-1)?.args.sessionId)).toBe('session-other');
+  expect(await frame.locator('body').evaluate(() => (window as any).__instance)).toBe('retained');
+  expect(await page.evaluate(() => (window as any).__rendererDemo.opens.length)).toBe(1);
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+test('a second live view makes binding ambiguous instead of taking the last global session', async ({ page }) => {
+  await setup(page); await page.getByRole('button', { name: 'View changes', exact: true }).click();
+  const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toBeVisible();
+  await expect(page.locator('.dv-turn-file').first()).toBeEnabled();
+  await page.evaluate(async () => { await fetch('/surface-rpc', { method: 'POST', body: JSON.stringify({ role: 'view', id: 'other-view', seq: 1 }) }); });
+  await expect(frame.getByRole('alert')).toContainText('多个窗口');
+  await expect(frame.locator('.dv-review:visible')).toHaveCount(0);
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+
+test('late initial settings cannot overwrite a layout selected during fast first paint', async ({ page }) => {
+  await setup(page);
+  await page.route('**/sidebar-demo*', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><script src="/mock.js"></script><script>const invoke=pluginBridge.invoke.bind(pluginBridge);pluginBridge.invoke=async(...args)=>{const result=await invoke(...args);if(args[0]!=="diff.bootstrap")return result;const snapshot=structuredClone(result);window.__bootHeld=true;await new Promise(resolve=>window.__releaseBoot=resolve);return snapshot};</script><link rel="stylesheet" href="/index.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/index.js"></script></body></html>' }));
+  await page.locator('.dv-turn-file').first().click(); const frame = page.frameLocator('iframe');
+  await expect(frame.locator('.dv-hunk')).toHaveCount(2);
+  await expect.poll(() => frame.locator('body').evaluate(() => (window as any).__bootHeld)).toBe(true);
+  await frame.locator('.dv-top .dv-menu > summary').click(); await frame.getByRole('button', { name: 'Split', exact: true }).click();
+  await expect(frame.locator('.dv-split')).toHaveCount(2);
+  await frame.locator('body').evaluate(() => (window as any).__releaseBoot());
+  await expect(frame.getByRole('combobox', { name: 'Scope', exact: true })).toBeEnabled();
+  await expect(frame.locator('.dv-split')).toHaveCount(2);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });

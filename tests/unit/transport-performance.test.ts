@@ -32,24 +32,22 @@ it('deduplicates pending prefetches and isolates cache by transport', async () =
 it('navigation bypasses an in-flight slow response without blocking ordinary calls', async () => {
   vi.useFakeTimers(); vi.setSystemTime(10000);
   const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; queue.navigationTail = Promise.resolve(); await queue.tail;
-  let finishSlow!: (value: unknown) => void, finishListener!: (value: unknown) => void;
-  const invoke = vi.fn((method: string, args: any) => method === 'file' ? new Promise(resolve => { finishSlow = resolve; }) : args?.listen ? new Promise(resolve => { finishListener = resolve; }) : Promise.resolve({ ok: true }));
+  let finishSlow!: (value: unknown) => void;
+  const invoke = vi.fn((method: string) => method === 'file' ? new Promise(resolve => { finishSlow = resolve; }) : Promise.resolve({ ok: true }));
   const transport = boundedTransport(invoke as UiTransport['invoke']);
   const slow = transport.invoke('file'); await vi.advanceTimersByTimeAsync(0);
-  const opened = transport.invoke('openFile', { requestId: 'r' }); await vi.advanceTimersByTimeAsync(0);
-  await expect(opened).resolves.toEqual({ ok: true });
-  finishSlow({ ok: true }); await slow;
-  const listener = transport.invoke('openFile', { listen: true }); await vi.advanceTimersByTimeAsync(0);
+  const selection = transport.invoke('readTurnSelection', { nonce: 'n', sessionId: 's' }); await vi.advanceTimersByTimeAsync(0);
+  await expect(selection).resolves.toEqual({ ok: true });
   const copied = transport.invoke('copyPath'); await vi.advanceTimersByTimeAsync(0);
   await expect(copied).resolves.toEqual({ ok: true });
-  finishListener([]); await listener;
+  finishSlow({ ok: true }); await slow;
 });
 it('concurrent navigation and ordinary admissions still obey the rolling burst cap', async () => {
   vi.useFakeTimers(); vi.setSystemTime(10000);
   const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; queue.navigationTail = Promise.resolve(); await queue.tail;
   const starts: number[] = [], invoke = vi.fn(async () => { starts.push(Date.now()); return { ok: true }; });
   const transport = boundedTransport(invoke as UiTransport['invoke']);
-  const requests = Array.from({ length: 12 }, (_, i) => transport.invoke(i % 2 ? 'openFile' : 'copyPath'));
+  const requests = Array.from({ length: 12 }, (_, i) => transport.invoke(i % 2 ? 'readTurnSelection' : 'copyPath'));
   await vi.advanceTimersByTimeAsync(2100); await Promise.all(requests);
   expect(starts).toHaveLength(12);
   for (const at of starts) expect(starts.filter(time => time >= at && time < at + 1000).length).toBeLessThanOrEqual(6);
@@ -120,4 +118,20 @@ it('system-open uses one background start, does not fence copying and never retr
   await expect(transport.invoke('copyPath')).resolves.toEqual({ ok: true });
   done = true; await vi.advanceTimersByTimeAsync(100); await check;
   expect(invoke.mock.calls.filter(([method]) => method === 'jobStart')).toHaveLength(1);
+});
+it('saved-card reads bypass an unfinished evidence upload without removing the shared rate limit', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(60000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  let uploaded = false;
+  const invoke = vi.fn(async (method: string, args: any) => method === 'jobStart'
+    ? args.method === 'sessionEvidence' ? { jobId: 'upload' } : { jobId: 'read', state: 'done', result: { ok: true } }
+    : method === 'jobPoll' ? { state: uploaded ? 'done' : 'pending', result: { ok: true } } : { ok: true });
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const upload = transport.invoke('sessionEvidence', { chunk: 'saved evidence' }); await vi.advanceTimersByTimeAsync(0);
+  const reads = [transport.invoke('replyCards', { sessionId: 's' }), transport.invoke('review', { scope: 'turn', sessionId: 's', runId: 'r' }), transport.invoke('file', { reviewId: 'saved:r', fileId: 'f' })];
+  await vi.advanceTimersByTimeAsync(0);
+  expect(invoke.mock.calls.filter(([method]) => method === 'jobStart').map(([, args]) => args.method)).toEqual(['sessionEvidence', 'replyCards', 'review']);
+  expect(invoke.mock.calls.some(([method]) => method === 'file')).toBe(true);
+  await Promise.all(reads);
+  uploaded = true; await vi.advanceTimersByTimeAsync(1100); await upload;
 });

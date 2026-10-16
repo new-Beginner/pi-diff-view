@@ -9,6 +9,8 @@ import { fail } from './core/path-policy';
 import { JobQueue } from './core/jobs';
 import { inspectNativeHostBuild } from './core/native-host-build';
 import { ReviewNavigationStore } from './core/review-navigation';
+import { ReviewSurfaces, type SurfaceRequest } from './core/review-surfaces';
+const surfaces = new ReviewSurfaces();
 import { HostHistoryImporter } from './core/host-history';
 import { HostEvidenceStore } from './core/host-evidence-store';
 let evidenceStore: HostEvidenceStore | null = null;
@@ -16,10 +18,8 @@ import { dispatch as gitManageDispatch } from './git/local-management';
 import { canonical } from './core/path-policy';
 import { CAPTURE_CONTEXT_TTL, writeCaptureContexts, type CaptureContext } from './core/capture-context';
 import { HostEvidenceBuffer } from './core/host-evidence-buffer';
-import { FileOpenRequests } from './core/file-open';
-import { openSystemFile } from './core/system-open';
+import { closeSystemOpener, openSystemFile, warmSystemOpener } from './core/system-open';
 let systemOpenController = new AbortController();
-const fileOpens = new FileOpenRequests();
 const evidence = new HostEvidenceBuffer();
 let history: HostHistoryImporter | null = null;
 type SessionContext = CaptureContext & { syncedAt: number; prepared?: boolean };
@@ -39,6 +39,8 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let turnEnded: ((event: { sessionId?: string; turnId?: string; reason?: string }) => void) | undefined;
 let tail: Promise<unknown> = Promise.resolve();
 let navigationTail: Promise<unknown> = Promise.resolve();
+const savedReads = new Set<Promise<unknown>>();
+const savedRefreshes = new Map<string, Promise<unknown>>();
 let navigationVersion = 0;
 let navigationClearing = false;
 let disposed = false;
@@ -50,9 +52,59 @@ async function saveRendererStatus(): Promise<void> {
 }
 const navigation = new ReviewNavigationStore();
 function serial<T>(work: () => Promise<T>): Promise<T> { const result = tail.then(work); tail = result.catch(() => {}); return result; }
+/** Only snapshot reads bypass history work; all recovery/mutation stays on the existing queue. */
+function queueSavedRefresh(s: ReviewService, method: string, args: any, root: string): void {
+  const key = JSON.stringify([args.sessionId, canonical(root)]);
+  if (savedRefreshes.has(key)) return;
+  const version = navigationVersion;
+  const task = serial(async () => {
+    if (disposed || service !== s || navigationClearing || version !== navigationVersion) return;
+    await execute(s, method, args);
+  });
+  savedRefreshes.set(key, task);
+  const settled = () => { if (savedRefreshes.get(key) === task) savedRefreshes.delete(key); };
+  void task.then(settled, settled);
+}
+function trySavedRead(s: ReviewService, method: string, args: any): Promise<{ result: unknown } | undefined> {
+  const version = navigationVersion;
+  const current = () => { if (disposed || service !== s || navigationClearing || version !== navigationVersion) fail('SELECTION_MISSING', 'Saved history cleared or plugin unloaded'); };
+  const task = (async () => {
+    current();
+    if (method === 'replyCards') {
+      // Never write an old run back while the importer is updating its evidence.
+      const result = await s.replyCards(args, false); current();
+      const context = contexts.get(args.sessionId);
+      if (history && context && (store!.needsRecovery(args.sessionId) || Date.now() - context.syncedAt > 2000)) queueSavedRefresh(s, method, args, context.root);
+      return { result };
+    }
+    if (['file', 'reviewFiles'].includes(method) && s.isReadOnlyReview(args.reviewId)) {
+      const result = await s.invoke(method, args); current(); return { result };
+    }
+    if (!history || method !== 'review' || args.scope !== 'turn' || args.retrySync) return;
+    const summary = await s.savedReview(args); current();
+    if (!summary) return; // Running, missing, conflicting or unbound evidence uses normal recovery.
+    const key = JSON.stringify([args.sessionId, canonical(summary.root)]), now = Date.now();
+    const context = contexts.get(args.sessionId), preparation = reviewPreparations.get(key);
+    const ready = context && canonical(context.root) === canonical(summary.root) && context.prepared && now - context.syncedAt <= 2000;
+    if (!store!.needsRecovery(args.sessionId) && (ready || (preparation?.prepared && now - preparation.attemptedAt <= 2000))) return;
+    if (!preparation) {
+      reviewPreparations.set(key, { startedAt: now, attemptedAt: 0, prepared: false });
+      while (reviewPreparations.size > 200) reviewPreparations.delete(reviewPreparations.keys().next().value!);
+    }
+    queueSavedRefresh(s, method, args, summary.root);
+    const state = now - (preparation?.startedAt ?? now) >= 15000 ? 'unavailable' : 'pending';
+    return { result: { ...summary, sync: { state, saved: true } } };
+  })();
+  savedReads.add(task);
+  void task.then(() => savedReads.delete(task), () => savedReads.delete(task));
+  return task;
+}
 function schedule(s: ReviewService, method: string, args: any): Promise<unknown> {
   const work = async () => { if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args); };
   if (method === 'openSystemFile') return work();
+  if (method === 'replyCards' || (method === 'review' && args?.scope === 'turn' && !args.retrySync) || (['file', 'reviewFiles'].includes(method) && s.isReadOnlyReview(args?.reviewId))) {
+    return trySavedRead(s, method, args).then(saved => saved ? saved.result : serial(work));
+  }
   if (method === 'gitManage') {
     const result = repositoryQueue.run(work, !managementReads.has(args?.operation));
     repositoryTasks.add(result);
@@ -75,6 +127,7 @@ async function heartbeat(): Promise<void> {
 }
 export async function onLoad(): Promise<void> {
   disposed = false; generation = randomUUID(); pluginRoot = await fs.realpath(__dirname);
+  surfaces.clear();
   systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath(); store = new SnapshotStore(dataPath); await store.init();
   evidenceStore = new HostEvidenceStore(dataPath);
@@ -82,10 +135,10 @@ export async function onLoad(): Promise<void> {
   const parent = path.dirname(dataPath), plugins = path.dirname(parent);
   history = path.basename(parent) === 'data' && path.basename(plugins) === 'plugins' ? new HostHistoryImporter(store, path.dirname(plugins)) : null;
   contexts.clear(); evidence.clear(); reviewPreparations.clear();
+  savedRefreshes.clear();
   sessionRoots.clear();
   const savedRoots = await readJson<Record<string, string>>(path.join(store.directory, 'session-roots.json'), {});
   for (const [id, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id) && typeof root === 'string' && path.isAbsolute(root)) sessionRoots.set(id, root);
-  fileOpens.clear();
   rendererStages = {}; runningDiagnostic = undefined; rendererDiagnostic = undefined; navigation.clear();
   navigation.restore(await readJson(path.join(store.directory, 'selections.json'), []));
   await saveRendererStatus();
@@ -117,14 +170,17 @@ export async function onLoad(): Promise<void> {
       .catch(error => console.warn('Diff view capture import:', error.message)).finally(() => { maintenancePending = false; });
   }, 2000);
   timer.unref?.();
+  warmSystemOpener();
 }
 export async function onUnload(): Promise<void> {
   disposed = true; if (timer) clearInterval(timer); timer = undefined;
+  surfaces.clear();
   systemOpenController.abort();
+  closeSystemOpener();
   if (turnEnded) pi.events.off('session:turnEnded', turnEnded); turnEnded = undefined;
   jobs?.close(); jobs = null; navigation.clear();
-  fileOpens.clear();
   await tail;
+  await Promise.allSettled([...savedReads]);
   await navigationTail;
   await Promise.allSettled([...repositoryTasks]);
   evidence.clear(); contexts.clear(); reviewPreparations.clear();
@@ -139,13 +195,21 @@ export async function onPanelInvoke(channel: string, payload: unknown): Promise<
 export async function onRendererCall(method: string, args: unknown): Promise<unknown> { return dispatch(method.startsWith('diff.') ? method.slice(5) : method, args); }
 async function dispatch(method: string, args: unknown): Promise<unknown> {
   if (!service || disposed) fail('PLUGIN_UNLOADED', 'Diff view is not loaded');
+  if (method === 'reviewSurface') {
+    const request = args as SurfaceRequest;
+    if (request?.nonce != null) {
+      const selection = navigation.get(request.nonce, request.sessionId);
+      if (!selection || selection.revision !== request.selectionRevision) fail('SELECTION_MISSING', 'Selection changed; click again');
+    }
+    return surfaces.exchange(request);
+  }
   if (method === 'selectTurn') {
     if (navigationClearing) fail('SELECTION_MISSING', 'History is being cleared');
     const s = service;
     const result = navigationTail.catch(() => {}).then(async () => { if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); return execute(s, method, args ?? {}); });
     navigationTail = result.catch(() => {}); return result;
   }
-  if (method === 'activeReviewSession' || method === 'readTurnSelection' || method === 'openFile' || method === 'openSystemFile') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
+  if (method === 'activeReviewSession' || method === 'readTurnSelection' || method === 'openSystemFile') return execute(service, method, args ?? {}); // Volatile UI state must not queue behind long Git jobs.
   if (method === 'nativeProbeInfo') return serial(async () => inspectNativeHostBuild(String(await pi.app.getVersion())));
   if (method === 'rendererReport') {
     const stage = (args as { stage?: unknown } | null)?.stage;
@@ -201,12 +265,13 @@ async function recordedReview(s: ReviewService, args: ReviewRequest, context?: S
       await evidenceStore!.restore(evidence, args.sessionId, root);
       const result = await history.syncSession(args.sessionId, root, context ? freshHistoryContext(context) : { statusKnown: false, messages: evidence.messages(args.sessionId, canonical(root)) });
       preparation.prepared = result.warnings.length === 0;
-      if (context) { context.syncedAt = now; context.prepared = preparation.prepared; }
+      if (context) { context.syncedAt = Date.now(); context.prepared = preparation.prepared; }
     } catch {
       // Retry bounded preparation; do not expose raw errors/paths or manufacture endpoints.
       preparation.prepared = false;
-      if (context) { context.syncedAt = now; context.prepared = false; }
+      if (context) { context.syncedAt = Date.now(); context.prepared = false; }
     }
+    preparation.attemptedAt = Date.now();
     store!.acknowledgeRecovery(args.sessionId);
   }
   const ready = context?.prepared === true;
@@ -233,17 +298,6 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
       const current = await resolveTarget();
       if (canonical(current.path) !== canonical(target.path)) fail('FILE_CHANGED', 'File identity changed; refresh before opening');
     } });
-  }
-  if (method === 'openFile') {
-    if (args.listen === true) return fileOpens.listen(args.sessionId, args.listenerId);
-    if (typeof args.cancelListen === 'string') return fileOpens.cancelListen(args.sessionId, args.cancelListen);
-    if (typeof args.requestId === 'string') {
-      if (args.complete === true) return fileOpens.complete(args.requestId, args.sessionId, typeof args.error === 'string' ? args.error : undefined);
-      return args.wait === true ? fileOpens.waitStatus(args.requestId) : fileOpens.status(args.requestId);
-    }
-    const target = await s.fileOpenTarget(args);
-    if (disposed || service !== s) fail('PLUGIN_UNLOADED', 'Diff view unloaded');
-    return fileOpens.add(target);
   }
   if (method === 'sessionEvidence') {
     const root = await sessionRoot(args);
@@ -342,7 +396,8 @@ async function execute(s: ReviewService, method: string, args: any): Promise<unk
   }
   if (method === 'clearHistory' && args?.confirmed === true) {
     navigationClearing = true; navigationVersion++;
-    try { await navigationTail; const result = await s.invoke(method, args); evidence.clear(); reviewPreparations.clear(); navigation.clear(); fileOpens.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
+    surfaces.clear();
+    try { await navigationTail; await Promise.allSettled([...savedReads]); const result = await s.invoke(method, args); evidence.clear(); reviewPreparations.clear(); navigation.clear(); await atomicJson(path.join(store!.directory, 'selections.json'), []); return result; }
     finally { navigationClearing = false; }
   }
   return s.invoke(method, args);

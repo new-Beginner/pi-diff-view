@@ -4,6 +4,7 @@ import * as ReactNamespace from 'react';
 import * as ReactDom from 'react-dom';
 import * as ReactDomClient from 'react-dom/client';
 import { createPluginReviewAdapter } from '../../src/renderer/plugin-review-adapter';
+import { createReviewSurfaceClient } from '../../src/renderer/review-surface-client';
 const config = (window as any).__liveFixture;
 const libraries = { react: ReactNamespace, 'react-dom': ReactDom, 'react-dom/client': ReactDomClient };
 const imports: Record<string, string> = {};
@@ -28,11 +29,11 @@ const state = { loaded: false, error: '', styles: 0, layers: 0, layerOpens: 0, s
   notify() { subscribers.forEach(listener => listener(nativeState)); },
   updateEvidence(messages: any[]) { (nativeState as any).messages = messages; state.notify(); },
   setRunning(running: boolean) { nativeState.runningSessions[nativeState.activeSessionId] = running; state.notify(); },
-  switchSession(sessionId: string) { nativeState.activeSessionId = sessionId; state.notify(); },
+  switchSession(sessionId: string) { nativeState.activeSessionId = sessionId; document.querySelector('[data-session-pane]')!.setAttribute('data-session-pane', sessionId); surface?.update(sessionId); state.notify(); },
   task(id: string, since: number) { nativeState.messages = [{ id, role: 'user', createdAt: since }]; nativeState.runningSessions[nativeState.activeSessionId] = true; state.notify(); },
   duplicateComposer() { const container = document.createElement('span'); container.dataset.piPlugin = 'local.diff-view'; document.querySelector('.composer-left')!.append(container); const root = ReactDomClient.createRoot(container); root.render(React.createElement(composerComponent)); duplicates.push({ root, container }); },
   windowTranscript() { (nativeState as any).retainedTranscripts = { s: nativeState.messages }; nativeState.messages = []; state.notify(); },
-  unload() { entry.onUnload(); }, reload() { entry.onLoad(host, { adapter: adapter() }); },
+  unload() { surface?.dispose(); entry.onUnload(); }, reload() { surface?.dispose(); entry.onLoad(host, { adapter: adapter() }); },
   suspendLayers(suspended: boolean) { const root = document.getElementById('live-plugin-layers'); if (root) { root.hidden = suspended; root.inert = suspended; } },
   get subscriptions() { return subscribers.size; }
 };
@@ -67,6 +68,18 @@ const host = {
   } },
   composer: { subscribeDraft() { throw new Error('No draft reads required'); } }
 };
-function adapter() { return createPluginReviewAdapter({ load: async () => ({ store: { getState: () => nativeState, subscribe(listener) { subscribers.add(listener); return () => { subscribers.delete(listener); }; } }, tab: (pluginId, viewId) => ({ id: `plugin:${pluginId}/${viewId}`, kind: 'plugin', resource: `${pluginId}/${viewId}` }), hostReact: React }) }); }
+let surface: ReturnType<typeof createReviewSurfaceClient> | undefined;
+function adapter() {
+  surface = createReviewSurfaceClient({ invoke: (method, args) => host.dispatch('plugin.call', { method, args }) }); surface.update(nativeState.activeSessionId);
+  return createPluginReviewAdapter({ navigation: surface.channel, load: async () => ({ store: { getState: () => nativeState, subscribe(listener) { subscribers.add(listener); return () => { subscribers.delete(listener); }; } }, hostReact: React }) });
+}
+const pane = document.createElement('div'); pane.dataset.sessionPane = nativeState.activeSessionId; pane.dataset.visible = 'true'; document.body.append(pane);
+const toggle = document.createElement('button'); toggle.className = 'app-work-panel-toggle'; toggle.setAttribute('aria-pressed', 'false'); toggle.onclick = () => toggle.setAttribute('aria-pressed', 'true'); document.body.append(toggle);
+const tab = document.createElement('div'); tab.dataset.workPanelTabId = 'plugin:local.diff-view/review'; tab.innerHTML = '<button role="tab" aria-selected="false">Diff view</button>'; document.body.append(tab);
+tab.querySelector('button')!.onclick = () => {
+  tab.querySelector('button')!.setAttribute('aria-selected', 'true');
+  state.opens.push({ sessionId: nativeState.activeSessionId, tab: { id: 'plugin:local.diff-view/review' } });
+  document.getElementById('live-sidebar')!.hidden = false; document.querySelector<HTMLIFrameElement>('#live-sidebar iframe')!.src = '/live-sidebar?surface=1';
+};
 const entryUrl = new URL('/live-production.mjs', location.href).href;
 import(/* @vite-ignore */ entryUrl).then(module => { entry = module; state.reload(); state.loaded = true; }).catch(error => state.error = String(error));

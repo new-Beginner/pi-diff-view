@@ -12,7 +12,7 @@ export interface DiffHunk { id: string; header: string; oldStart: number; oldLin
 export interface ReviewFile { id: string; path: string; origin?: 'workspace' | 'external'; absolutePath?: string; oldPath?: string; status: 'added' | 'modified' | 'deleted' | 'renamed' | 'mode'; kind: FileKind; additions: number; deletions: number; statsKnown?: boolean; segmentCount?: number; fingerprint: string; actions: Action[]; note?: string; state?: 'active' | 'reverted'; }
 export interface InternalFile extends ReviewFile { before: FileSnapshot; after: FileSnapshot; indexFingerprint?: string; }
 export interface ReviewRequest { scope: Scope; root?: string; ref?: string; sessionId?: string; runId?: string; focusFileId?: string; retrySync?: boolean; }
-export interface ReviewSync { state: 'ready' | 'pending' | 'unavailable'; }
+export interface ReviewSync { state: 'ready' | 'pending' | 'unavailable'; saved?: boolean; }
 export interface ReviewSummary { id: string; scope: Scope; root: string; files: ReviewFile[]; nextFileOffset?: number | null; notice?: string; sessionId?: string; runId?: string; run?: RunSummary; sync?: ReviewSync; }
 export interface ReviewFilesPage { reviewId: string; files: ReviewFile[]; offset: number; nextOffset: number | null; }
 export interface ReviewDetail { file: ReviewFile; hunks: DiffHunk[]; offset: number; totalRows: number; nextOffset: number | null; }

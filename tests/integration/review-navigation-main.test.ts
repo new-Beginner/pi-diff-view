@@ -29,14 +29,20 @@ it('built main validates session-scoped navigation and restores selection after 
     expect(result.state).toBe('done');
     const selection = await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: result.result.nonce, sessionId: 's' });
     expect(selection.fileId).toBe(fileId);
+    await plugin.onRendererCall('reviewSurface', { role: 'renderer', id: 'renderer', seq: 1, sessionId: 's' });
+    await expect(plugin.onRendererCall('reviewSurface', { role: 'renderer', id: 'renderer', seq: 2, sessionId: 's', nonce: selection.nonce, selectionRevision: selection.revision + 1 })).rejects.toThrow('Selection changed');
+    await plugin.onRendererCall('reviewSurface', { role: 'renderer', id: 'renderer', seq: 3, sessionId: 's', nonce: selection.nonce, selectionRevision: selection.revision });
+    const surface = await plugin.onPanelInvoke('diff.reviewSurface', { role: 'view', id: 'view', seq: 1 });
+    expect(surface).toMatchObject({ sessionId: 's', nonce: selection.nonce, selectionRevision: selection.revision });
+    await plugin.onPanelInvoke('diff.reviewSurface', { role: 'view', id: 'view', seq: 2, ack: surface.key });
+    expect(await plugin.onRendererCall('reviewSurface', { role: 'renderer', id: 'renderer', seq: 4, sessionId: 's' })).toMatchObject({ confirmed: true });
+    expect(await plugin.onPanelInvoke('diff.reviewSurface', { role: 'view', id: 'second-view', seq: 1 })).toMatchObject({ state: 'ambiguous', sessionId: null });
     const review: ReviewSummary = await plugin.onPanelInvoke('diff.review', { ...selection.request, focusFileId: selection.fileId });
     expect(review.files.length).toBeGreaterThan(0); expect(review.files.length).toBeLessThanOrEqual(100); expect(review.files[0].path).toBe('file-0.txt');
     const continuation = await plugin.onPanelInvoke('diff.reviewFiles', { reviewId: review.id, offset: review.nextFileOffset });
     expect(continuation.files.at(-1).path).toBe('file-120.txt'); expect(continuation.nextOffset).toBeNull();
     const detail = await plugin.onPanelInvoke('diff.file', { reviewId: review.id, fileId }); expect(detail.file.path).toBe('file-120.txt');
     expect(detail.hunks[0].lines.some((line: any) => line.text === 'new')).toBe(true);
-    await fs.writeFile(path.join(root, 'file-120.txt'), 'current\n');
-    const listener = plugin.onRendererCall('openFile', { listen: true, sessionId: 's', listenerId: 'navigation-listener' });
     const originalWorkspace = (globalThis as any).pi.workspace.get;
     let releaseHistory!: () => void;
     (globalThis as any).pi.workspace.get = () => new Promise(resolve => { releaseHistory = () => resolve({ path: root }); });
@@ -49,16 +55,9 @@ it('built main validates session-scoped navigation and restores selection after 
       for (let i = 0; quickResult.state !== 'done' && i < 50; i++) { quickResult = await plugin.onRendererCall('jobPoll', quick); if (quickResult.state === 'error') break; await new Promise(resolve => setTimeout(resolve, 10)); }
       expect(quickResult.state).toBe('done');
       expect((await plugin.onPanelInvoke('diff.readTurnSelection', { nonce: quickResult.result.nonce, sessionId: 's' })).fileId).toBe(fileId);
-      const clickedAt = performance.now();
-      const open = await plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 's' });
-      expect(await listener).toEqual([{ ...open, sessionId: 's', path: path.join(root, 'file-120.txt') }]);
-      const acknowledgement = plugin.onPanelInvoke('diff.openFile', { ...open, wait: true });
-      await plugin.onRendererCall('openFile', { ...open, sessionId: 's', complete: true });
-      expect((await acknowledgement).state).toBe('done');
-      expect(performance.now() - clickedAt).toBeLessThan(1000);
     } finally { (globalThis as any).pi.workspace.get = originalWorkspace; releaseHistory(); await blockedHistory; }
-    expect((await plugin.onRendererCall('replyCards', { sessionId: 's' })).fileOpens).toBeUndefined();
-    await expect(plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 'other' })).rejects.toThrow();
+    await expect(plugin.onPanelInvoke('diff.openFile', { reviewId: review.id, fileId, sessionId: 's' })).rejects.toMatchObject({ code: 'UNKNOWN_METHOD' });
+    await expect(plugin.onRendererCall('openFile', { listen: true, sessionId: 's', listenerId: 'retired' })).rejects.toMatchObject({ code: 'UNKNOWN_METHOD' });
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 's', runId: run.id, fileId: 'missing' })).rejects.toThrow('no longer');
     await expect(plugin.onRendererCall('selectTurn', { sessionId: 'other', runId: run.id })).rejects.toThrow('not found');
     await plugin.onRendererCall('activeReviewSession', { sessionId: 'other' });

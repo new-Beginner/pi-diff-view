@@ -3,9 +3,8 @@ import { onLoad, onUnload } from '../../src/renderer';
 import type { RendererHost } from '../../src/renderer/host-contract';
 import type { PluginReviewAdapter, SessionContext } from '../../src/renderer/plugin-review-adapter';
 
-// Exercise renderer lifecycle without bridge admission timers or file-navigation polls.
+// Exercise renderer lifecycle without bridge admission timers.
 vi.mock('../../src/view/transport', () => ({ ensureBounded: (transport: unknown) => transport }));
-vi.mock('../../src/renderer/file-open-channel', () => ({ startFileOpenChannel: () => () => {} }));
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => { onUnload(); vi.clearAllTimers(); vi.useRealTimers(); });
@@ -18,7 +17,7 @@ function setup(handle: (method: string, args: any) => Promise<unknown>, failSubs
     if (failSubscription) { failSubscription = false; throw new Error('subscribe failed'); }
     listener = next; return unsubscribe;
   });
-  const adapter: PluginReviewAdapter = { subscribeSession, subscribeActivity: async () => () => {}, open: async () => {}, openFile: async () => {}, close: vi.fn() };
+  const adapter: PluginReviewAdapter = { subscribeSession, subscribeActivity: async () => () => {}, open: async () => {}, close: vi.fn() };
   const dispatch = vi.fn(async (_action: string, { method, args }: { method: string; args?: unknown }) => {
     if (method === 'replyCards') return { cards: [], revision: 'r', pending: [], nextOffset: null, locale: 'zh-CN', base: 'light' };
     return handle(method, args);
@@ -97,4 +96,28 @@ it('unload during a context RPC suppresses late completion and wake timers', asy
   resolve({ ok: true }); await flush();
   await vi.advanceTimersByTimeAsync(10000);
   expect(app.dispatch).toHaveBeenCalledTimes(count); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('default renderer follows DOM even when the private evidence module is unavailable', async () => {
+  let id: string | null = 'a', notify = () => {};
+  const document = { querySelectorAll(selector: string) {
+    return selector.startsWith('[data-session-pane]') && id ? [{ getAttribute: () => id }] : [];
+  }, documentElement: {}, location: { href: 'https://unsupported-host.invalid' } };
+  class Observer { constructor(callback: (records: unknown[]) => void) { notify = () => callback([]); } observe() {} disconnect() {} }
+  vi.stubGlobal('document', document); vi.stubGlobal('MutationObserver', Observer);
+  const calls: any[] = [];
+  const host = { dispatch: async (_action: string, payload: any) => {
+    calls.push(payload);
+    if (payload.method === 'replyCards') return { cards: [], revision: 'r', pending: [], nextOffset: null, locale: 'zh-CN', base: 'light' };
+    return { ok: true };
+  }, ui: { injectStyle: () => () => {} }, slots: { register: () => () => {} } } as unknown as RendererHost;
+  try {
+    onLoad(host); await flush();
+    expect(calls.some(row => row.method === 'reviewSurface' && row.args.sessionId === 'a')).toBe(true);
+    id = 'b'; notify(); await flush();
+    expect(calls.some(row => row.method === 'reviewSurface' && row.args.sessionId === 'b')).toBe(true);
+    expect(calls.filter(row => row.method === 'sessionContext')).toHaveLength(0);
+    onUnload(); const before = calls.length; notify(); await vi.advanceTimersByTimeAsync(10000);
+    expect(calls).toHaveLength(before);
+  } finally { onUnload(); vi.unstubAllGlobals(); }
 });

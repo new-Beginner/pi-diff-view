@@ -394,72 +394,74 @@ for (const base of ['light', 'dark']) test(`file rows stay transparent and arrow
   await file.hover(); await expect(arrow).toHaveCSS('transform', 'matrix(0, 1, -1, 0, 0, 0)');
 });
 
-test('file open icon sends File Manager navigation without expanding or selecting the diff', async ({ page }) => {
-  await ready(page, '?lang=zh-CN');
+test('file open icon uses the default app without expanding or selecting the diff', async ({ page }) => {
+  await ready(page, '?session=session-demo&lang=zh-CN');
   const current = page.locator('.dv-file[aria-current="true"]');
   await current.click(); await expect(current).toHaveAttribute('aria-expanded', 'false');
   const row = page.locator('.dv-file-row').filter({ has: page.locator('.dv-file', { hasText: 'src/theme/index.ts' }) });
   const button = row.locator('.dv-file-open');
-  await expect(button).toHaveAttribute('title', '在 PI-Desktop 文件管理器中打开');
+  await expect(button).toHaveAttribute('title', '使用系统默认程序打开当前磁盘文件');
   await button.click(); await expect(button).toBeEnabled();
-  const sent = await calls(page, 'diff.openFile');
-  expect(sent[0].args.fileId).toBe('created');
-  expect(await page.evaluate(() => (window as any).__demo.openedFile)).toBe('src/theme/index.ts');
+  const sent = await calls(page, 'diff.openSystemFile');
+  expect(sent[0].args).toEqual({ reviewId: expect.any(String), fileId: 'created', sessionId: 'session-demo' });
+  expect(await page.evaluate(() => (window as any).__demo.systemOpenedFile)).toBe('src/theme/index.ts');
+  expect(await calls(page, 'diff.openFile')).toHaveLength(0);
   await expect(current).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('.dv-review')).toBeHidden();
   await row.locator('.dv-file-menu > summary').click();
+  await expect(row.getByRole('button', { name: '外部打开', exact: true })).toHaveCount(0);
   await row.getByRole('button', { name: '展开文件', exact: true }).click();
   await expect(row.locator('.dv-file')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.dv-row')).toHaveCount(3);
 });
 
-test('File Manager failure is visible and never falls back to expanding the diff', async ({ page }) => {
-  await ready(page, '?lang=zh-CN');
+test('default-app failure is visible without retrying or expanding the diff', async ({ page }) => {
+  await ready(page, '?session=session-demo&lang=zh-CN');
   const current = page.locator('.dv-file[aria-current="true"]');
   await current.click();
-  await page.evaluate(() => { (window as any).__demo.fileOpenError = '文件管理器不可用'; });
+  await page.evaluate(() => { (window as any).__demo.systemOpenError = '没有可用的默认应用'; });
   const button = page.locator('.dv-file-open').first();
   await button.click();
-  await expect(page.getByRole('alert')).toContainText('文件管理器不可用');
+  await expect(page.getByRole('alert')).toContainText('没有可用的默认应用');
   await expect(button).toBeEnabled();
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(1);
+  expect(await calls(page, 'diff.openFile')).toHaveLength(0);
   await expect(current).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('.dv-review')).toBeHidden();
 });
 
-test('system-open menu closes, sends only identities once and preserves PI internal opening', async ({ page }) => {
+test('file open icon sends identities once and removes the duplicate external-open menu', async ({ page }) => {
   await ready(page, '?session=session-demo&lang=zh-CN');
   await page.evaluate(() => { (window as any).__demo.deferSystemOpen = true; });
-  await fileActions(page);
-  const open = fileMenu(page).getByRole('button', { name: '外部打开', exact: true });
-  await expect(open).toHaveAttribute('title', '使用系统默认程序打开当前磁盘文件');
+  const open = page.locator('.dv-file-row:has(.dv-file[aria-current="true"]) .dv-file-open');
   await open.click();
-  await expect(fileMenu(page)).not.toHaveAttribute('open', '');
   await expect.poll(async () => (await calls(page, 'diff.openSystemFile')).length).toBe(1);
   const sent = (await calls(page, 'diff.openSystemFile'))[0].args;
   expect(sent).toEqual({ reviewId: expect.any(String), fileId: 'review', sessionId: 'session-demo' });
-  await fileActions(page); await expect(open).toBeDisabled();
+  await expect(page.locator('.dv-file-open:enabled')).toHaveCount(0);
   await open.evaluate(node => (node as HTMLButtonElement).click());
   expect(await calls(page, 'diff.openSystemFile')).toHaveLength(1);
   await expect.poll(() => page.evaluate(() => typeof (window as any).__demo.finishSystemOpen)).toBe('function');
   await page.evaluate(() => (window as any).__demo.finishSystemOpen());
   await expect(page.getByRole('status').filter({ hasText: '已向系统提交打开请求' })).toBeVisible();
   await expect(open).toBeEnabled();
-  await fileMenu(page).locator('summary').click();
-  await page.locator('.dv-file-row:has(.dv-file[aria-current="true"]) .dv-file-open').click();
-  await expect.poll(async () => (await calls(page, 'diff.openFile')).filter((call: { args: { fileId?: string } }) => call.args.fileId).length).toBe(1);
-  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(1);
+  await fileActions(page);
+  await expect(fileMenu(page).getByRole('button', { name: /外部打开|Open with default app/ })).toHaveCount(0);
+  expect(await calls(page, 'diff.openFile')).toHaveLength(0);
 });
 
 test('system-open executable confirmation cancels without launch and confirms one launch', async ({ page }) => {
   await ready(page, '?session=session-demo&scenario=system-executable');
-  await fileActions(page); await fileMenu(page).getByRole('button', { name: 'Open with default app', exact: true }).click();
+  const open = page.locator('.dv-file-row:has(.dv-file[aria-current="true"]) .dv-file-open');
+  await expect(open).toHaveAttribute('title', 'Open the current disk file with its default app');
+  await open.click();
   const dialog = page.getByRole('dialog', { name: 'Confirm system open' });
   await expect(dialog).toContainText('may execute a program or script');
   await expect(dialog).toContainText('scripts/run.CMD');
   expect(await calls(page, 'diff.openSystemFile')).toHaveLength(0);
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   expect(await calls(page, 'diff.openSystemFile')).toHaveLength(0);
-  await fileActions(page); await fileMenu(page).getByRole('button', { name: 'Open with default app', exact: true }).click();
+  await open.click();
   await dialog.getByRole('button', { name: 'Confirm operation', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect.poll(async () => (await calls(page, 'diff.openSystemFile')).length).toBe(1);
@@ -468,15 +470,23 @@ test('system-open executable confirmation cancels without launch and confirms on
 
 test('system-open allows binary/unavailable diffs and displays failure without retrying', async ({ page }) => {
   await ready(page, '?session=session-demo&lang=zh-CN');
-  await page.locator('.dv-file').filter({ hasText: 'assets/data.bin' }).click();
-  await fileActions(page); await fileMenu(page).getByRole('button', { name: '外部打开', exact: true }).click();
+  const binary = page.locator('.dv-file-row').filter({ has: page.locator('.dv-file', { hasText: 'assets/data.bin' }) });
+  await binary.locator('.dv-file-open').click();
   await expect.poll(async () => (await calls(page, 'diff.openSystemFile')).length).toBe(1);
   expect((await calls(page, 'diff.openSystemFile'))[0].args.fileId).toBe('binary');
   await expect(page.getByRole('status').filter({ hasText: '已向系统提交打开请求' })).toBeVisible();
   await page.evaluate(() => { (window as any).__demo.systemOpenError = '文件已不存在，无法系统打开。'; });
-  await page.locator('.dv-file').filter({ hasText: 'src/historical.ts' }).click();
-  await fileActions(page); await fileMenu(page).getByRole('button', { name: '外部打开', exact: true }).click();
+  const missing = page.locator('.dv-file-row').filter({ has: page.locator('.dv-file', { hasText: 'src/historical.ts' }) });
+  await missing.locator('.dv-file-open').click();
   await expect(page.getByRole('alert')).toContainText('文件已不存在，无法系统打开');
   expect(await calls(page, 'diff.openSystemFile')).toHaveLength(2);
   expect((await calls(page, 'diff.openSystemFile'))[1].args.fileId).toBe('missing');
+});
+
+test('file open icon is disabled without an explicit review session', async ({ page }) => {
+  await ready(page);
+  await expect(page.locator('.dv-file-open:enabled')).toHaveCount(0);
+  await fileActions(page);
+  await expect(fileMenu(page).getByRole('button', { name: 'Open with default app', exact: true })).toHaveCount(0);
+  expect(await calls(page, 'diff.openSystemFile')).toHaveLength(0);
 });

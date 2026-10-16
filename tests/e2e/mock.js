@@ -50,6 +50,10 @@
   window.pluginBridge = {
     on(event, callback) { listeners.set(event, callback); return () => listeners.delete(event); },
     async invoke(method, args = {}, internal = false) {
+      if (method === 'diff.reviewSurface') {
+        if (new URLSearchParams(location.search).get('scenario') !== 'renderer') return null;
+        const response = await fetch('/surface-rpc', { method: 'POST', body: JSON.stringify(args) }); return response.json();
+      }
       if (!internal) state.calls.push({ method, args, at: Date.now() });
       if (method === 'diff.activeReviewSession') { state.activeSession = args.sessionId; return { ok: true }; }
       if (method === 'app.getAppearance') return state.appearance;
@@ -94,13 +98,6 @@
         if (state.systemOpenError) throw new Error(state.systemOpenError);
         state.systemOpenedFile = state.review.files.find(file => file.id === args.fileId)?.path;
         return { ok: true };
-      }
-      if (method === 'diff.openFile') {
-        if (args.listen) return new Promise(resolve => setTimeout(() => resolve([]), 1500));
-        if (args.cancelListen || args.complete) return { ok: true };
-        if (args.requestId) return state.fileOpenError ? { state: 'error', error: state.fileOpenError } : { state: 'done' };
-        state.openedFile = state.review.files.find(file => file.id === args.fileId)?.path;
-        return { requestId: 'demo-open-file' };
       }
       if (method === 'diff.settings') { Object.assign(state.settings, args); return; }
       if (method === 'diff.clearHistory') { if (!args.confirmed) throw new Error('Confirmation required'); state.runs = []; state.comments = []; state.replyBindings.clear(); return; }

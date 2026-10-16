@@ -275,6 +275,77 @@ function createSessionContextPublisher(options) {
   };
 }
 
+// src/renderer/review-surface-client.ts
+function createReviewSurfaceClient(transport) {
+  const id2 = crypto.randomUUID();
+  let seq = 0, sessionId = null, closed = false, timer;
+  let version = 0, pending = false;
+  const exchange = (extra = {}) => transport.invoke("reviewSurface", { role: "renderer", id: id2, seq: ++seq, sessionId, ...extra });
+  const heartbeat = async () => {
+    if (closed || pending) return;
+    pending = true;
+    const stamp = version;
+    try {
+      await exchange();
+    } catch {
+    } finally {
+      pending = false;
+      if (!closed) {
+        if (stamp !== version) void heartbeat();
+        else timer = setTimeout(() => void heartbeat(), 2e3);
+      }
+    }
+  };
+  const channel = {
+    async prepare(target, location, guard) {
+      guard();
+      if (closed || target !== sessionId) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
+      const stamp = version;
+      const selected = await transport.invoke("readTurnSelection", { sessionId: target, nonce: location.slice("diff-view:".length) });
+      guard();
+      if (closed || stamp !== version || selected.sessionId !== target) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
+      const reply = await exchange({ nonce: selected.nonce, selectionRevision: selected.revision });
+      guard();
+      if (reply.state !== "ready" || reply.sessionId !== target) throw new Error("\u5B58\u5728\u591A\u4E2A\u7A97\u53E3\u6216\u5BA1\u67E5\u89C6\u56FE\uFF0C\u65E0\u6CD5\u552F\u4E00\u5B9A\u4F4D\uFF1B\u8BF7\u53EA\u4FDD\u7559\u4E00\u4E2A\u7A97\u53E3\u548C\u5BA1\u67E5\u89C6\u56FE\u3002");
+      return { stamp, nonce: selected.nonce, revision: selected.revision };
+    },
+    async confirm(value, guard) {
+      const ticket = value;
+      const deadline = Date.now() + 12e3;
+      do {
+        guard();
+        if (closed || version !== ticket.stamp) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
+        const reply = await exchange();
+        guard();
+        if (reply.state === "ambiguous") throw new Error("\u5B58\u5728\u591A\u4E2A\u7A97\u53E3\u6216\u5BA1\u67E5\u89C6\u56FE\uFF0C\u5DF2\u505C\u6B62\u5B9A\u4F4D\u3002");
+        if (reply.nonce !== ticket.nonce || reply.selectionRevision !== ticket.revision) throw new Error("\u6587\u4EF6\u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u70B9\u51FB\u3002");
+        if (reply.confirmed) return;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      } while (Date.now() < deadline);
+      throw new Error("\u5BA1\u67E5\u9875\u7B7E\u672A\u786E\u8BA4\u6587\u4EF6\u5B9A\u4F4D\uFF0C\u8BF7\u91CD\u8BD5\uFF1B\u672A\u81EA\u52A8\u91CD\u653E\u6253\u5F00\u8BF7\u6C42\u3002");
+    }
+  };
+  return {
+    channel,
+    update(next) {
+      if (closed) return;
+      if (next !== sessionId) {
+        sessionId = next;
+        version++;
+      }
+      if (timer) clearTimeout(timer);
+      void heartbeat();
+    },
+    dispose() {
+      closed = true;
+      version++;
+      if (timer) clearTimeout(timer);
+      void exchange({ release: true }).catch(() => {
+      });
+    }
+  };
+}
+
 // src/renderer/index.tsx
 import React5, { useEffect as useEffect3, useState as useState3 } from "react";
 
@@ -284,7 +355,7 @@ var queue = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] }
 var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"]);
 var reads = /* @__PURE__ */ new Set(["bootstrap", "review", "reviewFiles", "turnSummary", "runningChanges", "file", "comments", "feedback", "replyCards", "rendererReport", "nativeProbeInfo"]);
 var gitReads = /* @__PURE__ */ new Set(["status", "branches", "history", "stashList", "diff", "stats", "commitFiles", "commitDiff", "blame", "stashShow", "discardPreview"]);
-var navigationMethods = /* @__PURE__ */ new Set(["openFile", "openSystemFile", "activeReviewSession", "readTurnSelection", "selectTurn"]);
+var navigationMethods = /* @__PURE__ */ new Set(["openSystemFile", "activeReviewSession", "readTurnSelection", "selectTurn", "reviewSurface"]);
 function boundedTransport(invoke) {
   const wire = (method, args, navigation = navigationMethods.has(method)) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
@@ -338,6 +409,8 @@ function boundedTransport(invoke) {
   };
   return { invoke(method, args) {
     if (navigationMethods.has(method)) return call(method, args);
+    const savedRead = method === "replyCards" || method === "review" && args?.scope === "turn" && !args.retrySync || ["file", "reviewFiles"].includes(method) && String(args?.reviewId ?? "").startsWith("saved:");
+    if (savedRead) return call(method, args);
     const read = reads.has(method) || method === "gitManage" && gitReads.has(args?.operation ?? "");
     const repository = method === "gitManage" || method === "action" || method === "batchAction";
     const lane = repository ? "gitTail" : "mutationTail";
@@ -569,9 +642,8 @@ var summary_style_default = `
 @media(max-width:420px){.dv-turn-head{padding:10px;gap:9px}.dv-turn-icon{width:36px;height:36px;flex-basis:36px}.dv-turn-label strong{font-size:13px}.dv-turn-card .dv-turn-open{font-size:12px;padding:4px 8px}.dv-turn-card .dv-turn-file{padding:7px 10px;gap:8px;font-size:13px}}
 `;
 
-// src/renderer/plugin-review-adapter.ts
+// src/renderer/host-state-adapter.ts
 import React3 from "react";
-var REVIEW_TAB_ID = "plugin:local.diff-view/review";
 var PluginReviewError = class extends Error {
   constructor(code, message) {
     super(message);
@@ -632,14 +704,7 @@ function hostEntryUrl(documentUrl, scriptUrls) {
   return entries[0].href;
 }
 function resolvePluginReviewModules(module) {
-  return {
-    store: module.R,
-    hostReact: module.r,
-    tab: (pluginId, viewId) => {
-      const resource = `${pluginId}/${viewId}`;
-      return { id: `plugin:${resource}`, kind: "plugin", resource };
-    }
-  };
+  return { store: module.R, hostReact: module.r };
 }
 async function loadPinned() {
   const scripts = Array.from(document.querySelectorAll('script[type="module"][src]')).map((script) => script.src);
@@ -650,7 +715,7 @@ async function loadPinned() {
   );
   return resolvePluginReviewModules(module);
 }
-function createPluginReviewAdapter(options = {}) {
+function createHostStateAdapter(options = {}) {
   let closed = false, pending;
   const subscriptions = /* @__PURE__ */ new Set();
   const alive = () => {
@@ -660,16 +725,14 @@ function createPluginReviewAdapter(options = {}) {
     alive();
     const result = await (options.load ?? loadPinned)();
     alive();
-    if (typeof result.store?.getState !== "function" || typeof result.tab !== "function" || result.hostReact?.createElement !== React3.createElement || result.hostReact?.useState !== React3.useState) denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u9875\u7B7E\u63A5\u53E3\u5DF2\u53D8\u5316 / Host tab contract changed");
-    const tab = result.tab("local.diff-view", "review");
-    if (tab.id !== REVIEW_TAB_ID || tab.kind !== "plugin" || tab.resource !== "local.diff-view/review") denied("SIDEBAR_CONTRACT", "\u63D2\u4EF6\u9875\u7B7E\u6807\u8BC6\u4E0D\u5339\u914D / Plugin tab identity mismatch");
+    if (typeof result.store?.getState !== "function" || result.hostReact?.createElement !== React3.createElement || result.hostReact?.useState !== React3.useState) denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u8BC1\u636E\u63A5\u53E3\u5DF2\u53D8\u5316 / Host evidence contract changed");
     return result;
   })().catch((error) => {
     pending = void 0;
     throw error;
   });
   return {
-    async subscribeSession(listener) {
+    async subscribeEvidence(listener) {
       const modules = await inspect();
       alive();
       if (typeof modules.store.subscribe !== "function") return denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u4F1A\u8BDD\u8BA2\u9605\u63A5\u53E3\u5DF2\u53D8\u5316 / Host session subscription unavailable");
@@ -690,11 +753,6 @@ function createPluginReviewAdapter(options = {}) {
         if (key !== previous) {
           previous = key;
           listener(sessionId, context);
-        }
-        const tab = state.workPanelTabs?.find((t) => t.id === REVIEW_TAB_ID);
-        if (sessionId && tab && state.workPanelOpen && state.activeWorkPanelTabId === REVIEW_TAB_ID) {
-          const suffix = `?sessionId=${encodeURIComponent(sessionId)}`;
-          if (!tab.location?.endsWith(suffix)) state.openWorkPanelTabForSession(sessionId, { ...tab, location: `diff-session:${encodeURIComponent(sessionId)}${suffix}` });
         }
       };
       const unsubscribe = modules.store.subscribe(publish);
@@ -745,41 +803,134 @@ function createPluginReviewAdapter(options = {}) {
         throw error;
       }
     },
-    async open(sessionId, location, guard) {
-      if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
-      location = `${location}?sessionId=${encodeURIComponent(sessionId)}`;
-      const modules = await inspect();
+    close() {
+      closed = true;
+      for (const dispose of [...subscriptions]) dispose();
+    }
+  };
+}
+
+// src/renderer/plugin-review-adapter.ts
+var REVIEW_TAB_ID = "plugin:local.diff-view/review";
+var denied2 = (code, message) => {
+  throw new PluginReviewError(code, message);
+};
+var validId = (value) => !!value && /^[a-zA-Z0-9-]{1,80}$/.test(value);
+function domSession(document2) {
+  const panes = [...document2.querySelectorAll('[data-session-pane][data-visible="true"]')];
+  const rows = [...document2.querySelectorAll(".thread-item.active[data-sidebar-session-row]")];
+  if (panes.length > 1 || rows.length > 1) return null;
+  const pane = panes[0]?.getAttribute("data-session-pane") ?? null;
+  const row = rows[0]?.getAttribute("data-sidebar-session-row") ?? null;
+  if (panes.length && !validId(pane) || rows.length && !validId(row) || pane && row && pane !== row) return null;
+  return pane ?? row;
+}
+function createPluginReviewAdapter(options = {}) {
+  const legacy = createHostStateAdapter({ load: options.load });
+  let closed = false, opening = false;
+  const subscriptions = /* @__PURE__ */ new Set();
+  const doc = () => options.document ?? document;
+  const alive = () => {
+    if (closed) denied2("SIDEBAR_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D / Plugin unloaded");
+  };
+  return {
+    async subscribeSession(listener) {
       alive();
-      guard?.();
-      const state = modules.store.getState();
-      if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u70B9\u51FB / Session changed");
-      if (!Array.isArray(state.pluginViews) || !state.pluginViews.some((view) => view.pluginId === "local.diff-view" && view.viewId === "review")) denied("SIDEBAR_VIEW", "Diff view \u9875\u7B7E\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Diff view tab unavailable");
-      if (typeof state.openWorkPanelTabForSession !== "function") denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u4E0D\u652F\u6301\u6253\u5F00\u63D2\u4EF6\u9875\u7B7E / Plugin tab opener unavailable");
-      const existing = state.workPanelTabs?.find((tab) => tab.id === REVIEW_TAB_ID && tab.kind === "plugin" && tab.resource === "local.diff-view/review" && tab.location === location);
-      if (existing && state.workPanelOpen && state.activeWorkPanelTabId === REVIEW_TAB_ID) return;
-      state.openWorkPanelTabForSession(sessionId, existing ?? { ...modules.tab("local.diff-view", "review"), location });
-      const opened = modules.store.getState();
-      if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== REVIEW_TAB_ID) denied("SIDEBAR_OPEN", "\u4FA7\u680F\u672A\u6253\u5F00 / Sidebar did not open");
+      const document2 = doc();
+      let previous, stopped = false;
+      const publish = () => {
+        if (closed || stopped) return;
+        const id2 = domSession(document2);
+        if (id2 !== previous) {
+          previous = id2;
+          listener(id2);
+        }
+      };
+      const observer = options.observe ? options.observe(publish) : (() => {
+        const observer2 = new MutationObserver((records) => {
+          const transition = records.some((record) => record.type === "attributes" && (record.attributeName !== "class" || record.target.hasAttribute("data-sidebar-session-row")));
+          if (transition && previous !== null && previous !== void 0 && !closed && !stopped) {
+            previous = null;
+            listener(null);
+          }
+          publish();
+        });
+        observer2.observe(document2.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-session-pane", "data-visible", "data-sidebar-session-row", "class"] });
+        return observer2;
+      })();
+      const dispose = () => {
+        if (stopped) return;
+        stopped = true;
+        observer.disconnect();
+        subscriptions.delete(dispose);
+      };
+      subscriptions.add(dispose);
+      publish();
+      return dispose;
     },
-    async openFile(sessionId, path, guard) {
-      if (typeof path !== "string" || !path || /[\0\r\n]/.test(path)) denied("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u6587\u4EF6\u8DEF\u5F84 / Invalid file path");
-      const modules = await inspect();
+    subscribeEvidence: (listener) => legacy.subscribeEvidence(listener),
+    subscribeActivity: (listener, diagnose) => legacy.subscribeActivity(listener, diagnose),
+    async open(sessionId, location, guard) {
       alive();
-      guard?.();
-      const state = modules.store.getState();
-      if (!sessionId || state.activeSessionId !== sessionId || state.selectingSessionId) denied("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u70B9\u51FB / Session changed");
-      if (!Array.isArray(state.pluginViews) || !state.pluginViews.some((view) => view.pluginId === "pi.file-manager" && view.viewId === "manager")) denied("SIDEBAR_VIEW", "PI-Desktop \u6587\u4EF6\u7BA1\u7406\u5668\u4E0D\u53EF\u7528\uFF0C\u8BF7\u542F\u7528\u5185\u7F6E\u6587\u4EF6\u7BA1\u7406\u5668 / File Manager unavailable");
-      if (typeof state.openWorkPanelTabForSession !== "function") denied("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u4E0D\u652F\u6301\u6253\u5F00\u6587\u4EF6\u7BA1\u7406\u5668 / File Manager tab opener unavailable");
-      const existing = state.workPanelTabs?.find((tab2) => tab2.id === "plugin:pi.file-manager/manager" && tab2.kind === "plugin" && tab2.resource === "pi.file-manager/manager");
-      if (existing?.location === path && state.workPanelOpen && state.activeWorkPanelTabId === existing.id) return;
-      const tab = { ...existing ?? modules.tab("pi.file-manager", "manager"), location: path };
-      state.openWorkPanelTabForSession(sessionId, tab);
-      const opened = modules.store.getState();
-      if (opened.activeSessionId !== sessionId || !opened.workPanelOpen || opened.activeWorkPanelTabId !== tab.id) denied("SIDEBAR_OPEN", "\u6587\u4EF6\u7BA1\u7406\u5668\u672A\u6253\u5F00 / File Manager did not open");
+      if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied2("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
+      if (opening) denied2("SIDEBAR_BUSY", "\u6B63\u5728\u6253\u5F00\u5BA1\u67E5\u9875\u7B7E\uFF0C\u8BF7\u52FF\u91CD\u590D\u70B9\u51FB");
+      const document2 = doc(), check = () => {
+        alive();
+        guard?.();
+        if (!validId(sessionId) || domSession(document2) !== sessionId) denied2("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\u6216\u4E0D\u552F\u4E00\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u91CD\u8BD5 / Session changed or ambiguous");
+      };
+      check();
+      opening = true;
+      try {
+        const navigation = options.navigation ?? denied2("SIDEBAR_CHANNEL", "\u5BA1\u67E5\u5BFC\u822A\u6865\u63A5\u4E0D\u53EF\u7528 / Review navigation unavailable");
+        const ticket = await navigation.prepare(sessionId, location, check);
+        check();
+        const clicked = /* @__PURE__ */ new Set();
+        const one = (selector) => {
+          const nodes = [...document2.querySelectorAll(selector)].filter((node) => !node.closest("[hidden], [inert]"));
+          if (nodes.length > 1) denied2("SIDEBAR_AMBIGUOUS", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u552F\u4E00 / Ambiguous host controls");
+          return nodes[0];
+        };
+        const click = (node) => {
+          check();
+          if (!node || clicked.has(node)) return;
+          if (node.getAttribute("aria-disabled") === "true" || node.disabled) denied2("SIDEBAR_OPEN", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u53EF\u7528");
+          clicked.add(node);
+          node.click();
+        };
+        const deadline = Date.now() + 4e3;
+        let opened = false;
+        while (Date.now() < deadline) {
+          check();
+          const toggle = one(".app-work-panel-toggle");
+          if (!toggle || !["true", "false"].includes(toggle.getAttribute("aria-pressed") ?? "")) denied2("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u5DE5\u4F5C\u9762\u677F\u6807\u8BB0\u5DF2\u53D8\u5316 / Work panel markup changed");
+          if (toggle.getAttribute("aria-pressed") === "false") click(toggle);
+          else {
+            const tab = one(`[data-work-panel-tab-id="${REVIEW_TAB_ID}"] button[role="tab"]`);
+            if (tab?.getAttribute("aria-selected") === "true") {
+              opened = true;
+              break;
+            }
+            if (tab) click(tab);
+            else {
+              const launcher = one('[data-work-panel-launcher-item="local.diff-view/review"]');
+              if (launcher) click(launcher);
+              else click(one(".work-panel-new-tab"));
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        if (!opened) denied2("SIDEBAR_OPEN", "\u672A\u627E\u5230\u6216\u672A\u80FD\u6FC0\u6D3B Diff view \u9875\u7B7E\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Review tab did not open");
+        await navigation.confirm(ticket, check);
+        check();
+      } finally {
+        opening = false;
+      }
     },
     close() {
       closed = true;
       for (const dispose of [...subscriptions]) dispose();
+      legacy.close();
     }
   };
 }
@@ -1003,50 +1154,6 @@ var runningPillStyle = `
 @media(max-width:420px){.dv-running-pill{font-size:13px;padding:7px 10px}}
 `;
 
-// src/renderer/file-open-channel.ts
-function startFileOpenChannel(transport, sessionId, open, isCurrent) {
-  const listenerId = crypto.randomUUID();
-  let stopped = false, retryTimer;
-  const alive = () => !stopped && isCurrent();
-  const receive = async () => {
-    while (alive()) {
-      try {
-        const requests = await transport.invoke("openFile", { listen: true, sessionId, listenerId });
-        if (!alive()) return;
-        if (!Array.isArray(requests)) throw new Error("Invalid file navigation response");
-        for (const request of requests) {
-          if (!alive()) return;
-          let error;
-          try {
-            if (request.sessionId !== sessionId) throw new Error("File navigation session changed");
-            await open(sessionId, request.path, () => {
-              if (!alive()) throw new Error("File navigation session changed");
-            });
-          } catch (reason) {
-            error = String(reason?.message ?? reason);
-          }
-          if (!alive()) return;
-          await transport.invoke("openFile", { requestId: request.requestId, sessionId, complete: true, error });
-        }
-      } catch {
-        if (alive()) retryTimer = setTimeout(() => {
-          retryTimer = void 0;
-          void receive();
-        }, 1e3);
-        return;
-      }
-    }
-  };
-  void receive();
-  return () => {
-    if (stopped) return;
-    stopped = true;
-    if (retryTimer) clearTimeout(retryTimer);
-    void transport.invoke("openFile", { cancelListen: listenerId, sessionId }).catch(() => {
-    });
-  };
-}
-
 // src/renderer/json-cache.ts
 var JsonCache = class extends Map {
   encoded = /* @__PURE__ */ new Map();
@@ -1100,13 +1207,11 @@ function trackSession(current) {
   return current.sessionReady ??= current.adapter.subscribeSession((sessionId, context) => {
     if (!same(current)) return;
     if (current.activeSession !== sessionId) {
-      current.stopFileOpen?.();
       current.activeSession = sessionId;
       current.sessionVersion++;
-      const version = current.sessionVersion;
-      current.stopFileOpen = sessionId ? startFileOpenChannel(current.transport, sessionId, (id2, path, guard) => current.adapter.openFile(id2, path, guard), () => same(current) && current.activeSession === sessionId && current.sessionVersion === version) : void 0;
     }
-    publisher.update(sessionId, context);
+    current.surface?.update(sessionId);
+    publisher.update(sessionId, context ?? (current.evidenceContext?.sessionId === sessionId ? current.evidenceContext : void 0));
     void current.transport.invoke("activeReviewSession", { sessionId }).catch(() => {
     });
   }).then((dispose) => {
@@ -1125,6 +1230,25 @@ function trackSession(current) {
       }, 2e3);
     }
     throw error;
+  });
+}
+function trackEvidence(current) {
+  if (!current.adapter.subscribeEvidence || current.evidenceReady) return;
+  current.evidenceReady = current.adapter.subscribeEvidence((_sessionId, context) => {
+    if (!same(current)) return;
+    current.evidenceContext = context;
+    if (context && context.sessionId === current.activeSession) current.sessionPublisher?.update(context.sessionId, context);
+  }).then((dispose) => {
+    if (same(current)) current.unsubscribeEvidence = dispose;
+    else dispose();
+  }).catch(() => {
+    if (!same(current)) return;
+    current.evidenceReady = void 0;
+    report(current, "session-source-error");
+    current.evidenceRetry = setTimeout(() => {
+      current.evidenceRetry = void 0;
+      if (same(current)) trackEvidence(current);
+    }, 2e3);
   });
 }
 function remember(current, card) {
@@ -1297,7 +1421,8 @@ function onLoad(pi, options = {}) {
     if (!same(current)) return Promise.reject(new Error("Renderer unloaded / \u6E32\u67D3\u6269\u5C55\u5DF2\u5378\u8F7D\u3002"));
     return pi.dispatch("plugin.call", { method, args });
   } });
-  const current = { transport, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: new JsonCache(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter() };
+  const surface = options.adapter ? void 0 : createReviewSurfaceClient(transport);
+  const current = { transport, surface, ui: pi.ui, disposed: false, pumping: false, wakeAgain: false, appearance: { locale: "zh-CN", base: "light" }, listeners: /* @__PURE__ */ new Set(), cards: /* @__PURE__ */ new Map(), cache: new JsonCache(), feeds: /* @__PURE__ */ new Map(), sessionVersion: 0, reported: /* @__PURE__ */ new Set(), adapter: options.adapter ?? createPluginReviewAdapter({ navigation: surface.channel }) };
   hub = current;
   realm2.__piDiffRenderer = { hub: current, dispose: onUnload };
   disposers.push(pi.ui.injectStyle(summary_style_default + runningPillStyle));
@@ -1305,14 +1430,19 @@ function onLoad(pi, options = {}) {
   disposers.push(pi.slots.register({ slot: "composerControl", positions: ["left"], component: ComposerControl }));
   void trackSession(current).catch(() => {
   });
+  trackEvidence(current);
   report(current, "entry-loaded");
   wake(current);
 }
 function onUnload() {
   const current = hub;
   if (current) {
+    current.surface?.dispose();
+    if (current.evidenceRetry) clearTimeout(current.evidenceRetry);
+    current.unsubscribeEvidence?.();
+  }
+  if (current) {
     current.sessionPublisher?.dispose();
-    current.stopFileOpen?.();
     current.disposed = true;
     if (current.timer) clearTimeout(current.timer);
     if (current.sessionRetry) clearTimeout(current.sessionRetry);

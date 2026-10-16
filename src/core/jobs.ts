@@ -20,7 +20,8 @@ export class JobQueue {
     };
     // Git management already has bounded reads and exclusive writes in schedule()/dispatch().
     // Do not serialize it again behind session history or other independent Git reads.
-    if (navigation || systemOpen || method === 'gitManage') void work(); else this.tail = this.tail.then(work);
+    const savedRead = method === 'replyCards' || (method === 'review' && (args as { scope?: string })?.scope === 'turn');
+    if (navigation || systemOpen || method === 'gitManage' || savedRead) void work(); else this.tail = this.tail.then(work);
     return { jobId: id };
   }
   poll(id: string): Job { const j = this.jobs.get(id); if (!j || this.closed) fail('JOB_EXPIRED', 'Review operation expired'); return { ...j }; }
