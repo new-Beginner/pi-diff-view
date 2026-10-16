@@ -183,6 +183,7 @@ function EntryExtra(props: ReplyProps) {
     await trackSession(current); const version = current.sessionVersion;
     const guard = () => { if (!same(current) || current.activeSession !== run.sessionId || current.sessionVersion !== version) throw new Error('会话已切换，请在当前会话点击 / Session changed'); };
     guard();
+    await current.adapter.reveal?.(run.sessionId, guard); guard();
     const selection = await current.transport.invoke<{ nonce: string }>('selectTurn', { sessionId: run.sessionId, runId: run.id, fileId: file?.id });
     guard(); await current.adapter.open(run.sessionId, `diff-view:${selection.nonce}`, guard); guard(); report(current, 'sidebar-opened');
   }} />;

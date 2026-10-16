@@ -35,7 +35,7 @@ async function setup(page: Page, options: { layerApi?: 'public' | 'missing' | 'r
   const navigation = new ReviewNavigationStore();
   const surfaces = new ReviewSurfaces();
   const execute = async (method: string, args: any) => {
-    if (method === 'reviewSurface') return surfaces.exchange(args);
+    if (method === 'reviewSurface') return surfaces.request(args);
     if (method === 'rendererReport') return { ok: true };
     if (method === 'sessionEvidence' || method === 'sessionContext') return { ok: true }; // Contract-only mock; history recovery is covered by main integration tests.
     if (method === 'activeReviewSession') { navigation.setActiveSession(args.sessionId); return { ok: true }; }
@@ -89,11 +89,17 @@ for (const width of [360, 600, 1100]) for (const theme of ['light', 'dark'] as c
 });
 test('updates real net totals, opens latest-turn mode without recovery UI and preserves the draft', async ({ page }) => {
   await setup(page); await expect(page.locator('.dv-running-pill')).toContainText('+11'); await change('first\nsecond\n'); await expect(page.locator('.dv-running-pill')).toHaveText('1 个文件已更改+2-0');
+  await page.evaluate(() => {
+    document.addEventListener('click', event => { if ((event.target as Element).closest('.dv-running-pill')) (window as any).__clickAt = performance.now(); }, true);
+    new MutationObserver(() => { const sidebar = document.getElementById('live-sidebar'); if ((window as any).__revealMs == null && sidebar && !sidebar.hidden && (window as any).__clickAt) (window as any).__revealMs = performance.now() - (window as any).__clickAt; }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+  });
   await page.locator('.dv-running-pill').click(); const frame = page.frameLocator('iframe'); await expect(frame.locator('.dv-review h2')).toHaveText('current.txt'); await expect(frame.locator('.dv-code').filter({ hasText: 'second' })).toBeVisible();
   await expect(frame.getByRole('combobox', { name: '范围', exact: true })).toHaveAttribute('data-value', 'lastTurn');
   await expect(frame.getByRole('combobox', { name: '对话轮次' })).toHaveCount(0);
   await expect(frame.getByText(/历史恢复|历史租约|预览恢复/)).toHaveCount(0);
   await expect(frame.getByRole('button', { name: /撤销|重新应用|暂存/ })).toHaveCount(0); await expect(page.locator('.dv-layer, dialog')).toHaveCount(0);
+  await expect(page.locator('.dv-running-pill')).toBeEnabled(); await expect(frame.locator('.dv-review')).toHaveAttribute('aria-busy', 'false');
+  const reveal = await page.evaluate(() => (window as any).__revealMs); console.log(`pill container reveal: ${reveal.toFixed(1)}ms`); expect(reveal).toBeLessThanOrEqual(100);
   expect(await page.evaluate(() => (window as any).__liveHost.opens)).toHaveLength(1); await expect(page.getByRole('textbox')).toHaveText('已有草稿，请勿改变。'); await stop(page);
 });
 test('hides on complete, then shows the original reply card with no simultaneous pill', async ({ page }) => {

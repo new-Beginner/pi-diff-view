@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { ReviewSurfaces } from '../../src/core/review-surfaces';
+import { expect, it, vi } from 'vitest';
+import { ReviewSurfaces, surfaceStamp } from '../../src/core/review-surfaces';
 const r = { role: 'renderer' as const, id: 'renderer-1', seq: 1, sessionId: 'a' };
 const v = { role: 'view' as const, id: 'view-1', seq: 1 };
 it('pairs only unique live instances, follows sessions and confirms exact revisions', () => {
@@ -34,4 +34,27 @@ it('rejects invalid identities and bounds live registrations', () => {
   expect(() => surfaces.exchange({ ...r, seq: NaN })).toThrow();
   for (let i = 0; i < 32; i++) surfaces.exchange({ ...r, id: `renderer-${i}` });
   expect(() => surfaces.exchange({ ...r, id: 'overflow' })).toThrow();
+});
+it('wakes a bounded view wait immediately on session, selection, acknowledgement and clear', async () => {
+  const surfaces = new ReviewSurfaces(); surfaces.exchange(r);
+  let reply = surfaces.exchange(v);
+  const wait = surfaces.request({ ...v, seq: 2, after: surfaceStamp(reply), waitMs: 1000 });
+  surfaces.exchange({ ...r, seq: 2, nonce: 'token', selectionRevision: 1 });
+  reply = await wait; expect(reply.nonce).toBe('token');
+  const confirmation = surfaces.request({ ...r, seq: 3, after: surfaceStamp(reply), waitMs: 1000 });
+  surfaces.exchange({ ...v, seq: 3, ack: reply.key });
+  expect((await confirmation).confirmed).toBe(true);
+  reply = surfaces.exchange({ ...v, seq: 4, ack: reply.key });
+  const cleared = surfaces.request({ ...v, seq: 5, ack: reply.key, after: surfaceStamp(reply), waitMs: 1000 });
+  surfaces.clear(); expect((await cleared).state).toBe('waiting');
+});
+it('bounds idle waits and rejects stale waiters after a newer sequence', async () => {
+  vi.useFakeTimers();
+  try {
+    const surfaces = new ReviewSurfaces(); surfaces.exchange(r); const reply = surfaces.exchange(v);
+    const idle = surfaces.request({ ...v, seq: 2, after: surfaceStamp(reply), waitMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1001); expect(await idle).toMatchObject({ sessionId: 'a' });
+    const old = surfaces.request({ ...v, seq: 3, after: surfaceStamp(reply), waitMs: 1000 });
+    surfaces.exchange({ ...v, seq: 4 }); expect((await old).state).toBe('stale');
+  } finally { vi.useRealTimers(); }
 });

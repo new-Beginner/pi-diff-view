@@ -8,7 +8,7 @@ function fixture() {
   const invoke = vi.fn(async (method: string, args: any): Promise<any> => {
     requests.push({ method, args });
     if (method === 'readTurnSelection') return { nonce, revision: 3, sessionId: 'a', request: { scope: 'turn', sessionId: 'a', runId: 'r' } };
-    return surfaces.exchange(args);
+    return surfaces.request(args);
   });
   const client = createReviewSurfaceClient({ invoke }); client.update('a');
   return { client, surfaces, invoke, requests, view: (ack?: string) => surfaces.exchange({ role: 'view', id: 'view', seq: ++viewSeq, ack }) };
@@ -42,4 +42,34 @@ it('refuses ambiguous instances, and times out rather than treating tab activati
     const pending = expect(f.client.channel.confirm(ticket, () => {})).rejects.toThrow('未确认');
     await vi.advanceTimersByTimeAsync(12500); await pending;
   } finally { f.client.dispose(); }
+});
+it('rejects a prepare reply delayed across A → B → A even when the DOM guard matches again', async () => {
+  const f = fixture(), invoke = f.invoke.getMockImplementation()!; let release!: () => void;
+  f.invoke.mockImplementation(async (method, args) => {
+    const reply = await invoke(method, args);
+    if (method === 'reviewSurface' && args?.nonce) await new Promise<void>(resolve => release = resolve);
+    return reply;
+  });
+  try {
+    const preparing = f.client.channel.prepare('a', `diff-view:${nonce}`, () => {});
+    const rejected = expect(preparing).rejects.toThrow('Session changed');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    f.client.update('b'); f.client.update('a'); release(); await rejected;
+  } finally { f.client.dispose(); }
+});
+it('clears the backend selection when away/back updates coalesce behind an in-flight heartbeat', async () => {
+  const surfaces = new ReviewSurfaces(); let release!: () => void, updates = 0;
+  const client = createReviewSurfaceClient({ invoke: async (method: string, args: any): Promise<any> => {
+    if (method === 'readTurnSelection') return { nonce, revision: 3, sessionId: 'a' };
+    const reply = await surfaces.request(args);
+    if (args.seq === 1) await new Promise<void>(resolve => release = resolve);
+    if (args.seq > 2 && !args.nonce) updates++;
+    return reply;
+  } });
+  try {
+    client.update('a'); await client.channel.prepare('a', `diff-view:${nonce}`, () => {});
+    client.update('b'); client.update('a'); release();
+    await vi.waitFor(() => expect(updates).toBeGreaterThan(0));
+    expect(surfaces.exchange({ role: 'view', id: 'view', seq: 1 }).nonce).toBeUndefined();
+  } finally { client.dispose(); }
 });

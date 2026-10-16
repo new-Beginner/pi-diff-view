@@ -86,7 +86,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const scopeRef = useRef(scopeKey); scopeRef.current = scopeKey;
   useEffect(() => { setConfirmation(value => value?.kind === 'systemOpen' && value.scope !== scopeKey ? null : value); }, [scopeKey]);
   const diffPane = useRef<HTMLDivElement>(null);
-  const reviewPending = useRef(false), loadedScope = useRef('');
+  const reviewPending = useRef(0), loadedScope = useRef('');
   const historyRevision = useRef('');
   const workspaceRef = useRef<HTMLDivElement>(null), continuationRef = useRef<HTMLDivElement>(null);
   const fileCollapseAnchor = useRef<{ selected: string; top: number }>();
@@ -131,6 +131,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   }, [transport, detail?.file.id, initialRequest.runId]);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   useEffect(() => {
+    if (!panelActive) return;
     if (!validReview?.id || !review?.files.length) return;
     const reviewId = validReview.id;
     const index = review.files.findIndex(file => file.id === selected);
@@ -140,7 +141,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       if (!loadingDetail && candidates[0]) prefetchDiffDetail(transport, reviewId, candidates[0].id, context, detailTick);
     }, 1000);
     return () => clearTimeout(timer);
-  }, [transport, validReview?.id, review, selected, context, detailTick, loadingDetail]);
+  }, [transport, validReview?.id, review, selected, context, detailTick, loadingDetail, panelActive]);
   useEffect(() => { if (hostLocale) setLocale(hostLocale); }, [hostLocale]);
   useEffect(() => { if (hostBase) setBase(hostBase); }, [hostBase]);
   const previousNavigation = useRef(navigationKey);
@@ -149,7 +150,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     const changedNavigation = previousNavigation.current !== navigationKey;
     previousNavigation.current = navigationKey;
     const next: ReviewRequest = { ...initialRequest, scope: initialRequest.scope ?? 'turn' };
-    const sameReview = review?.scope === next.scope && review?.root === next.root && review?.runId === next.runId && review?.sessionId === next.sessionId;
+    const sameReview = review?.scope === next.scope && (!next.root || review?.root === next.root) && review?.sessionId === next.sessionId && (next.scope !== 'turn' || review?.runId === next.runId);
     const target = initialFileId ?? (sameReview ? review?.files[0]?.id : undefined) ?? '';
     setRequest(next); setSelected(target); setFileCollapsed(false); setQuery('');
     setCollapsed(new Set()); setConfirmation(null); setError('');
@@ -161,6 +162,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     appRef.current?.querySelector<HTMLElement>('.dv-file[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [navigationKey, selected]);
   useEffect(() => {
+    if (!panelActive) return;
     let active = true; setBootError('');
     const load = () => {
       const version = { ...settingsVersion.current };
@@ -184,7 +186,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     const timer = bootTick === 0 && initialRequest.runId && initialRequest.root ? setTimeout(load, 180) : undefined;
     if (!timer) void load();
     return () => { active = false; if (timer) clearTimeout(timer); };
-  }, [transport, bootTick, sessionKey]);
+  }, [transport, bootTick, sessionKey, panelActive]);
   useEffect(() => {
     if (!panelActive) return;
     if (!boot && !request.root && !request.sessionId && !request.runId) return;
@@ -196,7 +198,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     if (!request.root && !request.sessionId && !request.runId) { setLoadingReview(false); return; }
     if ((request.scope === 'commit' || request.scope === 'branch') && !request.ref?.trim()) { setLoadingReview(false); setReviewError(t.emptyRef); return; }
     // Background updates never clear existing content or disable its read-only controls.
-    reviewPending.current = true; setLoadingReview(changedScope || !matchingReview);
+    reviewPending.current++; setLoadingReview(changedScope || !matchingReview);
     const restartSync = retrySync.current; retrySync.current = false;
     transport.invoke<ReviewSummary>('review', { ...request, retrySync: restartSync || undefined, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(async response => {
       if (!active) return;
@@ -253,8 +255,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         data = { ...data, files: [...data.files, ...page.files.filter(file => !isImagePath(file.path))], nextFileOffset: page.nextOffset };
         if (streaming || data.nextFileOffset == null) await publish();
       }
-    }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (active) { reviewPending.current = false; setLoadingReview(false); } });
-    return () => { active = false; reviewPending.current = false; };
+    }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { reviewPending.current--; if (active) setLoadingReview(false); });
+    return () => { active = false; };
   }, [transport, scopeKey, refreshTick, panelActive]);
   const resetPage = () => { setCollapsed(new Set()); };
   useEffect(() => {

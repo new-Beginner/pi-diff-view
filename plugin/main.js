@@ -2788,6 +2788,14 @@ var JobQueue = class {
   jobs = /* @__PURE__ */ new Map();
   tail = Promise.resolve();
   closed = false;
+  admit(method, args, queueIfBusy = false) {
+    try {
+      return this.start(method, args);
+    } catch (error) {
+      if (queueIfBusy && !["selectTurn", "openSystemFile"].includes(method) && error.code === "JOB_BUSY") return { state: "busy" };
+      throw error;
+    }
+  }
   start(method, args) {
     if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
     if (!["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
@@ -2935,53 +2943,101 @@ var ReviewNavigationStore = class {
 
 // src/core/review-surfaces.ts
 init_path_policy();
+
+// src/core/review-surface-protocol.ts
+var surfaceStamp = (value) => JSON.stringify(value);
+
+// src/core/review-surfaces.ts
 var ReviewSurfaces = class {
   constructor(now = Date.now) {
     this.now = now;
   }
   leases = /* @__PURE__ */ new Map();
   revision = 0;
+  waiters = /* @__PURE__ */ new Set();
+  notify() {
+    for (const wake of [...this.waiters]) wake();
+  }
+  async request(args) {
+    if (args?.after != null && (typeof args.after !== "string" || args.after.length > 1024)) fail("NAVIGATION_INVALID", "Invalid surface cursor");
+    if (args?.waitMs != null && (!Number.isFinite(args.waitMs) || args.waitMs < 0 || args.waitMs > 1e3)) fail("NAVIGATION_INVALID", "Invalid surface wait");
+    const reply = this.exchange(args);
+    if (!args.waitMs || args.release || reply.state === "stale" || args.after !== surfaceStamp(reply)) return reply;
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer2);
+        this.waiters.delete(wake);
+        resolve(value);
+      };
+      const wake = (timeout2 = false) => {
+        const lease = this.leases.get(`${args.role}:${args.id}`);
+        const value = lease && lease.seq !== args.seq ? { state: "stale", sessionId: null } : this.snapshot();
+        if (timeout2 || surfaceStamp(value) !== args.after) finish(value);
+      };
+      const timer2 = setTimeout(() => wake(true), args.waitMs);
+      this.waiters.add(wake);
+    });
+  }
   exchange(args) {
     if (!args || !["renderer", "view"].includes(args.role) || typeof args.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.id) || !Number.isSafeInteger(args.seq) || args.seq < 1) fail("NAVIGATION_INVALID", "Invalid surface identity");
     if (args.sessionId != null && (typeof args.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId))) fail("NAVIGATION_INVALID", "Invalid surface session");
     if (args.nonce != null && (typeof args.nonce !== "string" || args.nonce.length > 80 || !Number.isSafeInteger(args.selectionRevision) || args.selectionRevision < 1)) fail("NAVIGATION_INVALID", "Invalid surface selection");
+    if (args.sessionEpoch != null && (!Number.isSafeInteger(args.sessionEpoch) || args.sessionEpoch < 0)) fail("NAVIGATION_INVALID", "Invalid session epoch");
     const now = this.now();
-    for (const [key2, value2] of this.leases) if (now - value2.at > 15e3) this.leases.delete(key2);
+    for (const [key, value2] of this.leases) if (now - value2.at > 15e3) this.leases.delete(key);
     const id2 = `${args.role}:${args.id}`, old = this.leases.get(id2);
     if (old && args.seq <= old.seq) return { state: "stale", sessionId: null };
     if (args.release) {
       this.leases.delete(id2);
+      this.notify();
       return { state: "waiting", sessionId: null };
     }
     if (!old && this.leases.size >= 32) fail("NAVIGATION_BUSY", "Too many active review instances");
     let value;
     if (args.role === "renderer") {
       const sessionId = args.sessionId ?? null;
-      const changed = !old || old.sessionId !== sessionId;
-      value = { ...old, role: args.role, id: args.id, seq: args.seq, sessionId, at: now, version: old?.version ?? ++this.revision };
+      const sessionEpoch = args.sessionEpoch ?? 0;
+      if (old && sessionEpoch < (old.sessionEpoch ?? 0)) return { state: "stale", sessionId: null };
+      const changed = !old || old.sessionId !== sessionId || old.sessionEpoch !== sessionEpoch;
+      value = { ...old, role: args.role, id: args.id, seq: args.seq, sessionId, sessionEpoch, at: now, version: old?.version ?? ++this.revision };
       if (changed) {
         value.nonce = void 0;
         value.selectionRevision = void 0;
+        value.locatingAt = void 0;
         value.version = ++this.revision;
       }
+      if (args.locating === true) {
+        value.nonce = void 0;
+        value.selectionRevision = void 0;
+        value.locatingAt = now;
+        value.version = ++this.revision;
+      }
+      if (args.locating === false) value.locatingAt = void 0;
       if (args.nonce != null) {
         value.nonce = args.nonce;
         value.selectionRevision = args.selectionRevision;
+        value.locatingAt = void 0;
         value.version = ++this.revision;
       }
     } else value = { ...old, role: args.role, id: args.id, seq: args.seq, ack: args.ack, at: now, version: 0 };
     this.leases.set(id2, value);
+    this.notify();
+    return this.snapshot();
+  }
+  snapshot() {
+    for (const [key2, value] of this.leases) if (this.now() - value.at > 15e3) this.leases.delete(key2);
     const renderers = [...this.leases.values()].filter((row) => row.role === "renderer");
     const views = [...this.leases.values()].filter((row) => row.role === "view");
     if (renderers.length > 1 || views.length > 1) return { state: "ambiguous", sessionId: null };
     if (renderers.length !== 1) return { state: "waiting", sessionId: null };
     const renderer = renderers[0];
     const key = `${renderer.id}:${renderer.version}:${views[0]?.id ?? ""}`;
-    return { state: "ready", sessionId: renderer.sessionId ?? null, key, nonce: renderer.nonce, selectionRevision: renderer.selectionRevision, confirmed: views.length === 1 && views[0].ack === key };
+    return { state: "ready", sessionId: renderer.sessionId ?? null, key, nonce: renderer.nonce, selectionRevision: renderer.selectionRevision, confirmed: views.length === 1 && views[0].ack === key, locating: renderer.locatingAt != null && this.now() - renderer.locatingAt < 12e3 };
   }
   clear() {
     this.leases.clear();
     this.revision++;
+    this.notify();
   }
 };
 
@@ -4999,7 +5055,7 @@ async function dispatch2(method, args) {
       const selection = navigation.get(request.nonce, request.sessionId);
       if (!selection || selection.revision !== request.selectionRevision) fail("SELECTION_MISSING", "Selection changed; click again");
     }
-    return surfaces.exchange(request);
+    return surfaces.request(request);
   }
   if (method === "selectTurn") {
     if (navigationClearing) fail("SELECTION_MISSING", "History is being cleared");
@@ -5028,7 +5084,8 @@ async function dispatch2(method, args) {
   }
   if (method === "jobStart") {
     const a = args, currentJobs = jobs;
-    const started = currentJobs.start(a.method, a.args ?? {});
+    const started = currentJobs.admit(a.method, a.args ?? {}, a.queueIfBusy === true);
+    if (!("jobId" in started)) return started;
     if (!Number.isFinite(a.waitMs) || !a.waitMs || a.waitMs < 0) return started;
     const result = await currentJobs.wait(started.jobId, a.waitMs);
     return result.state === "pending" ? started : { ...started, ...result };

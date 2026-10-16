@@ -201,7 +201,7 @@ async function dispatch(method: string, args: unknown): Promise<unknown> {
       const selection = navigation.get(request.nonce, request.sessionId);
       if (!selection || selection.revision !== request.selectionRevision) fail('SELECTION_MISSING', 'Selection changed; click again');
     }
-    return surfaces.exchange(request);
+    return surfaces.request(request);
   }
   if (method === 'selectTurn') {
     if (navigationClearing) fail('SELECTION_MISSING', 'History is being cleared');
@@ -217,8 +217,9 @@ async function dispatch(method: string, args: unknown): Promise<unknown> {
     return serial(async () => { if (disposed || !store) fail('PLUGIN_UNLOADED', 'Diff view unloaded'); rendererStages[stage] = Date.now(); rendererDiagnostic = { stage, at: Date.now() }; await saveRendererStatus(); return { ok: true }; });
   }
   if (method === 'jobStart') {
-    const a = args as { method: string; args?: unknown; waitMs?: number }, currentJobs = jobs!;
-    const started = currentJobs.start(a.method, a.args ?? {});
+    const a = args as { method: string; args?: unknown; waitMs?: number; queueIfBusy?: boolean }, currentJobs = jobs!;
+    const started = currentJobs.admit(a.method, a.args ?? {}, a.queueIfBusy === true);
+    if (!('jobId' in started)) return started;
     if (!Number.isFinite(a.waitMs) || !a.waitMs || a.waitMs < 0) return started;
     const result = await currentJobs.wait(started.jobId, a.waitMs);
     return result.state === 'pending' ? started : { ...started, ...result };

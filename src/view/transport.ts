@@ -41,9 +41,17 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
   const call = async <T,>(method: string, args?: unknown): Promise<T> => {
     if (!background.has(method)) return wire<T>(method, args);
     const navigation = method === 'selectTurn' || method === 'openSystemFile';
-    const started = await wire<{ jobId: string } & Partial<JobResult<T>>>('jobStart', { method, args, waitMs: 40 }, navigation);
+    const admissionDeadline = Date.now() + 30000;
+    let started: { jobId?: string; state?: 'pending' | 'done' | 'error' | 'busy'; result?: T; error?: { code: string; message: string } };
+    do {
+      started = await wire('jobStart', { method, args, waitMs: 40, queueIfBusy: !navigation }, navigation);
+      if (started.state !== 'busy') break;
+      if (Date.now() >= admissionDeadline) throw new Error('后台任务繁忙，尚未执行本次操作，请稍后重试。');
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } while (true);
     if (started.state === 'done') return started.result as T;
     if (started.state === 'error') throw Object.assign(new Error(started.error?.message ?? 'Review failed'), { code: started.error?.code });
+    if (!started.jobId) throw new Error('Invalid background operation response');
     const deadline = Date.now() + 120000;
     // Git process startup is rarely below 100ms on Windows. Avoid spending all six
     // admissions on premature polls when two independent reads are pending.
@@ -57,7 +65,7 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
     }
     throw new Error('Background operation is still running. Refresh to check the result; it was not retried.');
   };
-  return { invoke<T>(method: string, args?: unknown): Promise<T> {
+  const request = <T,>(method: string, args?: unknown): Promise<T> => {
     if (navigationMethods.has(method)) return call<T>(method, args);
     // Saved history is immutable/read-only while sync runs. Backend still validates ownership.
     const savedRead = method === 'replyCards' || (method === 'review' && (args as { scope?: string; retrySync?: boolean })?.scope === 'turn' && !(args as { retrySync?: boolean }).retrySync)
@@ -72,6 +80,16 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
     // Serialize complete writes within their domain; long Git jobs never fence unrelated UI reads.
     if (!read) queue[lane] = result.then(() => undefined, () => undefined);
     return result;
+  };
+  const pendingReads = new Map<string, Promise<unknown>>(); let readEpoch = 0;
+  return { invoke<T>(method: string, args?: unknown): Promise<T> {
+    const read = ['bootstrap', 'review', 'turnSummary', 'runningChanges', 'card', 'replyCards'].includes(method)
+      || (method === 'gitManage' && gitReads.has((args as { operation?: string })?.operation ?? ''));
+    if (!read) { if (!reads.has(method) && !['reviewSurface', 'readTurnSelection'].includes(method)) readEpoch++; return request<T>(method, args); }
+    const key = JSON.stringify([readEpoch, method, args]);
+    const previous = pendingReads.get(key); if (previous) return previous as Promise<T>;
+    const result = request<T>(method, args).finally(() => pendingReads.delete(key));
+    pendingReads.set(key, result); return result;
   } };
 }
 const known = new WeakMap<UiTransport, UiTransport>();

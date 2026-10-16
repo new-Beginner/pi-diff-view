@@ -42,3 +42,14 @@ it('starts saved-card reads beside blocked context work but keeps mutation jobs 
   expect(q.poll(context.jobId).state).toBe('pending'); expect(calls).not.toContain('action');
   release(); await vi.waitFor(() => expect(calls).toContain('action')); q.close();
 });
+it('reports unadmitted busy work without consuming a job or raising the four-job cap', async () => {
+  let release!: () => void;
+  const execute = vi.fn(async () => { await new Promise<void>(resolve => release = resolve); return 'done'; });
+  const q = new JobQueue(execute);
+  const jobs = Array.from({ length: 4 }, () => q.start('gitManage', { operation: 'status' }));
+  for (let i = 0; i < 10; i++) expect(q.admit('bootstrap', {}, true)).toEqual({ state: 'busy' });
+  expect(() => q.admit('bootstrap', {})).toThrow('Too many');
+  q.close();
+  await new Promise(resolve => setTimeout(resolve, 10)); expect(execute).not.toHaveBeenCalled();
+  expect(jobs).toHaveLength(4); expect(() => q.admit('bootstrap', {}, true)).toThrow('closed');
+});

@@ -42,6 +42,7 @@ it('rejects wrong sessions, invalid tokens, duplicate controls and late navigati
   const f = fixture(); await expect(f.adapter.open('other', location)).rejects.toMatchObject({ code: 'SIDEBAR_SESSION' });
   await expect(f.adapter.open('s', '/file')).rejects.toMatchObject({ code: 'SIDEBAR_TARGET' });
   f.nodes.set('.app-work-panel-toggle', [f.toggle, f.toggle]); await expect(f.adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_AMBIGUOUS' });
+  f.nodes.set('.app-work-panel-toggle', [f.toggle]);
   let release!: (value: string) => void; f.navigation.prepare.mockImplementationOnce(() => new Promise(resolve => release = resolve));
   const pending = f.adapter.open('s', location); await expect(f.adapter.open('s', location)).rejects.toMatchObject({ code: 'SIDEBAR_BUSY' });
   f.adapter.close(); release('ticket'); await expect(pending).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' }); expect(f.navigation.confirm).not.toHaveBeenCalled();
@@ -93,4 +94,41 @@ it('keeps delegated task ownership and late-load cancellation on the separate ev
   const late = createHostStateAdapter({ load: () => new Promise(resolve => release = resolve) });
   const pending = late.subscribeEvidence(() => {}); late.close(); release(modules);
   await expect(pending).rejects.toMatchObject({ code: 'SIDEBAR_UNLOADED' });
+});
+it('does not synthesize an empty identity for unrelated same-session DOM mutations', async () => {
+  const f = fixture(), sessions: unknown[] = []; let callback!: MutationCallback;
+  vi.stubGlobal('MutationObserver', class { constructor(value: MutationCallback) { callback = value; } observe() {} disconnect() {} });
+  const adapter = createPluginReviewAdapter({ document: f.document });
+  try {
+    await adapter.subscribeSession(id => sessions.push(id));
+    callback([{ type: 'attributes', attributeName: 'data-visible', oldValue: 'true', target: { getAttribute: () => 's' } } as unknown as MutationRecord], {} as MutationObserver);
+    expect(sessions).toEqual(['s']);
+  } finally { adapter.close(); vi.unstubAllGlobals(); }
+});
+it('reveals the panel before slow selection validation finishes', async () => {
+  vi.useFakeTimers(); const f = fixture(); let release!: (value: string) => void;
+  f.navigation.prepare.mockImplementationOnce(() => new Promise(resolve => release = resolve));
+  const values = { 'aria-pressed': 'false' };
+  f.nodes.set('.app-work-panel-toggle', [{ getAttribute: (key: keyof typeof values) => values[key], closest: () => null, click: () => { values['aria-pressed'] = 'true'; } }]);
+  try {
+    const opening = f.adapter.open('s', location);
+    await vi.advanceTimersByTimeAsync(90);
+    expect(values['aria-pressed']).toBe('true');
+    release('ticket'); await vi.advanceTimersByTimeAsync(100); await opening;
+  } finally { f.adapter.close(); vi.useRealTimers(); }
+});
+it('invalidates batched A → B → A identities/visibility, but ignores changes to hidden panes', async () => {
+  const f = fixture(), sessions: unknown[] = []; let callback!: MutationCallback;
+  vi.stubGlobal('MutationObserver', class { constructor(value: MutationCallback) { callback = value; } observe() {} disconnect() {} });
+  const adapter = createPluginReviewAdapter({ document: f.document });
+  const mutation = (attributeName: string, oldValue: string, values: Record<string, string>) => ({ type: 'attributes', attributeName, oldValue, target: f.attributes(values) } as unknown as MutationRecord);
+  try {
+    await adapter.subscribeSession(id => sessions.push(id));
+    callback([mutation('data-session-pane', 'hidden-old', { 'data-session-pane': 'hidden-new' })], {} as MutationObserver);
+    expect(sessions).toEqual(['s']);
+    callback([mutation('data-session-pane', 'other', { 'data-session-pane': 's' })], {} as MutationObserver);
+    expect(sessions).toEqual(['s', null, 's']);
+    callback([mutation('data-visible', 'false', { 'data-session-pane': 's', 'data-visible': 'true' })], {} as MutationObserver);
+    expect(sessions).toEqual(['s', null, 's', null, 's']);
+  } finally { adapter.close(); vi.unstubAllGlobals(); }
 });

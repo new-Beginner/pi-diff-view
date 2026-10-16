@@ -9,7 +9,7 @@ test.beforeAll(async () => {
 });
 async function setup(page: Page, locale = 'en', query = '', filesPerCard = 4, expectedCards?: number) {
   const surfaces = new ReviewSurfaces();
-  await page.route('**/surface-rpc', async route => { const result = surfaces.exchange(route.request().postDataJSON()); await route.fulfill({ contentType: 'application/json', body: JSON.stringify(result) }); });
+  await page.route('**/surface-rpc', async route => { const result = await surfaces.request(route.request().postDataJSON()); await route.fulfill({ contentType: 'application/json', body: JSON.stringify(result) }); });
   await page.route('**/renderer-demo*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"><script src="/mock.js"></script><style>body{margin:0;font:14px/1.7 'Segoe UI',system-ui;background:#fff;color:#30343b}#mock-chat{padding:30px;width:min(880px,100%);box-sizing:border-box;transition:none}body.sidebar-open #mock-chat{width:calc(100% - 640px)}h1{font-size:17px;margin:0 0 26px}.demo-label{color:#7b8290;font-size:12px;padding:8px 16px;background:#f4f6f9}.mock-reply-text{padding:60px 0 12px}.mock-composer{margin-top:90px;border:1px solid #e4e7ec;border-radius:20px;padding:18px 20px;color:#8a929e}#demo-plugin-sidebar{position:fixed;right:0;top:0;bottom:0;width:640px;border-left:1px solid #e4e7ec;background:#fff;display:flex;flex-direction:column}#demo-plugin-sidebar header{padding:10px 14px;border-bottom:1px solid #e4e7ec;display:flex;justify-content:space-between}#demo-plugin-sidebar header button{background:transparent;border:0;cursor:pointer}#demo-plugin-sidebar iframe{width:100%;flex:1;border:0;min-height:0}</style></head><body><div class="demo-label">界面预览 · 测试数据与模拟宿主，不是实际会话验收</div><main id="mock-chat"><h1>Diff view 文末文件变更</h1><div class="mock-reply-text"><p>已完成本次修改，文件变更与检查结果如下。</p><p>点击下面的文件名，在右侧 Diff view 页签查看对应差异。</p></div><article id="mock-reply"></article><div class="mock-composer">与 PI 协作…</div></main></body></html>` }));
   await page.route('**/sidebar-demo*', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><script src="/mock.js"></script><link rel="stylesheet" href="/index.css"></head><body style="margin:0"><div id="root"></div><script type="module" src="/index.js"></script></body></html>' }));
   await page.goto(`/renderer-demo?scenario=renderer&lang=${locale}${query}`);
@@ -126,13 +126,15 @@ for (const returnBack of [false, true]) test(`a session switch during selection 
   });
   await page.getByRole('button', { name: 'View changes', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__selectionWaiting)).toBe(true);
+  // The container may reveal immediately; no old-session target may be read/applied.
+  expect(await page.frameLocator('iframe').locator('.dv-file').count()).toBe(0);
   await page.evaluate(back => {
     const state = (window as any).__rendererDemo; state.switchSession('other-session');
     if (back) state.switchSession('session-demo');
     (window as any).__finishSelection();
   }, returnBack);
   await expect(page.getByRole('alert')).toContainText('Session changed');
-  expect(await page.evaluate(() => (window as any).__rendererDemo.opens.length)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__rendererDemo.opens.length)).toBe(1); // no reopen/replay after switching
   await expect(page.locator('#demo-plugin-sidebar')).toHaveCount(0);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });
@@ -504,5 +506,33 @@ test('late initial settings cannot overwrite a layout selected during fast first
   await frame.locator('body').evaluate(() => (window as any).__releaseBoot());
   await expect(frame.getByRole('combobox', { name: 'Scope', exact: true })).toBeEnabled();
   await expect(frame.locator('.dv-split')).toHaveCount(2);
+  await page.evaluate(() => (window as any).__rendererDemo.unload());
+});
+test('a card reveals within 100ms during slow selection, then stops loading without identity flicker', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const bridge = (window as any).pluginBridge, invoke = bridge.invoke.bind(bridge);
+    bridge.invoke = async (method: string, args: any, internal: boolean) => {
+      if (method === 'diff.selectTurn') await new Promise(resolve => setTimeout(resolve, 600));
+      return invoke(method, args, internal);
+    };
+    document.addEventListener('click', event => { if ((event.target as Element).closest('.dv-turn-file')) (window as any).__clickAt = performance.now(); }, true);
+    new MutationObserver(() => { if ((window as any).__revealMs == null && document.getElementById('demo-plugin-sidebar')) (window as any).__revealMs = performance.now() - (window as any).__clickAt; }).observe(document.body, { childList: true });
+  });
+  await page.locator('.dv-turn-file').filter({ hasText: 'src/theme/index.ts' }).click();
+  const frame = page.frameLocator('iframe');
+  await expect(frame.locator('.dv-review h2')).toHaveText('src/theme/index.ts');
+  await expect(page.locator('.dv-turn-open')).toBeEnabled();
+  await expect(frame.locator('.dv-review')).toHaveAttribute('aria-busy', 'false');
+  const reveal = await page.evaluate(() => (window as any).__revealMs); console.log(`card container reveal: ${reveal.toFixed(1)}ms`); expect(reveal).toBeLessThanOrEqual(100);
+  await frame.locator('body').evaluate(() => {
+    (window as any).__identityFlashes = 0;
+    new MutationObserver(() => { if (document.body.textContent?.includes('缺少会话身份')) (window as any).__identityFlashes++; }).observe(document.body, { childList: true, subtree: true });
+  });
+  await page.evaluate(() => { const pane = document.querySelector('[data-session-pane]')!; for (let i = 0; i < 10; i++) pane.setAttribute('data-visible', 'true'); });
+  await page.waitForTimeout(2200);
+  await expect(frame.locator('.dv-review h2')).toHaveText('src/theme/index.ts');
+  expect(await frame.locator('body').evaluate(() => (window as any).__identityFlashes)).toBe(0);
+  expect(await frame.locator('body').evaluate(() => (window as any).__demo.calls.filter((row: any) => row.method === 'diff.readTurnSelection').length)).toBe(1);
   await page.evaluate(() => (window as any).__rendererDemo.unload());
 });

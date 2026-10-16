@@ -2,6 +2,7 @@ import { it, expect, vi, afterEach } from 'vitest';
 import { boundedTransport } from '../../src/view/transport';
 import { prefetchDiffDetail } from '../../src/view/useDiffDetail';
 import type { ReviewDetail, UiTransport } from '../../src/core/contracts';
+import { JobQueue } from '../../src/core/jobs';
 
 afterEach(() => vi.useRealTimers());
 it('returns fast job results without polling and keeps a six-request rolling burst bound', async () => {
@@ -134,4 +135,41 @@ it('saved-card reads bypass an unfinished evidence upload without removing the s
   expect(invoke.mock.calls.some(([method]) => method === 'file')).toBe(true);
   await Promise.all(reads);
   uploaded = true; await vi.advanceTimersByTimeAsync(1100); await upload;
+});
+it('waits for unadmitted busy reads, coalesces identical reads and never replays admitted work', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(70000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  let admitted = false;
+  const invoke = vi.fn(async (method: string) => method === 'jobStart'
+    ? admitted ? { jobId: 'read', state: 'done', result: { ok: true } } : { state: 'busy' }
+    : { state: 'done', result: { ok: true } });
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const first = transport.invoke('bootstrap', { sessionId: 'a' }), same = transport.invoke('bootstrap', { sessionId: 'a' });
+  await vi.advanceTimersByTimeAsync(0); expect(invoke).toHaveBeenCalledTimes(1);
+  admitted = true; await vi.advanceTimersByTimeAsync(350);
+  await expect(first).resolves.toEqual({ ok: true }); await expect(same).resolves.toEqual({ ok: true });
+  expect(invoke.mock.calls.map(([method]) => method)).toEqual(['jobStart', 'jobStart']);
+});
+it('drains five legitimate reads through the real four-job queue without JOB_BUSY or duplicate execution', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(80000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  const releases: (() => void)[] = [], executed: string[] = [];
+  const jobs = new JobQueue(async (method, args: any) => {
+    executed.push(args.root ?? method);
+    if (method === 'gitManage') await new Promise<void>(resolve => releases.push(resolve));
+    return { ok: true };
+  });
+  const starts: number[] = [];
+  const transport = boundedTransport(async (method, args: any): Promise<any> => {
+    starts.push(Date.now());
+    return method === 'jobStart' ? jobs.admit(args.method, args.args, args.queueIfBusy) : jobs.poll(args.jobId);
+  });
+  try {
+    const reads = [...Array.from({ length: 4 }, (_, i) => transport.invoke('gitManage', { operation: 'status', root: `root-${i}` })), transport.invoke('bootstrap', { sessionId: 's' })];
+    await vi.advanceTimersByTimeAsync(10); expect(releases).toHaveLength(4); expect(executed).not.toContain('bootstrap');
+    releases.forEach(release => release()); await vi.advanceTimersByTimeAsync(4000);
+    expect(await Promise.all(reads)).toEqual(Array(5).fill({ ok: true }));
+    expect(executed).toEqual(['root-0', 'root-1', 'root-2', 'root-3', 'bootstrap']);
+    for (const at of starts) expect(starts.filter(time => time >= at && time < at + 1000).length).toBeLessThanOrEqual(6);
+  } finally { jobs.close(); }
 });

@@ -5,7 +5,7 @@ import { GitManagement } from './GitManagement';
 import { ensureBounded } from './transport';
 import type { Bootstrap, ReviewRequest, UiTransport } from '../core/contracts';
 import type { ReviewNavigation } from '../core/review-navigation';
-import type { SurfaceReply } from '../core/review-surfaces';
+import { surfaceStamp, type SurfaceReply } from '../core/review-surface-protocol';
 import './theme.css';
 interface Appearance { locale?: string; base?: 'light' | 'dark' }
 interface Bridge { invoke<T = unknown>(method: string, args?: unknown): Promise<T>; on?(event: string, callback: (data: any) => void): (() => void) | void }
@@ -24,6 +24,7 @@ export function Panel() {
   const resolvedSelection = useRef<Record<string, string>>({});
   const [surface, setSurface] = useState<SurfaceReply | null>(null);
   const [surfaceError, setSurfaceError] = useState('');
+  const [connecting, setConnecting] = useState(true);
   const appliedSurface = useRef<string>();
   const previousSurface = useRef<string>();
   const wakeSurface = useRef<() => void>();
@@ -35,19 +36,21 @@ export function Panel() {
   const [target, query = ''] = typeof effectiveRoute === 'string' ? effectiveRoute.split('?') : ['', ''];
   const sessionId = surface ? surface.state === 'ready' ? surface.sessionId ?? '' : '' : new URLSearchParams(query).get('sessionId') ?? new URLSearchParams(location.search).get('sessionId') ?? '';
   useEffect(() => {
-    const id = crypto.randomUUID(); let seq = 0, live = true, pending = false, wakeAgain = false, timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      if (!live || pending) return;
-      pending = true;
+    const id = crypto.randomUUID(); let seq = 0, live = true, pendingSeq = 0, after: string | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async (interrupt = false) => {
+      if (!live || (pendingSeq && !interrupt)) return;
+      const stamp = ++seq, started = Date.now(); pendingSeq = stamp; let failed = false;
       try {
-        const value = await transport.invoke<SurfaceReply>('reviewSurface', { role: 'view', id, seq: ++seq, ack: appliedSurface.current });
-        if (!live || !value || !['ready', 'waiting', 'ambiguous'].includes(value.state)) return;
-        setSurface(previous => JSON.stringify(previous) === JSON.stringify(value) ? previous : value);
+        const value = await transport.invoke<SurfaceReply>('reviewSurface', { role: 'view', id, seq: stamp, ack: appliedSurface.current, after, waitMs: 1000 });
+        if (!live || stamp !== seq) return;
+        if (!value || !['ready', 'waiting', 'ambiguous'].includes(value.state)) { failed = true; return; }
+        after = surfaceStamp(value);
+        setSurface(previous => previous && surfaceStamp(previous) === after ? previous : value);
         setSurfaceError(value.state === 'ambiguous' ? '存在多个窗口或审查视图，无法唯一绑定；请只保留一个窗口和审查视图。' : '');
-      } catch (error) { if (live) { setSurface(previous => previous ? { state: 'waiting', sessionId: null } : previous); setSurfaceError(`会话导航桥接暂不可用：${String((error as Error).message)}`); } }
-      finally { pending = false; if (live) { timer = setTimeout(() => void poll(), wakeAgain ? 0 : 1500); wakeAgain = false; } }
+      } catch (error) { failed = true; if (live && stamp === seq) { setSurface(previous => previous ? { state: 'waiting', sessionId: null } : previous); setSurfaceError(`会话导航桥接暂不可用：${String((error as Error).message)}`); } }
+      finally { if (pendingSeq === stamp) pendingSeq = 0; if (live && stamp === seq) { setConnecting(false); timer = setTimeout(() => void poll(), failed ? 1500 : Math.max(0, 50 - (Date.now() - started))); } }
     };
-    wakeSurface.current = () => { if (!live) return; if (pending) { wakeAgain = true; return; } if (timer) clearTimeout(timer); void poll(); };
+    wakeSurface.current = () => { if (!live) return; if (timer) clearTimeout(timer); void poll(true); };
     void poll();
     return () => { live = false; wakeSurface.current = undefined; if (timer) clearTimeout(timer); void transport.invoke('reviewSurface', { role: 'view', id, seq: ++seq, release: true }).catch(() => {}); };
   }, [transport]);
@@ -93,6 +96,8 @@ export function Panel() {
     if (target === `diff-session:${encodeURIComponent(sessionId)}`) return;
     if (!/^diff-view:[0-9a-f-]{36}$/i.test(target)) { setError('无效的文件选择'); return; }
     if (mode !== 'session') return;
+    const cached = navigationBySession[sessionId];
+    if (surface?.nonce && cached?.nonce === surface.nonce && cached.revision === surface.selectionRevision) { resolvedSelection.current[sessionId] = target; return; }
     const load = async () => {
       if (pending || !live) return;
       pending = true;
@@ -101,23 +106,25 @@ export function Panel() {
         if (!live) return;
         if (selected.sessionId !== sessionId || selected.request.sessionId !== sessionId) throw new Error('所选记录不属于当前会话。');
         if (surface?.selectionRevision && selected.revision !== surface.selectionRevision) throw new Error('文件选择已变化，等待新的定位请求。');
-        setNavigationBySession(previous => ({ ...previous, [sessionId]: previous[sessionId]?.nonce === selected.nonce && previous[sessionId]?.revision === selected.revision ? previous[sessionId] : selected }));
+        setNavigationBySession(previous => previous[sessionId]?.nonce === selected.nonce && previous[sessionId]?.revision === selected.revision ? previous : { ...previous, [sessionId]: selected });
         resolvedSelection.current[sessionId] = target;
         setError('');
       } catch (err) { if (live) { if (resolvedSelection.current[sessionId] !== target) setNavigationBySession(previous => { const next = { ...previous }; delete next[sessionId]; return next; }); setError(String((err as Error)?.message ?? err)); } }
       finally { pending = false; if (live) setSelecting(false); }
     };
     setSelecting(true); void load();
-    const timer = setInterval(() => { if (mode === 'session' && document.visibilityState !== 'hidden') void load(); }, 1500);
+    // Versioned surface changes trigger a new read; only legacy URL navigation needs polling.
+    const timer = !surface ? setInterval(() => { if (mode === 'session' && document.visibilityState !== 'hidden') void load(); }, 1500) : undefined;
     return () => { live = false; clearInterval(timer); };
   }, [transport, effectiveRoute, target, sessionId, retry, fallback, mode, surface?.key]);
   if (sessionId && !selecting && !error) readySession.current = sessionId;
   // A transient same-target poll failure must not unmount a verified session view.
   const retainReview = readySession.current === sessionId && resolvedSelection.current[sessionId] === target;
-  const targetResolved = fallback || !target.startsWith('diff-view:') || (navigationBySession[sessionId]?.nonce === target.slice('diff-view:'.length) && (!surface?.selectionRevision || navigationBySession[sessionId]?.revision === surface.selectionRevision));
+  const targetResolved = !surface?.locating && (fallback || !target.startsWith('diff-view:') || (navigationBySession[sessionId]?.nonce === target.slice('diff-view:'.length) && (!surface?.selectionRevision || navigationBySession[sessionId]?.revision === surface.selectionRevision)));
   const showReview = Boolean(sessionId && targetResolved && (!error || retainReview) && (!selecting || readySession.current === sessionId));
   useEffect(() => {
-    if (!surface?.key || surface.state !== 'ready' || !sessionId || !showReview || error || selecting) { appliedSurface.current = undefined; return; }
+    if (!surface?.key || surface.state !== 'ready' || !sessionId) { appliedSurface.current = undefined; return; }
+    if (!showReview || error || selecting) return;
     const selected = navigationBySession[sessionId];
     if (surface.nonce && (selected?.nonce !== surface.nonce || selected.revision !== surface.selectionRevision)) return;
     if (appliedSurface.current !== surface.key) { appliedSurface.current = surface.key; wakeSurface.current?.(); }
@@ -146,7 +153,7 @@ export function Panel() {
       {cachedSessions.map(id => <div className="dv-panel-page" key={id} hidden={mode !== 'session' || sessionId !== id}>
         <ReviewApp active={mode === 'session' && sessionId === id} transport={transport} initialRequest={navigationBySession[id]?.request ?? { scope: 'lastTurn', sessionId: id }} initialFileId={navigationBySession[id]?.fileId} navigationKey={navigationBySession[id] ? `${navigationBySession[id].nonce}:${navigationBySession[id].revision}` : `session:${id}`} {...appearance} />
       </div>)}
-      {!showReview && !cachedSessions.includes(sessionId) ? selecting || error ? <section className="dv-panel-message" role={error ? 'alert' : 'status'}>{error || '正在定位所选文件…'}{error && <><button onClick={() => { setFallback(false); setRetry(n => n + 1); }}>重试</button>{sessionId && <button onClick={() => { setFallback(true); setNavigationBySession(previous => { const next = { ...previous }; delete next[sessionId]; return next; }); setError(''); setSelecting(false); }}>返回本会话修改记录</button>}</>}</section> : !sessionId ? <section className="dv-panel-message" role="status">缺少会话身份，请从当前会话侧栏打开。历史记录不会回退到全局；本地 Git 可独立使用。</section> : null : null}
+      {!showReview && !cachedSessions.includes(sessionId) ? selecting || error || surface?.locating ? <section className="dv-panel-message" role={error ? 'alert' : 'status'}>{error || '正在定位所选文件…'}{error && <><button onClick={() => { setFallback(false); setRetry(n => n + 1); }}>重试</button>{sessionId && <button onClick={() => { setFallback(true); setNavigationBySession(previous => { const next = { ...previous }; delete next[sessionId]; return next; }); setError(''); setSelecting(false); }}>返回本会话修改记录</button>}</>}</section> : !sessionId ? <section className="dv-panel-message" role="status">{connecting || surface?.state === 'waiting' ? '正在连接当前会话…' : '缺少会话身份，请从当前会话侧栏打开。历史记录不会回退到全局；本地 Git 可独立使用。'}</section> : null : null}
     </div>
     </div>
   </div>;

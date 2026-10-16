@@ -275,12 +275,15 @@ function createSessionContextPublisher(options) {
   };
 }
 
+// src/core/review-surface-protocol.ts
+var surfaceStamp = (value) => JSON.stringify(value);
+
 // src/renderer/review-surface-client.ts
 function createReviewSurfaceClient(transport) {
   const id2 = crypto.randomUUID();
   let seq = 0, sessionId = null, closed = false, timer;
   let version = 0, pending = false;
-  const exchange = (extra = {}) => transport.invoke("reviewSurface", { role: "renderer", id: id2, seq: ++seq, sessionId, ...extra });
+  const exchange = (extra = {}) => transport.invoke("reviewSurface", { role: "renderer", id: id2, seq: ++seq, sessionId, sessionEpoch: version, ...extra });
   const heartbeat = async () => {
     if (closed || pending) return;
     pending = true;
@@ -297,6 +300,14 @@ function createReviewSurfaceClient(transport) {
     }
   };
   const channel = {
+    async begin(target, guard) {
+      guard();
+      if (closed || target !== sessionId) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
+      const stamp = version;
+      await exchange({ locating: true });
+      guard();
+      if (closed || stamp !== version) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
+    },
     async prepare(target, location, guard) {
       guard();
       if (closed || target !== sessionId) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
@@ -306,21 +317,30 @@ function createReviewSurfaceClient(transport) {
       if (closed || stamp !== version || selected.sessionId !== target) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
       const reply = await exchange({ nonce: selected.nonce, selectionRevision: selected.revision });
       guard();
+      if (closed || stamp !== version) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
       if (reply.state !== "ready" || reply.sessionId !== target) throw new Error("\u5B58\u5728\u591A\u4E2A\u7A97\u53E3\u6216\u5BA1\u67E5\u89C6\u56FE\uFF0C\u65E0\u6CD5\u552F\u4E00\u5B9A\u4F4D\uFF1B\u8BF7\u53EA\u4FDD\u7559\u4E00\u4E2A\u7A97\u53E3\u548C\u5BA1\u67E5\u89C6\u56FE\u3002");
       return { stamp, nonce: selected.nonce, revision: selected.revision };
     },
     async confirm(value, guard) {
       const ticket = value;
       const deadline = Date.now() + 12e3;
+      let after;
       do {
         guard();
         if (closed || version !== ticket.stamp) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
-        const reply = await exchange();
+        const started = Date.now();
+        const reply = await exchange({ after, waitMs: 1e3 });
         guard();
+        if (closed || version !== ticket.stamp) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362 / Session changed");
+        if (reply.state === "stale") {
+          after = void 0;
+          continue;
+        }
+        after = surfaceStamp(reply);
         if (reply.state === "ambiguous") throw new Error("\u5B58\u5728\u591A\u4E2A\u7A97\u53E3\u6216\u5BA1\u67E5\u89C6\u56FE\uFF0C\u5DF2\u505C\u6B62\u5B9A\u4F4D\u3002");
         if (reply.nonce !== ticket.nonce || reply.selectionRevision !== ticket.revision) throw new Error("\u6587\u4EF6\u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u70B9\u51FB\u3002");
         if (reply.confirmed) return;
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, 50 - (Date.now() - started))));
       } while (Date.now() < deadline);
       throw new Error("\u5BA1\u67E5\u9875\u7B7E\u672A\u786E\u8BA4\u6587\u4EF6\u5B9A\u4F4D\uFF0C\u8BF7\u91CD\u8BD5\uFF1B\u672A\u81EA\u52A8\u91CD\u653E\u6253\u5F00\u8BF7\u6C42\u3002");
     }
@@ -372,7 +392,7 @@ function boundedTransport(invoke) {
       }
     });
     if (navigation) queue.navigationTail = admission;
-    const request = admission.then(async () => {
+    const request2 = admission.then(async () => {
       let timer;
       try {
         const response = await Promise.race([
@@ -388,14 +408,22 @@ function boundedTransport(invoke) {
       }
     });
     if (!navigation) queue.tail = admission;
-    return request;
+    return request2;
   };
   const call = async (method, args) => {
     if (!background.has(method)) return wire(method, args);
     const navigation = method === "selectTurn" || method === "openSystemFile";
-    const started = await wire("jobStart", { method, args, waitMs: 40 }, navigation);
+    const admissionDeadline = Date.now() + 3e4;
+    let started;
+    do {
+      started = await wire("jobStart", { method, args, waitMs: 40, queueIfBusy: !navigation }, navigation);
+      if (started.state !== "busy") break;
+      if (Date.now() >= admissionDeadline) throw new Error("\u540E\u53F0\u4EFB\u52A1\u7E41\u5FD9\uFF0C\u5C1A\u672A\u6267\u884C\u672C\u6B21\u64CD\u4F5C\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    } while (true);
     if (started.state === "done") return started.result;
     if (started.state === "error") throw Object.assign(new Error(started.error?.message ?? "Review failed"), { code: started.error?.code });
+    if (!started.jobId) throw new Error("Invalid background operation response");
     const deadline = Date.now() + 12e4;
     let delay = method === "gitManage" ? 120 : 40;
     while (Date.now() < deadline) {
@@ -407,7 +435,7 @@ function boundedTransport(invoke) {
     }
     throw new Error("Background operation is still running. Refresh to check the result; it was not retried.");
   };
-  return { invoke(method, args) {
+  const request = (method, args) => {
     if (navigationMethods.has(method)) return call(method, args);
     const savedRead = method === "replyCards" || method === "review" && args?.scope === "turn" && !args.retrySync || ["file", "reviewFiles"].includes(method) && String(args?.reviewId ?? "").startsWith("saved:");
     if (savedRead) return call(method, args);
@@ -418,6 +446,21 @@ function boundedTransport(invoke) {
     if (method === "clearHistory" || method === "review" && !["turn", "lastTurn"].includes(args?.scope ?? "")) dependencies.push(queue.gitTail ?? Promise.resolve());
     const result = Promise.all(dependencies.map((task) => task.catch(() => void 0))).then(() => call(method, args));
     if (!read) queue[lane] = result.then(() => void 0, () => void 0);
+    return result;
+  };
+  const pendingReads = /* @__PURE__ */ new Map();
+  let readEpoch = 0;
+  return { invoke(method, args) {
+    const read = ["bootstrap", "review", "turnSummary", "runningChanges", "card", "replyCards"].includes(method) || method === "gitManage" && gitReads.has(args?.operation ?? "");
+    if (!read) {
+      if (!reads.has(method) && !["reviewSurface", "readTurnSelection"].includes(method)) readEpoch++;
+      return request(method, args);
+    }
+    const key = JSON.stringify([readEpoch, method, args]);
+    const previous = pendingReads.get(key);
+    if (previous) return previous;
+    const result = request(method, args).finally(() => pendingReads.delete(key));
+    pendingReads.set(key, result);
     return result;
   } };
 }
@@ -833,7 +876,53 @@ function createPluginReviewAdapter(options = {}) {
   const alive = () => {
     if (closed) denied2("SIDEBAR_UNLOADED", "\u63D2\u4EF6\u5DF2\u5378\u8F7D / Plugin unloaded");
   };
+  const checkSession = (sessionId, guard) => {
+    alive();
+    guard?.();
+    if (!validId(sessionId) || domSession(doc()) !== sessionId) denied2("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\u6216\u4E0D\u552F\u4E00\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u91CD\u8BD5 / Session changed or ambiguous");
+  };
+  const reveal = async (sessionId, guard) => {
+    const document2 = doc(), check = () => checkSession(sessionId, guard), clicked = /* @__PURE__ */ new Set();
+    check();
+    const one = (selector) => {
+      const nodes = [...document2.querySelectorAll(selector)].filter((node) => !node.closest("[hidden], [inert]"));
+      if (nodes.length > 1) denied2("SIDEBAR_AMBIGUOUS", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u552F\u4E00 / Ambiguous host controls");
+      return nodes[0];
+    };
+    const click = (node) => {
+      check();
+      if (!node || clicked.has(node)) return;
+      if (node.getAttribute("aria-disabled") === "true" || node.disabled) denied2("SIDEBAR_OPEN", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u53EF\u7528");
+      clicked.add(node);
+      node.click();
+    };
+    const deadline = Date.now() + 4e3;
+    while (Date.now() < deadline) {
+      check();
+      const toggle = one(".app-work-panel-toggle");
+      if (!toggle || !["true", "false"].includes(toggle.getAttribute("aria-pressed") ?? "")) denied2("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u5DE5\u4F5C\u9762\u677F\u6807\u8BB0\u5DF2\u53D8\u5316 / Work panel markup changed");
+      if (toggle.getAttribute("aria-pressed") === "false") click(toggle);
+      else {
+        const tab = one(`[data-work-panel-tab-id="${REVIEW_TAB_ID}"] button[role="tab"]`);
+        if (tab?.getAttribute("aria-selected") === "true") return;
+        if (tab) click(tab);
+        else {
+          const launcher = one('[data-work-panel-launcher-item="local.diff-view/review"]');
+          if (launcher) click(launcher);
+          else click(one(".work-panel-new-tab"));
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    denied2("SIDEBAR_OPEN", "\u672A\u627E\u5230\u6216\u672A\u80FD\u6FC0\u6D3B Diff view \u9875\u7B7E\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Review tab did not open");
+  };
   return {
+    async reveal(sessionId, guard) {
+      const check = () => checkSession(sessionId, guard);
+      check();
+      await Promise.all([options.navigation?.begin?.(sessionId, check), reveal(sessionId, guard)]);
+      check();
+    },
     async subscribeSession(listener) {
       alive();
       const document2 = doc();
@@ -848,14 +937,20 @@ function createPluginReviewAdapter(options = {}) {
       };
       const observer = options.observe ? options.observe(publish) : (() => {
         const observer2 = new MutationObserver((records) => {
-          const transition = records.some((record) => record.type === "attributes" && (record.attributeName !== "class" || record.target.hasAttribute("data-sidebar-session-row")));
-          if (transition && previous !== null && previous !== void 0 && !closed && !stopped) {
+          const excursion = records.some((record) => {
+            if (record.type !== "attributes" || !previous) return false;
+            const node = record.target;
+            if (["data-session-pane", "data-sidebar-session-row"].includes(record.attributeName ?? "")) return node.getAttribute(record.attributeName) === previous && validId(record.oldValue) && record.oldValue !== previous;
+            if (record.attributeName === "data-visible") return node.getAttribute("data-session-pane") === previous && node.getAttribute("data-visible") === "true" && record.oldValue === "false";
+            return record.attributeName === "class" && node.getAttribute("data-sidebar-session-row") === previous && node.classList.contains("active") && !record.oldValue?.split(/\s+/).includes("active");
+          });
+          if (excursion && previous && !closed && !stopped) {
             previous = null;
             listener(null);
           }
           publish();
         });
-        observer2.observe(document2.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-session-pane", "data-visible", "data-sidebar-session-row", "class"] });
+        observer2.observe(document2.documentElement, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["data-session-pane", "data-visible", "data-sidebar-session-row", "class"] });
         return observer2;
       })();
       const dispose = () => {
@@ -874,53 +969,13 @@ function createPluginReviewAdapter(options = {}) {
       alive();
       if (!/^diff-view:[0-9a-f-]{36}$/i.test(location)) denied2("SIDEBAR_TARGET", "\u65E0\u6548\u7684\u63D2\u4EF6\u5B9A\u4F4D\u4EE4\u724C / Invalid selection token");
       if (opening) denied2("SIDEBAR_BUSY", "\u6B63\u5728\u6253\u5F00\u5BA1\u67E5\u9875\u7B7E\uFF0C\u8BF7\u52FF\u91CD\u590D\u70B9\u51FB");
-      const document2 = doc(), check = () => {
-        alive();
-        guard?.();
-        if (!validId(sessionId) || domSession(document2) !== sessionId) denied2("SIDEBAR_SESSION", "\u4F1A\u8BDD\u5DF2\u5207\u6362\u6216\u4E0D\u552F\u4E00\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u91CD\u8BD5 / Session changed or ambiguous");
-      };
+      const check = () => checkSession(sessionId, guard);
       check();
       opening = true;
       try {
         const navigation = options.navigation ?? denied2("SIDEBAR_CHANNEL", "\u5BA1\u67E5\u5BFC\u822A\u6865\u63A5\u4E0D\u53EF\u7528 / Review navigation unavailable");
-        const ticket = await navigation.prepare(sessionId, location, check);
+        const [ticket] = await Promise.all([navigation.prepare(sessionId, location, check), reveal(sessionId, guard)]);
         check();
-        const clicked = /* @__PURE__ */ new Set();
-        const one = (selector) => {
-          const nodes = [...document2.querySelectorAll(selector)].filter((node) => !node.closest("[hidden], [inert]"));
-          if (nodes.length > 1) denied2("SIDEBAR_AMBIGUOUS", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u552F\u4E00 / Ambiguous host controls");
-          return nodes[0];
-        };
-        const click = (node) => {
-          check();
-          if (!node || clicked.has(node)) return;
-          if (node.getAttribute("aria-disabled") === "true" || node.disabled) denied2("SIDEBAR_OPEN", "\u5BBF\u4E3B\u9875\u7B7E\u63A7\u4EF6\u4E0D\u53EF\u7528");
-          clicked.add(node);
-          node.click();
-        };
-        const deadline = Date.now() + 4e3;
-        let opened = false;
-        while (Date.now() < deadline) {
-          check();
-          const toggle = one(".app-work-panel-toggle");
-          if (!toggle || !["true", "false"].includes(toggle.getAttribute("aria-pressed") ?? "")) denied2("SIDEBAR_CONTRACT", "\u5BBF\u4E3B\u5DE5\u4F5C\u9762\u677F\u6807\u8BB0\u5DF2\u53D8\u5316 / Work panel markup changed");
-          if (toggle.getAttribute("aria-pressed") === "false") click(toggle);
-          else {
-            const tab = one(`[data-work-panel-tab-id="${REVIEW_TAB_ID}"] button[role="tab"]`);
-            if (tab?.getAttribute("aria-selected") === "true") {
-              opened = true;
-              break;
-            }
-            if (tab) click(tab);
-            else {
-              const launcher = one('[data-work-panel-launcher-item="local.diff-view/review"]');
-              if (launcher) click(launcher);
-              else click(one(".work-panel-new-tab"));
-            }
-          }
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        if (!opened) denied2("SIDEBAR_OPEN", "\u672A\u627E\u5230\u6216\u672A\u80FD\u6FC0\u6D3B Diff view \u9875\u7B7E\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u662F\u5426\u542F\u7528 / Review tab did not open");
         await navigation.confirm(ticket, check);
         check();
       } finally {
@@ -1008,6 +1063,8 @@ function createRunningChangesController(transport, adapter, publish, report2 = (
       };
       emit({ ...view, busy: true, error: "" });
       try {
+        await adapter.reveal?.(task.sessionId, guard);
+        guard();
         const selection = await transport.invoke("selectTurn", { scope: "lastTurn", sessionId: task.sessionId, runId: summary.runId, runningSince: task.since, taskId: task.taskId });
         guard();
         await adapter.open(task.sessionId, `diff-view:${selection.nonce}`, guard);
@@ -1399,6 +1456,8 @@ function EntryExtra(props) {
     const guard = () => {
       if (!same(current) || current.activeSession !== run.sessionId || current.sessionVersion !== version) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u5728\u5F53\u524D\u4F1A\u8BDD\u70B9\u51FB / Session changed");
     };
+    guard();
+    await current.adapter.reveal?.(run.sessionId, guard);
     guard();
     const selection = await current.transport.invoke("selectTurn", { sessionId: run.sessionId, runId: run.id, fileId: file?.id });
     guard();

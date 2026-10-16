@@ -5,6 +5,14 @@ type Job = { state: 'pending' | 'done' | 'error'; result?: unknown; error?: { co
 export class JobQueue {
   private jobs = new Map<string, Job>(); private tail = Promise.resolve(); private closed = false;
   constructor(private execute: (method: string, args: unknown) => Promise<unknown>) {}
+  admit(method: string, args: unknown, queueIfBusy = false): { jobId: string } | { state: 'busy' } {
+    try { return this.start(method, args); }
+    catch (error) {
+      // No job exists on JOB_BUSY. Only explicit ordinary callers may wait for admission.
+      if (queueIfBusy && !['selectTurn', 'openSystemFile'].includes(method) && (error as { code?: string }).code === 'JOB_BUSY') return { state: 'busy' };
+      throw error;
+    }
+  }
   start(method: string, args: unknown): { jobId: string } {
     if (this.closed) fail('PLUGIN_UNLOADED', 'Diff view is closed');
     if (!['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards'].includes(method)) fail('JOB_DENIED', 'This method is not a background operation');
