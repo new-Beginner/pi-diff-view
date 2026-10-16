@@ -42,6 +42,7 @@ test.beforeAll(async () => {
         if (fail) throw Error('obsolete history error');
         return result;
       }
+      if (args.operation === 'commitFiles') return {oid:args.ref,parent:null,entries:[{path:'file.ts',status:'A',additions:1,deletions:0}]};
       if (args.operation === 'commitDiff') return {text:'commit patch',truncated:false};
       if (args.operation === 'stashList') return {stashes:[]};
       if (args.operation === 'discardPreview') return {fingerprint:'snapshot',untracked:false};
@@ -226,12 +227,14 @@ for (const width of [560, 380]) for (const base of ['light', 'dark']) test(`hist
   const style = await first.evaluate(node => { const css = getComputedStyle(node); return {height:node.getBoundingClientRect().height,border:css.borderTopWidth,radius:css.borderRadius}; });
   expect(style).toEqual({height:56,border:'0px',radius:'0px'});
   expect(await first.locator('.gm-commit-subject').evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
-  await first.click(); await expect(page.getByRole('region', { name: 'Git 详情' })).toContainText('commit patch');
+  await first.click();
+  await page.getByRole('region', { name: 'Git 详情' }).getByRole('button', { name: 'file.ts', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Git 详情' })).toContainText('commit patch');
   await expect(first).toHaveAttribute('aria-pressed', 'true');
-  await first.focus(); await page.keyboard.press('Tab');
-  expect(await page.locator('.gm-commit').nth(1).evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).outlineStyle !== 'none')).toBe(true);
   await page.getByRole('button', { name: '关闭详情', exact: true }).click();
   await expect(first).toHaveAttribute('aria-pressed', 'false');
+  await first.focus(); await page.keyboard.press('Tab');
+  expect(await page.locator('.gm-commit').nth(1).evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).outlineStyle !== 'none')).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('.gm-scroll')!.scrollWidth <= document.querySelector('.gm-scroll')!.clientWidth)).toBe(true);
 });
 

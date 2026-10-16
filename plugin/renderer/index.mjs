@@ -283,7 +283,7 @@ var realm = globalThis;
 var queue = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
 var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"]);
 var reads = /* @__PURE__ */ new Set(["bootstrap", "review", "reviewFiles", "turnSummary", "runningChanges", "file", "comments", "feedback", "replyCards", "rendererReport", "nativeProbeInfo"]);
-var gitReads = /* @__PURE__ */ new Set(["status", "branches", "history", "stashList", "diff", "stats", "commitDiff", "blame", "stashShow", "discardPreview"]);
+var gitReads = /* @__PURE__ */ new Set(["status", "branches", "history", "stashList", "diff", "stats", "commitFiles", "commitDiff", "blame", "stashShow", "discardPreview"]);
 var navigationMethods = /* @__PURE__ */ new Set(["openFile", "openSystemFile", "activeReviewSession", "readTurnSelection", "selectTurn"]);
 function boundedTransport(invoke) {
   const wire = (method, args, navigation = navigationMethods.has(method)) => {

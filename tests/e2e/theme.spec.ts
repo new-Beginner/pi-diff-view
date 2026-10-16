@@ -280,8 +280,9 @@ for (const width of [360, 600]) for (const base of ['light', 'dark']) test(`unif
   expect(await popupStyle(dialog)).toEqual(reviewStyle);
   await uniformCapture(page, `commit-confirm-${width}-${base}`); await page.keyboard.press('Escape');
   expect(await page.evaluate(() => (window as any).__themeDemo.calls.some((call: any) => ['branchSwitch', 'stashApply', 'commit'].includes(call.operation)))).toBe(false);
-  await page.evaluate(() => (window as any).__themeDemo.failNext = true);
+  await page.evaluate(() => (window as any).__themeDemo.failNext = 'status');
   await git.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__themeDemo.failedOperation)).toBe('status');
   await expect(git.getByRole('alert')).toHaveCSS('border-radius', '12px');
   await uniformCapture(page, `git-error-${width}-${base}`); await noHorizontalOverflow(page);
 });

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.diff-view",
   "name": "Diff view",
-  "version": "1.4.34",
+  "version": "1.4.35",
   "description": "按会话和用户轮次保存修改证据、文末卡片与输入框浮窗，另设独立本地 Git 管理。",
   "author": "new-Beginner",
   "license": "MIT",

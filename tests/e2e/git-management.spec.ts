@@ -66,6 +66,7 @@ test('real local backend: stage, staged-only commit, history, safe dirty switch 
     expect(await command(['ls-tree', '--name-only', 'HEAD'])).not.toContain('keep.txt');
     await page.getByRole('button', { name: '历史', exact: true }).click();
     await page.getByRole('button', { name: /UI staged only/ }).click();
+    await page.getByRole('region', { name: 'Git 详情' }).getByRole('button', { name: 'a.txt', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Git 详情' })).toContainText('+selected');
     await page.getByRole('button', { name: '分支', exact: true }).click();
     await page.getByLabel('新分支名').fill('feature');

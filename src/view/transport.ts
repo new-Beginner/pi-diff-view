@@ -6,7 +6,7 @@ const realm = globalThis as typeof globalThis & { __piDiffBurstQueue?: { tail: P
 const queue: NonNullable<typeof realm.__piDiffBurstQueue> = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
 const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards']);
 const reads = new Set(['bootstrap', 'review', 'reviewFiles', 'turnSummary', 'runningChanges', 'file', 'comments', 'feedback', 'replyCards', 'rendererReport', 'nativeProbeInfo']);
-const gitReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
+const gitReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitFiles', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
 const navigationMethods = new Set(['openFile', 'openSystemFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {

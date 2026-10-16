@@ -20,6 +20,8 @@ export interface ManagementCommit { oid: string; author: string; date: string; s
 export interface ManagementStash { ref: string; oid: string; subject: string; }
 export interface ManagementText { text: string; truncated: boolean; notice?: string; }
 export interface ManagementStat { path: string; additions: number | null; deletions: number | null; kind?: 'binary' | 'large' | 'unknown'; }
+export interface ManagementCommitFile extends ManagementStat { status: string; blocked?: string; }
+export interface ManagementCommitFiles { oid: string; parent: string | null; entries: ManagementCommitFile[]; }
 export interface ManagementArgs {
   operation: string; root?: string; paths?: string[]; path?: string; scope?: 'workspace' | 'staged';
   message?: string; summary?: string; description?: string; name?: string; newName?: string; ref?: string; oid?: string;
@@ -28,7 +30,7 @@ export interface ManagementArgs {
 }
 const mutations = new Set(['stage', 'unstage', 'discard', 'commit', 'branchCreate', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
 const confirmation = new Set(['discard', 'commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
-const operations = new Set(['status', 'diff', 'stats', 'discardPreview', 'branches', 'history', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
+const operations = new Set(['status', 'diff', 'stats', 'discardPreview', 'branches', 'history', 'commitFiles', 'commitDiff', 'blame', 'stashList', 'stashShow', ...mutations]);
 const diffFlags = ['--no-ext-diff', '--no-textconv', '--no-color', '--no-renames'];
 const queues = new Map<string, ReadWriteQueue>();
 function text(value: unknown, label: string, max = 4096): string {
@@ -152,6 +154,47 @@ async function checkedDiffPaths(root: string, args: string[]): Promise<string[]>
   if (names.length > 500) fail('GIT_LIMIT', 'Too many changed paths to show safely.');
   for (const name of names) { assertPublicPath(name); await filePath(root, name); }
   return names;
+}
+/** Historical reads validate literal paths and tree modes, never today's working tree. */
+function historicalPath(value: unknown): string {
+  const rel = text(value, 'Repository-relative file path');
+  if (path.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes('\\') || rel.split('/').some(p => p === '.' || p === '..' || p === '')) fail('INVALID_PATH', 'Select an explicit repository-relative file.');
+  assertPublicPath(rel);
+  return rel;
+}
+async function commitComparison(root: string, ref: unknown) {
+  const oid = await resolveCommit(root, text(ref, 'Commit reference'));
+  const header = (await git(root, ['cat-file', 'commit', oid])).stdout.toString().split('\n\n')[0];
+  const parent = header.split('\n').find(row => row.startsWith('parent '))?.slice(7) ?? null;
+  return { oid, parent, base: ['diff-tree', '--root', '-r', '--no-commit-id', ...(parent ? [parent, oid] : [oid])] };
+}
+async function commitFiles(root: string, base: string[], rel?: string): Promise<ManagementCommitFile[]> {
+  const fields = records((await git(root, [...base, '--raw', '--numstat', '-z', ...diffFlags, '--', ...(rel ? [rel] : [])])).stdout);
+  const entries = new Map<string, ManagementCommitFile>();
+  for (let i = 0; i < fields.length; i++) {
+    const row = fields[i];
+    if (row.startsWith(':')) {
+      const match = /^:(\d{6}) (\d{6}) [a-f0-9]+ [a-f0-9]+ ([A-Z])$/.exec(row);
+      if (!match || !fields[i + 1]) fail('GIT_FAILED', 'Could not parse historical file metadata.');
+      const name = fields[++i];
+      const entry: ManagementCommitFile = { path: name, status: match[3], additions: null, deletions: null, kind: 'unknown' };
+      try {
+        historicalPath(name);
+        if (![match[1], match[2]].every(mode => ['000000', '100644', '100755'].includes(mode))) fail('NOT_FILE', 'Historical symlinks and submodules cannot be previewed.');
+      } catch (cause) { entry.blocked = (cause as Error).message; }
+      entries.set(name, entry);
+    } else {
+      const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(row);
+      if (!match || !entries.has(match[3])) fail('GIT_FAILED', 'Could not parse historical file statistics.');
+      const entry = entries.get(match[3])!;
+      if (match[1] === '-' || match[2] === '-') entry.kind = 'binary';
+      else { entry.additions = Number(match[1]); entry.deletions = Number(match[2]); delete entry.kind; }
+    }
+  }
+  if (entries.size > 500) fail('GIT_LIMIT', 'More than 500 files in this commit. Use the Git CLI.');
+  const result = [...entries.values()];
+  if (Buffer.byteLength(JSON.stringify(result)) > 46000) fail('GIT_LIMIT', 'Commit file list exceeds the panel budget. Use the Git CLI.');
+  return result;
 }
 function untrackedStat(rel: string, snapshot: Awaited<ReturnType<typeof readSnapshot>>): ManagementStat {
   if (!snapshot.exists) return { path: rel, additions: null, deletions: null, kind: 'unknown' };
@@ -402,12 +445,17 @@ export class LocalGitManagement {
       for (let i = 0; i + 3 < fields.length; i += 4) commits.push({ oid: fields[i].trim(), author: fields[i + 1].slice(0, 120), date: fields[i + 2], subject: fields[i + 3].slice(0, 180) });
       return { commits: commits.slice(0, limit), hasMore: commits.length > limit };
     }
-    if (op === 'commitDiff') {
-      await requireHead(root);
-      const oid = await resolveCommit(root, text(args.ref, 'Commit reference'));
-      const header = (await git(root, ['cat-file', 'commit', oid])).stdout.toString().split('\n\n')[0];
-      const parent = header.split('\n').find(row => row.startsWith('parent '))?.slice(7);
-      const base = ['diff-tree', '--root', '-r', '--no-commit-id', ...(parent ? [parent, oid] : [oid])];
+    if (op === 'commitFiles' || op === 'commitDiff') {
+      const { oid, parent, base } = await commitComparison(root, args.ref);
+      if (op === 'commitFiles') return { oid, parent, entries: await commitFiles(root, base) } satisfies ManagementCommitFiles;
+      if (args.path !== undefined) {
+        const rel = historicalPath(args.path);
+        const entry = (await commitFiles(root, base, rel)).find(item => item.path === rel);
+        if (!entry) fail('STALE_PATH', 'Selected file is not changed in this commit.');
+        if (entry.blocked) fail('PATH_DENIED', entry.blocked);
+        return output(await run(root, [...base, '-p', ...diffFlags, '--', rel]));
+      }
+      // Keep the existing whole-commit operation for older callers.
       await checkedDiffPaths(root, base);
       return output(await run(root, [...base, '-p', ...diffFlags, '--']), 'Compared with the first parent (or the empty tree for the first commit).');
     }

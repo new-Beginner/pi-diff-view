@@ -4,7 +4,7 @@ import type { ManagementText } from '../git/local-management';
 
 interface Preview { path?: string; data?: ManagementText; pending?: boolean; slow?: boolean; error?: string; }
 /** Read-only preview has its own request identity; it never locks the mutation controls. */
-export function useGitPreview(transport: UiTransport, root: string | undefined, scope: 'workspace' | 'staged') {
+export function useGitPreview(transport: UiTransport, root: string | undefined, scope: 'workspace' | 'staged', commit?: string) {
   const [preview, setPreview] = useState<Preview>({});
   const current = useRef<Preview>({}), epoch = useRef(0), ticket = useRef(0);
   const cache = useRef(new Map<string, ManagementText>());
@@ -15,14 +15,14 @@ export function useGitPreview(transport: UiTransport, root: string | undefined, 
   const invalidate = () => {
     epoch.current++; ticket.current++; cancelPrefetch(); cache.current.clear(); pending.current.clear(); publish({});
   };
-  useEffect(() => { invalidate(); return () => { epoch.current++; ticket.current++; cancelPrefetch(); }; }, [root, scope, transport]);
+  useEffect(() => { invalidate(); return () => { epoch.current++; ticket.current++; cancelPrefetch(); }; }, [root, scope, transport, commit]);
   const load = (path: string): Promise<ManagementText> => {
     const cached = cache.current.get(path);
     if (cached) return Promise.resolve(cached);
     const inFlight = pending.current.get(path);
     if (inFlight) return inFlight;
     const version = epoch.current;
-    const promise = transport.invoke<ManagementText>('gitManage', { operation: 'diff', root, scope, paths: [path] }).then(value => {
+    const promise = transport.invoke<ManagementText>('gitManage', commit ? { operation: 'commitDiff', root, ref: commit, path } : { operation: 'diff', root, scope, paths: [path] }).then(value => {
       if (version === epoch.current) {
         cache.current.set(path, value);
         if (cache.current.size > 20) cache.current.delete(cache.current.keys().next().value!);

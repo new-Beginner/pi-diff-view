@@ -105,3 +105,20 @@ test('real Git and bounded bridge: small untracked counts arrive with the file l
     for (const at of f.admissions) expect(f.admissions.filter(t => t >= at && t < at + 1000).length).toBeLessThanOrEqual(6);
   } finally { await f.close(); }
 });
+
+test('real Git jobs: history opens a per-file patch through the bounded bridge', async ({ page }) => {
+  const f = await fixture(page);
+  try {
+    await f.mount(); await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: '历史', exact: true }).click();
+    await page.locator('.gm-commit').click();
+    const detail = page.getByRole('region', { name: 'Git 详情' });
+    await expect(detail).toContainText('首次提交，与空树比较');
+    await detail.getByRole('button', { name: 'base.txt', exact: true }).click();
+    await expect(detail.locator('.gm-patch')).toContainText('+base');
+    expect(f.calls.filter(op => op === 'status')).toHaveLength(1);
+    expect(f.calls.filter(op => op === 'commitFiles')).toHaveLength(1);
+    expect(f.calls.filter(op => op === 'commitDiff')).toHaveLength(1);
+    for (const at of f.admissions) expect(f.admissions.filter(t => t >= at && t < at + 1000).length).toBeLessThanOrEqual(6);
+  } finally { await f.close(); }
+});

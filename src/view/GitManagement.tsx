@@ -5,6 +5,7 @@ import FileIcon from './FileIcon';
 import FilePath from './FilePath';
 import ReviewIcon from './ReviewIcon';
 import GitPatch from './GitPatch';
+import GitHistory from './GitHistory';
 import { useGitPreview } from './useGitPreview';
 import { useGitStats } from './useGitStats';
 import './git-management.css';
@@ -38,7 +39,6 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const filePage = page === 'workspace' || page === 'staged';
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [switchFailure, setSwitchFailure] = useState<{ name: string; overwrite: boolean }>();
-  const [selectedCommit, setSelectedCommit] = useState<string>();
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true);
   const [loadedPage, setLoadedPage] = useState<Page>();
   const source = useRef({ root, transport });
@@ -70,7 +70,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     preview.collapse(); setDetailLoading(true); setError(''); setSwitchFailure(undefined);
     try {
       const value = await invoke<ManagementText>(args);
-      if (id === detailTicket.current && current === generation.current) { setDetail(value); if (args.operation === 'commitDiff') setSelectedCommit(args.ref); }
+      if (id === detailTicket.current && current === generation.current) setDetail(value);
     } catch (cause) { if (id === detailTicket.current && current === generation.current) setError(String((cause as Error)?.message ?? cause)); }
     finally { if (id === detailTicket.current && current === generation.current) setDetailLoading(false); }
   };
@@ -238,9 +238,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         </li>)}</ul>{!branches.length && !loading && <p>暂无本地分支。</p>}
       </>}
       {page === 'history' && <>
-        <ul className="gm-list gm-history">{commits.map(commit => <li key={commit.oid}><button className="gm-commit" title={commit.subject} aria-pressed={!!detail && selectedCommit === commit.oid} onClick={() => void execute({ operation: 'commitDiff', ref: commit.oid })}>
-          <span className="gm-commit-main"><span className="gm-commit-subject">{commit.subject}</span><code title={commit.oid}>{commit.oid.slice(0, 10)}</code></span>
-          <span className="gm-commit-meta"><span title={commit.author}>{commit.author}</span><time dateTime={commit.date} title={commit.date}>{new Date(commit.date).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span></button></li>)}</ul>
+        <GitHistory key={generation.current} transport={transport} root={root} commits={commits} />
         {!commits.length && !loading && <p>暂无提交。</p>}
         <div className="gm-toolbar"><button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一页</button><span>{commits.length ? `${offset + 1}–${offset + commits.length}` : '0 条提交'}</span><button disabled={!hasMore} onClick={() => setOffset(offset + 30)}>下一页</button></div>
       </>}
