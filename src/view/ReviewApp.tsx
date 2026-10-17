@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Action, ActionResult, Bootstrap, DiffHunk, ReviewActionRequest, ReviewFile, ReviewFilesPage, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
+import type { Action, ActionResult, Bootstrap, CaptureMaintenanceInspection, DiffHunk, ReviewActionRequest, ReviewFile, ReviewFilesPage, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
 import { isImagePath } from '../core/review-file-policy';
 import { requiresSystemOpenConfirmation } from '../core/system-open-policy';
 import { DiffRows } from './DiffRows';
@@ -15,7 +15,7 @@ import { captureScrollAnchor, restoreScrollAnchor, reconcileHunkViews, reviewFil
 import './review.css';
 
 export interface ReviewAppProps { transport: UiTransport; initialRequest?: Partial<ReviewRequest>; initialFileId?: string; autoSelectFile?: boolean; navigationKey?: string; active?: boolean; onClose?: () => void; locale?: string; base?: 'light' | 'dark' }
-type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' } | { kind: 'systemOpen'; file: ReviewFile; review: ReviewSummary; scope: string };
+type Confirmation = { kind: 'action'; file: ReviewFile; action: Action; hunk?: DiffHunk; review: ReviewSummary } | { kind: 'batch'; files: ReviewFile[]; action: Action; review: ReviewSummary } | { kind: 'history' } | { kind: 'systemOpen'; file: ReviewFile; review: ReviewSummary; scope: string } | { kind: 'captureMaintenance'; inspection: CaptureMaintenanceInspection; scope: string };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 function Modal({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -80,13 +80,22 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   };
   useEffect(() => () => { if (statusTimer.current) clearTimeout(statusTimer.current); }, []);
   const [batchResults, setBatchResults] = useState<{ path: string; ok: boolean; message: string }[]>([]);
+  const [leaseInspection, setLeaseInspection] = useState<CaptureMaintenanceInspection | null>(null);
+  const inspectLegacyLeases = () => perform(async () => {
+    if (!review?.root) throw new Error('当前审查项目根目录未知。');
+    const result = await transport.invoke<CaptureMaintenanceInspection>('captureMaintenance', { action: 'inspect', root: review.root });
+    setLeaseInspection(result);
+  });
+  const retireLegacyLeases = () => {
+    if (leaseInspection?.count && leaseInspection.root === review?.root) setConfirmation({ kind: 'captureMaintenance', inspection: leaseInspection, scope: scopeKey });
+  };
   useEffect(() => { if (!panelActive) setConfirmation(null); }, [panelActive]);
   const live = useRef(true);
   const sessionKey = initialRequest.sessionId ?? request.sessionId;
   const scopeKey = `${request.scope}|${request.root}|${request.ref}|${request.sessionId}|${request.runId}`;
   const reviewSync = syncStatus?.scope === scopeKey ? syncStatus.state : 'ready';
   const scopeRef = useRef(scopeKey); scopeRef.current = scopeKey;
-  useEffect(() => { setConfirmation(value => value?.kind === 'systemOpen' && value.scope !== scopeKey ? null : value); }, [scopeKey]);
+  useEffect(() => { setLeaseInspection(null); setConfirmation(value => (value?.kind === 'systemOpen' || value?.kind === 'captureMaintenance') && value.scope !== scopeKey ? null : value); }, [scopeKey]);
   const extraExpanded = expandedFiles.scope === scopeKey ? expandedFiles.ids : new Set<string>();
   useEffect(() => { setExpandedFiles({ scope: scopeKey, ids: new Set() }); }, [scopeKey, navigationKey]);
   const diffPane = useRef<HTMLDivElement>(null);
@@ -321,6 +330,12 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       await transport.invoke('clearHistory', { confirmed: true });
       if (!live.current) return;
       setConfirmation(null); showStatus(t.cleared); setBootTick(value => value + 1);
+    } else if (target.kind === 'captureMaintenance') {
+      if (target.scope !== scopeRef.current || !panelActive) { setConfirmation(null); return; }
+      const value = target.inspection;
+      await transport.invoke('captureMaintenance', { action: 'retire', root: value.root, ids: value.ids, fingerprint: value.fingerprint, writersStopped: true });
+      if (!live.current) return;
+      setConfirmation(null); setLeaseInspection(null); retryReview(); showStatus('旧租约已备份并清理；已刷新审查。');
     } else if (target.kind === 'systemOpen') {
       setConfirmation(null);
       if (target.scope === scopeRef.current && panelActive) await openWithDefaultApp(target.file, target.review);
@@ -398,7 +413,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const selectedIndex = visibleFiles.findIndex(file => file.id === selected);
   const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id} data-expanded={fileExpanded(file)}>
     <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={fileExpanded(file)} disabled={busy} onPointerEnter={() => { if (matchingReview?.id && file.kind === 'text') prefetchDiffDetail(transport, matchingReview.id, file.id, context, detailTick); }} onClick={() => toggleFile(file)} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
-      <FileIcon path={file.path} /><span className="dv-file-label"><span className="dv-file-name"><FilePath path={file.path} external={file.origin === 'external'} /></span><span className="dv-file-chevron"><ReviewIcon name="chevron" /></span></span>{file.segmentCount ? <span className="dv-counts dv-muted" title={file.note}>{locale.startsWith('zh') ? `${file.segmentCount} 段 · 净行数未知` : `${file.segmentCount} segments · net unknown`}</span> : file.statsKnown === false || file.kind !== 'text' ? <span className="dv-counts dv-muted" aria-label={locale.startsWith('zh') ? '行数未知' : 'Unknown totals'}>{locale.startsWith('zh') ? '行数未知' : 'Unknown'}</span> : <span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">-{file.deletions}</span></span>}
+      <FileIcon path={file.path} /><span className="dv-file-label"><span className="dv-file-name"><FilePath path={file.path} external={file.origin === 'external'} /></span><span className="dv-file-chevron"><ReviewIcon name="chevron" /></span></span>{file.segmentCount ? <span className="dv-counts dv-muted" title={file.note}>{locale.startsWith('zh') ? `${file.segmentCount} 段 · 净行数未知` : `${file.segmentCount} segments · net unknown`}</span> : file.statsKnown === false || file.kind !== 'text' ? <span className="dv-counts dv-muted" title={file.note} aria-label={locale.startsWith('zh') ? '行数未知' : 'Unknown totals'}>{locale.startsWith('zh') ? '行数未知' : 'Unknown'}</span> : <span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">-{file.deletions}</span></span>}
     </button>
     <button className="dv-icon-button dv-file-open" disabled={busy || openingSystemFile || !matchingReview?.sessionId || !panelActive || !!confirmation} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '使用系统默认程序打开当前磁盘文件' : 'Open the current disk file with its default app'} onClick={() => requestSystemOpen(file)}><ReviewIcon name="open" /></button>
     <details className="dv-menu dv-file-menu" onToggle={event => placeFileMenu(event.currentTarget)}><summary aria-label={`${t.action} ${file.path}`} title={t.action}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
@@ -424,6 +439,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         <div className="dv-top-actions">
           <button className="dv-icon-button" aria-label={t.search} title={t.search} aria-pressed={searchOpen} onClick={() => setSearchOpen(value => !value)}><ReviewIcon name="search" /></button>
           <details className="dv-menu dv-settings-menu"><summary aria-label={t.settings} title={t.settings}><ReviewIcon name="more" /></summary><div className="dv-menu-body">
+            <button disabled={busy || loadingReview || !review?.root} onClick={inspectLegacyLeases}>采集维护/旧租约</button>
+            {leaseInspection && <div className="dv-maintenance"><p>{leaseInspection.root} · {leaseInspection.count} 条旧租约</p><pre>{leaseInspection.ids.length ? leaseInspection.ids.join('\n') : '没有可清理的旧租约'}</pre>{leaseInspection.count > 0 && <button disabled={busy} onClick={retireLegacyLeases}>确认旧写入任务及后台进程已停止后清理</button>}</div>}
             <button disabled={busy || loadingReview} onClick={() => { retrySync.current = true; syncWait.current = undefined; setBootTick(value => value + 1); }}>{t.refresh}</button>
             <label className="dv-check"><input type="checkbox" checked={wrap} onChange={event => saveSettings({ wordWrap: event.target.checked })} />{t.wrap}</label>
             <div className="dv-segment" role="group" aria-label={t.settings}><button aria-pressed={layout === 'unified'} onClick={() => saveSettings({ layout: 'unified' })}>{t.unified}</button><button aria-pressed={layout === 'split'} onClick={() => saveSettings({ layout: 'split' })}>{t.split}</button></div>
@@ -449,7 +466,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       </div>
     </header>
     {reviewSync !== 'ready' && <div className="dv-message" role={reviewSync === 'pending' ? 'status' : 'alert'} aria-live="polite"><span>{reviewSync === 'pending' ? locale.startsWith('zh') ? '正在同步修改记录…' : 'Syncing change history…' : locale.startsWith('zh') ? '修改记录同步未完成；当前仅展示已保存记录，可重试。' : 'Change history sync is incomplete; showing saved records only. Retry to sync.'}</span>{reviewSync === 'unavailable' && <button disabled={busy || loadingReview} onClick={retryReview}>{t.retry}</button>}</div>}
-    {unknownFiles > 0 && <details className="dv-stats-note"><summary>{unknownFiles} 个文件暂无法显示行数</summary><p>仅统计有完整快照的文本文件。缺失历史内容的文件仍保留记录，但无法重建差异。</p></details>}
+    {unknownFiles > 0 && <details className="dv-stats-note"><summary>{unknownFiles} 个文件暂无法显示行数</summary>{[...new Set(matchingReview?.files.filter(file => file.statsKnown === false || file.kind !== 'text').map(file => file.note).filter((note): note is string => !!note) ?? [])].map(note => <p key={note}>{note}</p>)}</details>}
     {reviewError && matchingReview && <div className="dv-message dv-error" role="alert">{reviewError}<button onClick={retryReview}>{t.retry}</button></div>}
     {error && <div className="dv-message dv-error" role="alert">{error}</div>}
     {status && <div className="dv-toast" role="status">{status}</div>}
@@ -474,9 +491,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       </section>
       {selectedIndex >= 0 && <nav className="dv-file-list" aria-label={t.files}>{visibleFiles.slice(selectedIndex + 1).map(otherFile)}</nav>}
     </div>}
-    {confirmation && <Modal title={confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '确认外部打开' : 'Confirm system open' : confirmation.kind === 'action' || confirmation.kind === 'batch' ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory} busy={busy || openingSystemFile} onClose={() => setConfirmation(null)}>
-      <p>{confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '此文件类型可能执行程序或脚本。确认使用系统默认程序打开当前磁盘文件？' : 'This file type may execute a program or script. Open the current disk file with its default app?' : confirmation.kind === 'batch' ? t.batchHint : confirmation.kind === 'action' ? t.confirmHint : t.clearHint}</p>
+    {confirmation && <Modal title={confirmation.kind === 'captureMaintenance' ? '确认清理旧采集租约' : confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '确认外部打开' : 'Confirm system open' : confirmation.kind === 'action' || confirmation.kind === 'batch' ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory} busy={busy || openingSystemFile} onClose={() => setConfirmation(null)}>
+      <p>{confirmation.kind === 'captureMaintenance' ? '请确认此项目相关旧写入任务及后台进程均已停止。将备份并清理所列旧租约，仅修复后续捕获，不保证旧历史恢复；不会清理其他项目或现代租约。' : confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '此文件类型可能执行程序或脚本。确认使用系统默认程序打开当前磁盘文件？' : 'This file type may execute a program or script. Open the current disk file with its default app?' : confirmation.kind === 'batch' ? t.batchHint : confirmation.kind === 'action' ? t.confirmHint : t.clearHint}</p>
       {confirmation.kind === 'systemOpen' && <p>{confirmation.file.absolutePath ?? `${confirmation.review.root}/${confirmation.file.path}`}</p>}
+      {confirmation.kind === 'captureMaintenance' && <div className="dv-maintenance"><p>{confirmation.inspection.root} · {confirmation.inspection.count} 条旧租约</p><pre>{confirmation.inspection.ids.join('\n')}</pre></div>}
       {confirmation.kind === 'batch' && <><p>{confirmation.review.root} · {t[confirmation.review.scope]}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{confirmation.files.map(file => file.path).join('\n')}</pre></>}
       {confirmation.kind === 'action' ? <dl className="dv-target"><dt>{t.repository}</dt><dd>{confirmation.review.root}</dd><dt>{t.scope}</dt><dd>{t[confirmation.review.scope]}</dd><dt>{t.target}</dt><dd>{confirmation.file.path}{confirmation.file.oldPath && <> ← {confirmation.file.oldPath}</>}</dd><dt>{t.action}</dt><dd>{t[confirmation.action]} · {confirmation.hunk ? `${t.hunk} ${confirmation.hunk.header}` : t.wholeFile}</dd></dl> : confirmation.kind === 'history' ? <p>{t.history}: {boot?.runs.length ?? 0}</p> : null}
       {error && <p className="dv-error" role="alert">{error}</p>}<div className="dv-dialog-actions"><button disabled={busy} onClick={() => setConfirmation(null)} autoFocus>{t.cancel}</button><button className="dv-primary" disabled={busy || ((confirmation.kind === 'action' || confirmation.kind === 'batch') && reviewSync !== 'ready')} onClick={confirmOperation}>{busy ? t.loading : t.confirm}</button></div>

@@ -835,7 +835,7 @@ async function retireLegacyCaptureLeases(store2, root, ids, fingerprint, writers
     const current = await inspectCaptureLeases(store2);
     if (current.fingerprint !== fingerprint) throw new Error("Lease journal changed; inspect again");
     const selected2 = current.leases.filter((l) => ids.includes(l.id));
-    if (selected2.length !== ids.length || selected2.some((l) => canonical(l.root) !== canonical(root) || l.sessionId || l.toolCallId)) throw new Error("Unverified or non-legacy lease selection");
+    if (selected2.length !== ids.length || selected2.some((l) => canonical(l.root) !== canonical(root) || l.sessionId || l.toolCallId || l.executionId)) throw new Error("Unverified or non-legacy lease selection");
     await atomicJson(import_node_path2.default.join(store2.directory, "backups", `leases-${fingerprint}.json`), { version: 1, leases: current.leases });
     await writeCaptureLeases(store2, current.leases.filter((l) => !ids.includes(l.id)));
   });
@@ -2820,7 +2820,7 @@ var JobQueue = class {
   }
   start(method, args) {
     if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
-    if (!["sessionEvidence", "gitManage", "sessionContext", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
+    if (!["sessionEvidence", "gitManage", "sessionContext", "captureMaintenance", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
     const navigation2 = method === "selectTurn", systemOpen = method === "openSystemFile";
     if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2 && !!j.systemOpen === systemOpen).length >= (navigation2 || systemOpen ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
     for (const [id3, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id3);
@@ -3342,11 +3342,14 @@ var HostHistoryImporter = class {
       const review = b.result?.details?.review;
       if (b.type !== "tool_call" || b.status !== "success" || b.result?.isError) continue;
       if (object(review)) {
-        if (review.messageId !== m.id && review.messageId !== b.callId || review.sessionId !== void 0 && review.sessionId !== sessionId) {
+        if (review.messageId !== void 0 && review.messageId !== m.id && review.messageId !== b.callId || review.sessionId !== void 0 && review.sessionId !== sessionId) {
           d.skipped++;
           continue;
         }
-        add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : void 0) });
+        const name2 = explicitToolName(b.name), target = b.args?.path ?? b.args?.file_path;
+        const native = ["write", "edit"].includes(name2) && typeof target === "string" && (!this.archive || import_node_path8.default.isAbsolute(target) || this.isScratch(root, sessionId));
+        const text2 = name2 === "write" && typeof b.args?.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
+        add({ ...native ? { version: 1, path: target, operation: name2 } : {}, ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : text2 !== void 0 ? true : void 0), afterHash: review.afterHash ?? (text2 !== void 0 ? digest(text2) : void 0) }, void 0, review.path === void 0);
       } else {
         const name2 = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
         if (!["write", "edit"].includes(name2) || typeof target !== "string" || this.archive && !import_node_path8.default.isAbsolute(target) && !this.isScratch(root, sessionId) || typeof b.callId !== "string") continue;
@@ -3356,19 +3359,21 @@ var HostHistoryImporter = class {
     }
     await this.store.init();
     const capturedEndpoints = /* @__PURE__ */ new Map();
+    const uncertainEndpoints = /* @__PURE__ */ new Set();
     const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
     const preparations = await inspectCaptureLeases(this.store).catch(() => {
       warn2("Capture preparation journal unavailable or unsafe");
       return { fingerprint: "", leases: [] };
     });
     const preparedEvents = /* @__PURE__ */ new Map();
-    const endpoint = (source2, change, ref, side, snapshot) => {
+    const endpoint = (source2, change, ref, side, snapshot, uncertain = false) => {
       const separator = ref.indexOf(":"), callId = ref.slice(separator + 1), message = aliases.get(callId);
       if (!(ref.startsWith("native:") || isExplicitEvidence(ref)) || !message || owner(message) !== source2.userMessageId || !change.capture) return;
       const block = message.blocks.find((b) => b.type === "tool_call" && b.callId === callId);
       if (!block || !isExplicitFileTool(block.name) || !ref.startsWith("native:") && ref.slice(0, separator) !== explicitToolName(block.name)) return;
       if (side === "before" && explicitToolName(block.name) === "edit" && !snapshot.exists) return;
       const key = `${callId}\0${change.capture.identity}\0${side}`;
+      if (uncertain) uncertainEndpoints.add(key);
       capturedEndpoints.set(key, [...capturedEndpoints.get(key) ?? [], snapshot]);
       if (isReplacementTool(block.name) && block.status === "success" && !block.result?.isError && block.args?.dry_run !== true) {
         try {
@@ -3382,7 +3387,7 @@ var HostHistoryImporter = class {
       if (source2.sessionId !== sessionId || canonical(source2.root) !== canonical(root) || !source2.userMessageId) continue;
       for (const change of Object.values(source2.changes)) {
         if (!change.capture) continue;
-        if (!change.segments?.length && !change.ambiguous && change.evidence?.length) for (const side of ["before", "after"]) endpoint(source2, change, side === "before" ? change.evidence[0] : change.evidence.at(-1), side, change[side]);
+        if (!change.segments?.length && change.evidence?.length) for (const side of ["before", "after"]) endpoint(source2, change, side === "before" ? change.evidence[0] : change.evidence.at(-1), side, change.ambiguous ? { ...change[side], kind: "unavailable", text: null } : change[side], change.ambiguous);
         for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ["before", "after"]) endpoint(source2, change, segment.evidence, side, segment[side]);
       }
     }
@@ -3415,6 +3420,25 @@ var HostHistoryImporter = class {
     }
     let evidenceBytes = 0;
     for (const e of events) {
+      for (const side of ["before", "after"]) {
+        const key = `${e.meta.messageId}\0${capture(e.meta.path).identity}\0${side}`;
+        const endpoints = capturedEndpoints.get(key) ?? [];
+        const hints = /* @__PURE__ */ new Map();
+        for (const snapshot of endpoints) {
+          if (!["text", "unavailable"].includes(snapshot.kind) || !(snapshot.exists ? HASH.test(snapshot.hash) : snapshot.hash === "absent")) continue;
+          if (e.meta[`${side}Hash`] !== void 0 && snapshot.hash !== e.meta[`${side}Hash`]) continue;
+          if (typeof e.meta[`${side}Exists`] === "boolean" && snapshot.exists !== e.meta[`${side}Exists`]) continue;
+          hints.set(JSON.stringify([snapshot.hash, snapshot.exists]), snapshot);
+        }
+        if (hints.size > 1) e.conflicted = true;
+        if (hints.size === 1) {
+          const hint = hints.values().next().value;
+          e.meta[`${side}Hash`] ??= hint.hash;
+          e.meta[`${side}Exists`] ??= hint.exists;
+          if (side === "before") e.capturedBefore = true;
+          if (uncertainEndpoints.has(key)) e.revalidate = true;
+        }
+      }
       e.before = await this.snapshot(e, "before");
       e.after = await this.snapshot(e, "after");
       for (const side of ["before", "after"]) {
@@ -3495,7 +3519,7 @@ var HostHistoryImporter = class {
       const e = queue[index], b = e.block;
       queued.delete(e);
       for (const side of ["before", "after"]) if (e[side].kind === "unavailable" && evidence2.has(e[side].hash)) e[side] = evidence2.get(e[side].hash);
-      if (e.after.kind !== "unavailable" || b?.status !== "success" || b.result?.isError || !HASH.test(e.meta.afterHash ?? "")) continue;
+      if (e.after.kind !== "unavailable" && !e.revalidate || b?.status !== "success" || b.result?.isError || !HASH.test(e.meta.afterHash ?? "")) continue;
       let text2;
       if (String(b.name).split(".").pop().toLowerCase() === "write" && typeof b.args?.content === "string") {
         const p = b.args.path ?? b.args.file_path;
@@ -3525,6 +3549,9 @@ var HostHistoryImporter = class {
         }
         e.after = snapshotFromBytes(Buffer.from(text2), 0);
         remember(e.after);
+        e.revalidate = false;
+      } else if (e.revalidate) {
+        e.conflicted = true;
       }
     }
     const earlier = /* @__PURE__ */ new Map();
@@ -4954,6 +4981,9 @@ function publicSessionContext(snapshot, now = Date.now()) {
   };
 }
 
+// src/main.ts
+init_capture_leases();
+
 // src/core/system-open.ts
 var import_node_child_process3 = require("node:child_process");
 var import_promises10 = __toESM(require("node:fs/promises"), 1);
@@ -5507,7 +5537,29 @@ async function recordedReview(s, args, context) {
   if (now - preparation.startedAt >= 15e3) return { ...summary, sync: { state: "unavailable" } };
   return { ...summary, id: `${summary.id}:pending`, files: [], nextFileOffset: null, sync: { state: "pending" } };
 }
+async function captureMaintenance(args) {
+  if (!args || !["inspect", "retire"].includes(args.action) || typeof args.root !== "string" || !import_node_path13.default.isAbsolute(args.root)) fail("INVALID_MAINTENANCE", "Invalid capture maintenance request");
+  const workspace = await pi.workspace.get();
+  const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
+  if (!roots.some((root) => canonical(root) === canonical(args.root))) fail("ROOT_DENIED", "Only an authorized workspace root can be maintained");
+  if (args.action === "inspect") {
+    if (Object.keys(args).some((key) => !["action", "root"].includes(key))) fail("INVALID_MAINTENANCE", "Unexpected inspect fields");
+    const inspected = await inspectCaptureLeases(store);
+    const leases = inspected.leases.filter((lease) => canonical(lease.root) === canonical(args.root) && !lease.sessionId && !lease.toolCallId && !lease.executionId);
+    return { root: args.root, fingerprint: inspected.fingerprint, ids: leases.map((lease) => lease.id), count: leases.length };
+  }
+  if (Object.keys(args).some((key) => !["action", "root", "ids", "fingerprint", "writersStopped"].includes(key)) || !Array.isArray(args.ids) || !args.ids.length || args.ids.length > 256 || args.ids.some((id2) => typeof id2 !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(id2)) || typeof args.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(args.fingerprint) || args.writersStopped !== true) fail("INVALID_MAINTENANCE", "Explicit stopped-writer confirmation, exact IDs and fingerprint are required");
+  await retireLegacyCaptureLeases(store, args.root, args.ids, args.fingerprint, true);
+  for (const context of contexts.values()) if (canonical(context.root) === canonical(args.root)) {
+    context.prepared = false;
+    context.syncedAt = 0;
+  }
+  for (const key of reviewPreparations.keys()) if (JSON.parse(key)[1] === canonical(args.root)) reviewPreparations.delete(key);
+  await store.audit({ action: "capture-legacy-leases-retired", root: canonical(args.root), ids: args.ids, fingerprint: args.fingerprint });
+  return { ok: true, count: args.ids.length };
+}
 async function execute(s, method, args) {
+  if (method === "captureMaintenance") return captureMaintenance(args);
   if (method === "openSystemFile") {
     const controller = systemOpenController;
     const resolveTarget = async () => {

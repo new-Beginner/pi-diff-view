@@ -15,7 +15,7 @@ export class JobQueue {
   }
   start(method: string, args: unknown): { jobId: string } {
     if (this.closed) fail('PLUGIN_UNLOADED', 'Diff view is closed');
-    if (!['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards'].includes(method)) fail('JOB_DENIED', 'This method is not a background operation');
+    if (!['sessionEvidence', 'gitManage', 'sessionContext', 'captureMaintenance', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards'].includes(method)) fail('JOB_DENIED', 'This method is not a background operation');
     const navigation = method === 'selectTurn', systemOpen = method === 'openSystemFile';
     if ([...this.jobs.values()].filter(j => j.state === 'pending' && !!j.navigation === navigation && !!j.systemOpen === systemOpen).length >= (navigation || systemOpen ? 1 : 4)) fail('JOB_BUSY', 'Too many pending review operations');
     for (const [id, j] of this.jobs) if (j.state !== 'pending' && (Date.now() - j.at > 60000 || this.jobs.size > 8)) this.jobs.delete(id);

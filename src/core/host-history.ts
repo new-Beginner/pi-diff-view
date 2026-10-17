@@ -15,7 +15,7 @@ type HistoryChange = CapturedChange & { note?: string; oldPath?: string };
 export type HostHistoryRun = CaptureRun & { userMessageId?: string; replyMessageId?: string; source?: 'host-history'; notice?: string };
 export interface HostHistoryDiagnostics { imported: number; unchanged: number; skipped: number; events: number; runIds: string[]; warnings: string[] }
 interface Message { id: string; role: string; blocks: RecordValue[]; meta: RecordValue; createdAt: number; order: number; parent?: string }
-interface Event { meta: RecordValue; directory?: string; message: Message; block?: RecordValue; before?: FileSnapshot; after?: FileSnapshot; toolOnly?: boolean; capturedBefore?: boolean; conflicted?: boolean; alternatives?: Partial<Record<'before' | 'after', FileSnapshot[]>> }
+interface Event { meta: RecordValue; directory?: string; message: Message; block?: RecordValue; before?: FileSnapshot; after?: FileSnapshot; toolOnly?: boolean; capturedBefore?: boolean; conflicted?: boolean; revalidate?: boolean; alternatives?: Partial<Record<'before' | 'after', FileSnapshot[]>> }
 const ID = /^[a-zA-Z0-9-]{1,80}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -158,8 +158,13 @@ export class HostHistoryImporter {
       const review = b.result?.details?.review;
       if (b.type !== 'tool_call' || b.status !== 'success' || b.result?.isError) continue;
       if (object(review)) {
-        if ((review.messageId !== m.id && review.messageId !== b.callId) || (review.sessionId !== undefined && review.sessionId !== sessionId)) { d.skipped++; continue; }
-        add({ ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === 'added' ? false : undefined), afterExists: review.afterExists ?? (review.status === 'deleted' ? false : undefined) });
+        if ((review.messageId !== undefined && review.messageId !== m.id && review.messageId !== b.callId) || (review.sessionId !== undefined && review.sessionId !== sessionId)) { d.skipped++; continue; }
+        const name = explicitToolName(b.name), target = b.args?.path ?? b.args?.file_path;
+        const native = ['write', 'edit'].includes(name) && typeof target === 'string' && (!this.archive || path.isAbsolute(target) || this.isScratch(root, sessionId));
+        const text = name === 'write' && typeof b.args?.content === 'string' && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : undefined;
+        // Native review metadata may omit hashes. A successful full Write still proves its output,
+        // but never proves that its preimage was absent. Supplied native constraints win.
+        add({ ...(native ? { version: 1, path: target, operation: name } : {}), ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === 'added' ? false : undefined), afterExists: review.afterExists ?? (review.status === 'deleted' ? false : text !== undefined ? true : undefined), afterHash: review.afterHash ?? (text !== undefined ? digest(text) : undefined) }, undefined, review.path === undefined);
       } else {
         // Successful native Write/Edit calls are evidence even without native review snapshots.
         // Missing before bytes stay unknown; never assume Write created an absent file.
@@ -171,10 +176,11 @@ export class HostHistoryImporter {
     }
     await this.store.init();
     const capturedEndpoints = new Map<string, FileSnapshot[]>();
+    const uncertainEndpoints = new Set<string>();
     const sources = [...await this.store.listRuns(false, true), ...await this.store.captureContributions()];
     const preparations = await inspectCaptureLeases(this.store).catch(() => { warn('Capture preparation journal unavailable or unsafe'); return { fingerprint: '', leases: [] }; });
     const preparedEvents = new Map<string, Event[]>();
-    const endpoint = (source: Pick<CaptureRun, 'userMessageId'>, change: CapturedChange, ref: string, side: 'before' | 'after', snapshot: FileSnapshot) => {
+    const endpoint = (source: Pick<CaptureRun, 'userMessageId'>, change: CapturedChange, ref: string, side: 'before' | 'after', snapshot: FileSnapshot, uncertain = false) => {
       const separator = ref.indexOf(':'), callId = ref.slice(separator + 1), message = aliases.get(callId);
       if (!(ref.startsWith('native:') || isExplicitEvidence(ref)) || !message || owner(message) !== source.userMessageId || !change.capture) return;
       const block = message.blocks.find(b => b.type === 'tool_call' && b.callId === callId);
@@ -182,6 +188,7 @@ export class HostHistoryImporter {
       // Standard Edit requires an existing file; older aggregate fallback polluted this side.
       if (side === 'before' && explicitToolName(block.name) === 'edit' && !snapshot.exists) return;
       const key = `${callId}\0${change.capture.identity}\0${side}`;
+      if (uncertain) uncertainEndpoints.add(key);
       capturedEndpoints.set(key, [...(capturedEndpoints.get(key) ?? []), snapshot]);
       // Non-native adapters need an exact captured file, never just a directory/path tool argument.
       if (isReplacementTool(block.name) && block.status === 'success' && !block.result?.isError && block.args?.dry_run !== true) {
@@ -195,7 +202,7 @@ export class HostHistoryImporter {
       if (source.sessionId !== sessionId || canonical(source.root) !== canonical(root) || !source.userMessageId) continue;
       for (const change of Object.values(source.changes)) {
         if (!change.capture) continue;
-        if (!change.segments?.length && !change.ambiguous && change.evidence?.length) for (const side of ['before', 'after'] as const) endpoint(source, change, side === 'before' ? change.evidence[0] : change.evidence.at(-1)!, side, change[side]);
+        if (!change.segments?.length && change.evidence?.length) for (const side of ['before', 'after'] as const) endpoint(source, change, side === 'before' ? change.evidence[0] : change.evidence.at(-1)!, side, change.ambiguous ? { ...change[side], kind: 'unavailable', text: null } : change[side], change.ambiguous);
         for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ['before', 'after'] as const) endpoint(source, change, segment.evidence, side, segment[side]);
       }
     }
@@ -227,6 +234,27 @@ export class HostHistoryImporter {
     if (events.length > 4096) { warn('Host event limit exceeded'); return d; }
     let evidenceBytes = 0;
     for (const e of events) {
+      // Even a legacy unavailable capture can constrain an exact first/last tool endpoint.
+      // It supplies hashes only: raw ambiguous bytes are never promoted without replay below.
+      for (const side of ['before', 'after'] as const) {
+        const key = `${e.meta.messageId}\0${capture(e.meta.path).identity}\0${side}`;
+        const endpoints = capturedEndpoints.get(key) ?? [];
+        const hints = new Map<string, FileSnapshot>();
+        for (const snapshot of endpoints) {
+          if (!['text', 'unavailable'].includes(snapshot.kind) || !(snapshot.exists ? HASH.test(snapshot.hash) : snapshot.hash === 'absent')) continue;
+          if (e.meta[`${side}Hash`] !== undefined && snapshot.hash !== e.meta[`${side}Hash`]) continue;
+          if (typeof e.meta[`${side}Exists`] === 'boolean' && snapshot.exists !== e.meta[`${side}Exists`]) continue;
+          hints.set(JSON.stringify([snapshot.hash, snapshot.exists]), snapshot);
+        }
+        if (hints.size > 1) e.conflicted = true;
+        if (hints.size === 1) {
+          const hint = hints.values().next().value!;
+          e.meta[`${side}Hash`] ??= hint.hash;
+          e.meta[`${side}Exists`] ??= hint.exists;
+          if (side === 'before') e.capturedBefore = true;
+          if (uncertainEndpoints.has(key)) e.revalidate = true;
+        }
+      }
       e.before = await this.snapshot(e, 'before'); e.after = await this.snapshot(e, 'after');
       for (const side of ['before', 'after'] as const) {
         if (e[side]!.kind !== 'unavailable') continue;
@@ -292,7 +320,7 @@ export class HostHistoryImporter {
     for (let index = 0; index < queue.length; index++) {
       const e = queue[index], b = e.block; queued.delete(e);
       for (const side of ['before', 'after'] as const) if (e[side]!.kind === 'unavailable' && evidence.has(e[side]!.hash)) e[side] = evidence.get(e[side]!.hash);
-      if (e.after!.kind !== 'unavailable' || b?.status !== 'success' || b.result?.isError || !HASH.test(e.meta.afterHash ?? '')) continue;
+      if ((e.after!.kind !== 'unavailable' && !e.revalidate) || b?.status !== 'success' || b.result?.isError || !HASH.test(e.meta.afterHash ?? '')) continue;
       let text: string | undefined;
       if (String(b.name).split('.').pop()!.toLowerCase() === 'write' && typeof b.args?.content === 'string') {
         const p = b.args.path ?? b.args.file_path;
@@ -310,7 +338,10 @@ export class HostHistoryImporter {
       if (text !== undefined && Buffer.byteLength(text) <= MAX_TEXT_BYTES && digest(text) === e.meta.afterHash) {
         evidenceBytes += Buffer.byteLength(text);
         if (evidenceBytes > 128 * 1024 * 1024) { warn('Host reconstructed byte limit exceeded'); return d; }
-        e.after = snapshotFromBytes(Buffer.from(text), 0); remember(e.after);
+        e.after = snapshotFromBytes(Buffer.from(text), 0); remember(e.after); e.revalidate = false;
+      } else if (e.revalidate) {
+        // Hash-matching sampled endpoints alone do not prove tool authorship under overlap.
+        e.conflicted = true;
       }
     }
     // Recover only a tagged Edit whose exact recorded result validates the preceding bytes.

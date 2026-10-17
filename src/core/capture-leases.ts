@@ -91,7 +91,7 @@ export async function retireLegacyCaptureLeases(store: SnapshotStore, root: stri
     const current = await inspectCaptureLeases(store);
     if (current.fingerprint !== fingerprint) throw new Error('Lease journal changed; inspect again');
     const selected = current.leases.filter(l => ids.includes(l.id));
-    if (selected.length !== ids.length || selected.some(l => canonical(l.root) !== canonical(root) || l.sessionId || l.toolCallId)) throw new Error('Unverified or non-legacy lease selection');
+    if (selected.length !== ids.length || selected.some(l => canonical(l.root) !== canonical(root) || l.sessionId || l.toolCallId || l.executionId)) throw new Error('Unverified or non-legacy lease selection');
     await atomicJson(path.join(store.directory, 'backups', `leases-${fingerprint}.json`), { version: 1, leases: current.leases });
     await writeCaptureLeases(store, current.leases.filter(l => !ids.includes(l.id)));
   });

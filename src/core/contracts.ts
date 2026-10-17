@@ -33,3 +33,4 @@ export interface Bootstrap { repositories: RepositoryInfo[]; runs: RunSummary[];
 export interface ReviewActionRequest { reviewId: string; fileId: string; action: Action; hunkId?: string; fingerprint: string; confirmed: boolean; }
 export interface ActionResult { ok: boolean; message: string; }
 export interface UiTransport { invoke<T = unknown>(method: string, args?: unknown): Promise<T>; insertText?: (text: string) => Promise<void>; }
+export interface CaptureMaintenanceInspection { root: string; fingerprint: string; ids: string[]; count: number; }

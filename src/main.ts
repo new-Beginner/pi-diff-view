@@ -20,6 +20,7 @@ import { HostEvidenceBuffer } from './core/host-evidence-buffer';
 import { createPublicHostSource, type PublicHostSnapshot } from './core/public-host-source';
 import { publicSessionContext } from './core/public-session-context';
 import { evidenceChunks, evidenceRevision, hostEvidenceMessages } from './core/host-transcript';
+import { inspectCaptureLeases, retireLegacyCaptureLeases } from './core/capture-leases';
 let publicSource: ReturnType<typeof createPublicHostSource> | null = null;
 const publicUpdates = new Map<string, { snapshot: PublicHostSnapshot; observedAt: number }>();
 import { closeSystemOpener, openSystemFile, warmSystemOpener } from './core/system-open';
@@ -331,7 +332,26 @@ async function recordedReview(s: ReviewService, args: ReviewRequest, context?: S
   if (now - preparation.startedAt >= 15000) return { ...summary, sync: { state: 'unavailable' } };
   return { ...summary, id: `${summary.id}:pending`, files: [], nextFileOffset: null, sync: { state: 'pending' } };
 }
+async function captureMaintenance(args: any): Promise<unknown> {
+  if (!args || !['inspect', 'retire'].includes(args.action) || typeof args.root !== 'string' || !path.isAbsolute(args.root)) fail('INVALID_MAINTENANCE', 'Invalid capture maintenance request');
+  const workspace = await pi.workspace.get();
+  const roots: string[] = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r: any) => typeof r === 'string' ? r : r.path)] : [];
+  if (!roots.some(root => canonical(root) === canonical(args.root))) fail('ROOT_DENIED', 'Only an authorized workspace root can be maintained');
+  if (args.action === 'inspect') {
+    if (Object.keys(args).some(key => !['action', 'root'].includes(key))) fail('INVALID_MAINTENANCE', 'Unexpected inspect fields');
+    const inspected = await inspectCaptureLeases(store!);
+    const leases = inspected.leases.filter(lease => canonical(lease.root) === canonical(args.root) && !lease.sessionId && !lease.toolCallId && !lease.executionId);
+    return { root: args.root, fingerprint: inspected.fingerprint, ids: leases.map(lease => lease.id), count: leases.length };
+  }
+  if (Object.keys(args).some(key => !['action', 'root', 'ids', 'fingerprint', 'writersStopped'].includes(key)) || !Array.isArray(args.ids) || !args.ids.length || args.ids.length > 256 || args.ids.some((id: unknown) => typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(id)) || typeof args.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(args.fingerprint) || args.writersStopped !== true) fail('INVALID_MAINTENANCE', 'Explicit stopped-writer confirmation, exact IDs and fingerprint are required');
+  await retireLegacyCaptureLeases(store!, args.root, args.ids, args.fingerprint, true);
+  for (const context of contexts.values()) if (canonical(context.root) === canonical(args.root)) { context.prepared = false; context.syncedAt = 0; }
+  for (const key of reviewPreparations.keys()) if (JSON.parse(key)[1] === canonical(args.root)) reviewPreparations.delete(key);
+  await store!.audit({ action: 'capture-legacy-leases-retired', root: canonical(args.root), ids: args.ids, fingerprint: args.fingerprint });
+  return { ok: true, count: args.ids.length };
+}
 async function execute(s: ReviewService, method: string, args: any): Promise<unknown> {
+  if (method === 'captureMaintenance') return captureMaintenance(args);
   if (method === 'openSystemFile') {
     const controller = systemOpenController;
     const resolveTarget = async () => {

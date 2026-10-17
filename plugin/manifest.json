@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.diff-view",
   "name": "Diff view",
-  "version": "1.4.45",
+  "version": "1.4.46",
   "description": "按会话和用户轮次保存修改证据、文末卡片与输入框浮窗，另设独立本地 Git 管理。",
   "author": "new-Beginner",
   "license": "MIT",
@@ -14,7 +14,7 @@
   "ui": { "panel": "views/index.html", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "width": 1180, "height": 800 },
   "renderer": "renderer/index.mjs",
   "rendererActions": ["plugin.call", "composer.readDraft"],
-  "rendererCallMethods": ["reviewSurface", "sessionState", "sessionContext", "gitManage", "rendererReport", "jobStart", "jobPoll", "bootstrap", "review", "reviewFiles", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "copyPath", "settings", "clearHistory", "card", "replyCards", "turnSummary", "runningChanges", "selectTurn", "readTurnSelection", "activeReviewSession", "openPanel", "openSystemFile"],
+  "rendererCallMethods": ["reviewSurface", "sessionState", "sessionContext", "gitManage", "rendererReport", "jobStart", "jobPoll", "bootstrap", "review", "reviewFiles", "file", "action", "batchAction", "comments", "saveComment", "deleteComment", "feedback", "copyPatch", "copyPath", "settings", "clearHistory", "card", "replyCards", "turnSummary", "runningChanges", "selectTurn", "readTurnSelection", "activeReviewSession", "openPanel", "openSystemFile", "captureMaintenance"],
   "contributes": {
     "commands": [{ "id": "diff-view.open", "title": "Diff view: Open review / 差异审查：打开审阅", "keywords": ["diff", "review", "变更", "审查"] }],
     "views": [{ "id": "review", "title": { "en": "Diff view", "zh-CN": "差异审查" }, "icon": "diff", "entry": "views/index.html", "order": 45 }],

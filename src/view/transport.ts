@@ -4,7 +4,7 @@ import type { UiTransport } from '../core/contracts';
 // Never exceed six short requests in a rolling second (including polls/diagnostics).
 const realm = globalThis as typeof globalThis & { __piDiffBurstQueue?: { tail: Promise<unknown>; navigationTail?: Promise<unknown>; mutationTail?: Promise<unknown>; gitTail?: Promise<unknown>; starts: number[] } };
 const queue: NonNullable<typeof realm.__piDiffBurstQueue> = realm.__piDiffBurstQueue ??= { tail: Promise.resolve(), starts: [] };
-const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards']);
+const background = new Set(['sessionEvidence', 'gitManage', 'sessionContext', 'captureMaintenance', 'bootstrap', 'review', 'action', 'batchAction', 'copyPatch', 'clearHistory', 'turnSummary', 'runningChanges', 'selectTurn', 'openSystemFile', 'card', 'replyCards']);
 const reads = new Set(['bootstrap', 'review', 'reviewFiles', 'turnSummary', 'runningChanges', 'file', 'comments', 'feedback', 'replyCards', 'rendererReport', 'nativeProbeInfo']);
 const gitReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitFiles', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
 const navigationMethods = new Set(['openSystemFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn', 'reviewSurface']);

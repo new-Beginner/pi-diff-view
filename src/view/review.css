@@ -70,6 +70,8 @@
 .dv-stats-note { padding: 7px 12px; border-bottom: 1px solid var(--dv-border); color: var(--dv-muted); font-size: 12px; }
 .dv-stats-note summary { cursor: pointer; width: fit-content; }
 .dv-stats-note p { margin: 6px 0 0; max-width: 60ch; line-height: 1.6; }
+.dv-maintenance { max-width: 42rem; }
+.dv-maintenance pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .dv-error, .dv-stale { color: var(--dv-red); }
 .dv-workspace { display: block; flex: 1; min-height: 0; overflow: auto; }
 .dv-file-list { min-width: 0; }
