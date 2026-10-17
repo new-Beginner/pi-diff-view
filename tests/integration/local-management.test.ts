@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { dispatch, type ManagementArgs, type ManagementStatus, type ManagementText, type ManagementStat, type ManagementStash } from '../../src/git/local-management';
+import { dispatch, type ManagementArgs, type ManagementStatus, type ManagementText, type ManagementStat, type ManagementStash, type ManagementBlame } from '../../src/git/local-management';
 
 const exec = promisify(execFile);
 let container: string, root: string;
@@ -154,7 +154,7 @@ describe('independent authorized local Git management', () => {
     expect((await call<ManagementText>('commitDiff', { ref: first })).text).toContain('+base');
     expect((await call<ManagementText>('commitDiff', { ref: 'HEAD' })).text).toContain('+second');
     await write('a.txt', 'workspace\n');
-    const blame = await call<ManagementText>('blame', { path: 'a.txt' }); expect(blame.text).toContain('second'); expect(blame.text).not.toContain('workspace');
+    const blame = await call<ManagementBlame>('blame', { path: 'a.txt' }); expect(blame.lines.map(line => line.text)).toEqual(['second']); expect(blame.commits[0].subject).toBe('second');
   }, 30000);
 
   it('creates/lists/shows/applies/pops/drops stashes and rejects stale IDs and empty stash', async () => {

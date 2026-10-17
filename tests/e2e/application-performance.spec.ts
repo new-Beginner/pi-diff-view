@@ -14,7 +14,6 @@ test.beforeAll(async () => {
 for (const target of [
   { page: '分支', text: 'feature-fast' },
   { page: '历史', text: 'fast-history' },
-  { page: 'Stash', text: 'fast-stash' },
 ]) test(`${target.page} loads with repository metadata without rereading full status`, async ({ page }) => {
   await page.setContent('<div id="app"></div>');
   await page.evaluate(() => {
@@ -29,7 +28,6 @@ for (const target of [
       if (!args.includeRepository) throw new Error('List request must include repository metadata');
       if (args.operation === 'branches') return { repository: status, branches: [{ name: 'feature-fast', oid: 'b'.repeat(40), current: false }], truncated: false };
       if (args.operation === 'history') return { repository: status, commits: [{ oid: 'b'.repeat(40), subject: 'fast-history', author: 'test', date: 'today' }], hasMore: false };
-      if (args.operation === 'stashList') return { repository: status, stashes: [{ ref: 'stash@{0}', oid: 'b'.repeat(40), subject: 'fast-stash' }] };
       throw new Error('Unexpected operation');
     };
   });

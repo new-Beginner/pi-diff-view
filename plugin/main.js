@@ -3960,6 +3960,52 @@ var import_node_child_process2 = require("node:child_process");
 var import_node_crypto9 = require("node:crypto");
 init_libesm();
 init_path_policy();
+async function blame(root, args) {
+  const rel = historicalPath(args.path), oid = args.ref ? await resolveCommit(root, args.ref) : await requireHead(root);
+  const skip = args.skip ?? 0, limit = args.limit ?? 100;
+  if (!Number.isInteger(skip) || skip < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) fail("INVALID_ARGUMENT", "\u8FFD\u6EAF\u5206\u9875\u53C2\u6570\u65E0\u6548\u3002");
+  const tree = records2((await git(root, ["ls-tree", "-l", "-z", oid, "--", rel])).stdout);
+  const entry = tree.length === 1 ? /^(100644|100755) blob ([a-f0-9]+)\s+(\d+)\t/.exec(tree[0]) : null;
+  if (!entry) fail("NOT_FILE", "\u6B64\u63D0\u4EA4\u4E2D\u6CA1\u6709\u53EF\u8FFD\u6EAF\u7684\u666E\u901A\u6587\u4EF6\uFF0C\u8BF7\u68C0\u67E5\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84\u3002");
+  if (Number(entry[3]) > 1024 * 1024) fail("GIT_LIMIT", "\u6587\u4EF6\u8D85\u8FC7 1 MiB\uFF0C\u8BF7\u4F7F\u7528 Git CLI \u8FFD\u6EAF\u3002");
+  const content = (await git(root, ["cat-file", "blob", entry[2]])).stdout;
+  if (content.includes(0)) fail("BINARY_FILE", "\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u652F\u6301\u9010\u884C\u8FFD\u6EAF\u3002");
+  const totalLines = content.length ? content.toString("utf8").split("\n").length - (content.at(-1) === 10 ? 1 : 0) : 0;
+  const result = { path: rel, oid, totalLines, skip, hasMore: false, commits: [], lines: [] };
+  if (!totalLines) return result;
+  if (skip >= totalLines) fail("INVALID_ARGUMENT", "\u9875\u7801\u8D85\u51FA\u6587\u4EF6\u8303\u56F4\uFF0C\u8BF7\u91CD\u65B0\u8FFD\u6EAF\u3002");
+  const raw = await run(root, ["blame", "--no-textconv", "--encoding=UTF-8", "--line-porcelain", "-L", `${skip + 1},${Math.min(totalLines, skip + limit)}`, oid, "--", rel]);
+  let current, author = "", subject = "", timestamp = 0;
+  let bytes = Buffer.byteLength(JSON.stringify(result));
+  const commits = /* @__PURE__ */ new Map();
+  for (const row of raw.split("\n")) {
+    const header = /^([a-f0-9]{40,64}) (\d+) (\d+)(?: \d+)?$/.exec(row);
+    if (header) {
+      current = { oid: header[1], originalLine: Number(header[2]), line: Number(header[3]), text: "" };
+      author = "";
+      subject = "";
+      timestamp = 0;
+    } else if (row.startsWith("author ")) author = row.slice(7, 127);
+    else if (row.startsWith("author-time ")) timestamp = Number(row.slice(12));
+    else if (row.startsWith("summary ")) subject = row.slice(8, 188);
+    else if (row.startsWith("	") && current) {
+      const value = row.slice(1);
+      current.text = value.slice(0, 4e3);
+      if (value.length > current.text.length) current.truncated = true;
+      const commit = { oid: current.oid, author, subject, date: new Date(timestamp * 1e3).toISOString() };
+      const size = Buffer.byteLength(JSON.stringify(current)) + (commits.has(current.oid) ? 0 : Buffer.byteLength(JSON.stringify(commit))) + 2;
+      if (bytes + size > 46e3) break;
+      bytes += size;
+      commits.set(current.oid, commit);
+      result.lines.push(current);
+      current = void 0;
+    }
+  }
+  if (!result.lines.length) fail("GIT_FAILED", "\u65E0\u6CD5\u8BFB\u53D6\u8FFD\u6EAF\u884C\u4FE1\u606F\u3002");
+  result.commits = [...commits.values()];
+  result.hasMore = skip + result.lines.length < totalLines;
+  return result;
+}
 var mutations = /* @__PURE__ */ new Set(["stage", "unstage", "discard", "commit", "branchCreate", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
 var confirmation = /* @__PURE__ */ new Set(["discard", "commit", "branchSwitch", "branchRename", "branchDelete", "stashCreate", "stashApply", "stashPop", "stashDrop"]);
 var operations = /* @__PURE__ */ new Set(["status", "diff", "stats", "discardPreview", "branches", "history", "commitFiles", "commitDiff", "blame", "stashList", "stashShow", ...mutations]);
@@ -4506,11 +4552,7 @@ ${rel}: binary or oversized untracked file (no text preview).
       await checkedDiffPaths(root, base);
       return output(await run(root, [...base, "-p", ...diffFlags, "--"]), "Compared with the first parent (or the empty tree for the first commit).");
     }
-    if (op === "blame") {
-      const rel = await filePath(root, args.path);
-      const oid = args.ref ? await resolveCommit(root, args.ref) : await requireHead(root);
-      return output(await run(root, ["blame", "--no-textconv", "--date=short", oid, "--", rel]), "Committed content only; workspace edits are not included.");
-    }
+    if (op === "blame") return blame(root, args);
     if (op === "stashList") return { stashes: await stashes(root), notice: "Showing at most 100 stashes." };
     if (op === "stashCreate") {
       await requireHead(root);

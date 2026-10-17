@@ -35,8 +35,6 @@
 .git-management .gm-field { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; min-width: 0; color: var(--dv-muted); font-size: 12px; }
 .git-management .gm-field input, .git-management .gm-field textarea { color: var(--dv-ink); font-size: 13px; font-weight: 400; }
 .git-management .gm-controls > p { color: var(--dv-muted); padding: 8px 0; line-height: 1.6; }
-.git-management .gm-controls[data-page='stash'] > label:not(.gm-field) { font-size: 12px; color: var(--dv-muted); margin-bottom: 12px; }
-.git-management .gm-controls[data-page='blame'] > button { margin-bottom: 4px; }
 .git-management .gm-list { list-style: none; padding: 0; margin: 8px 0; min-width: 0; }
 .git-management .gm-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--gm-rail-border); padding: 8px 4px; min-width: 0; }
 .git-management .gm-list code { white-space: pre; font: 11px/20px var(--dv-mono); }
@@ -89,10 +87,25 @@
 .git-management .gm-commit-identity code { white-space: normal; overflow-wrap: anywhere; }
 .git-management .gm-history-status { color: var(--gm-rail-muted); width: 14px; flex-shrink: 0; text-align: center; font: 11px/20px var(--dv-mono); }
 .git-management .gm-commit-detail .gm-files > li { border-bottom: 0; border-top: 1px solid var(--gm-rail-border); }
+.git-management .gm-commit-badges { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.git-management .gm-blame-count { color: var(--gm-rail-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.git-management .gm-controls > .gm-blame { margin: 0; }
+.git-management .gm-blame > :not(.gm-history) { margin-left: 12px; margin-right: 12px; }
+.git-management .gm-blame-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.git-management .gm-blame-form .gm-field { flex: 1 1 180px; margin: 0; }
+.git-management .gm-blame-form button { min-height: 36px; }
+.git-management .gm-blame-summary { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 16px; }
+.git-management .gm-blame-summary > code { color: var(--gm-rail-muted); font: 11px/20px var(--dv-mono); flex-shrink: 0; }
+.git-management .gm-blame-path { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; }
+.git-management .gm-blame-code { padding: 4px 0; background: var(--dv-bg); tab-size: 4; }
+.git-management .gm-blame-line { display: flex; align-items: baseline; min-width: 0; }
+.git-management .gm-blame-number { flex: 0 0 48px; padding: 0 10px 0 4px; color: var(--gm-rail-muted); text-align: right; user-select: none; font: 11px/20px var(--dv-mono); }
+.git-management .gm-blame-line > code { flex: 1; min-width: 0; padding-right: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/20px var(--dv-mono); }
+.git-management .gm-blame-gap { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--gm-rail-border); }
+.git-management .gm-blame-truncated { color: var(--dv-muted); font: 11px/20px var(--dv-font); }
 .git-management .gm-records > li { padding: 12px 4px; gap: 8px; }
 .git-management .gm-records .gm-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-management .gm-branches .gm-path { font-size: 14px; font-weight: 500; line-height: 24px; }
-.git-management .gm-stashes .gm-path { border: 0; border-radius: var(--dv-radius-control); background: transparent; padding: 6px 8px; font-size: 14px; line-height: 20px; }
 .git-management .gm-hint { color: var(--dv-muted); font-size: 12px; }
 .git-management .gm-protected { margin: 12px 0; padding: 12px; border: 1px solid var(--gm-rail-border); border-radius: var(--dv-radius-surface); background: var(--dv-surface); }
 .git-management .gm-protected summary { cursor: pointer; overflow-wrap: anywhere; }

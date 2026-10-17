@@ -99,15 +99,14 @@ test('real local backend: stage, staged-only commit, history, safe dirty switch 
     expect(await command(['rev-parse', 'HEAD'])).toBe(beforeHead);
     expect(await fs.readFile(path.join(root, '.git/index'))).toEqual(beforeIndex);
     expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('unstaged later\n');
-    await page.getByRole('button', { name: '前往 Stash', exact: true }).click();
-    await expect(page.getByRole('button', { name: '创建 Stash', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '创建 Stash', exact: true }).click();
-    await expect(page.getByRole('dialog')).toContainText('保存仓库改动');
-    await page.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(page.getByRole('button', { name: /Stash/ })).toHaveCount(0);
+    await page.getByRole('button', { name: '查看工作区', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'a.txt', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
     expect(operations.filter(operation => operation === 'branchSwitch')).toHaveLength(2);
     expect(operations.some(operation => ['stashCreate', 'stashApply', 'stashPop'].includes(operation))).toBe(false);
     expect(await command(['stash', 'list'])).toBe('');
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });
 
 test('real selected workspace Commit creates history directly and preserves unselected staged/working files', async ({ page }) => {

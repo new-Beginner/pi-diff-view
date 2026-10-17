@@ -6,6 +6,7 @@ import FilePath from './FilePath';
 import ReviewIcon from './ReviewIcon';
 import GitPatch from './GitPatch';
 import { useGitPreview } from './useGitPreview';
+import GitCommitButton from './GitCommitButton';
 
 const statuses: Record<string, string> = { A: '新增', M: '修改', D: '删除', T: '类型变更' };
 type Source = { transport: UiTransport; root?: string };
@@ -54,11 +55,7 @@ function CommitDetails({ transport, root, commit, close }: Source & { commit: Ma
 export default function GitHistory({ transport, root, commits }: Source & { commits: ManagementCommit[] }) {
   const [selected, setSelected] = useState<string>();
   return <ul className="gm-list gm-history" aria-label="提交历史">{commits.map(commit => <li key={commit.oid}>
-    <button className="gm-commit" title={commit.subject} aria-pressed={selected === commit.oid} aria-expanded={selected === commit.oid}
-      onClick={() => setSelected(value => value === commit.oid ? undefined : commit.oid)}>
-      <span className="gm-commit-main"><span className="gm-commit-subject">{commit.subject}</span><code title={commit.oid}>{commit.oid.slice(0, 10)}</code></span>
-      <span className="gm-commit-meta"><span title={commit.author}>{commit.author}</span><time dateTime={commit.date} title={commit.date}>{new Date(commit.date).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></span>
-    </button>
+    <GitCommitButton commit={commit} expanded={selected === commit.oid} onClick={() => setSelected(value => value === commit.oid ? undefined : commit.oid)} />
     {selected === commit.oid && <CommitDetails key={commit.oid} transport={transport} root={root} commit={commit} close={() => setSelected(undefined)} />}
   </li>)}</ul>;
 }

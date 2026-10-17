@@ -38,8 +38,8 @@
       case 'branches': return { branches: [{ name: 'main', oid: 'demo-main', current: true }, { name: 'feature/' + 'long-branch-name-'.repeat(8), oid: 'demo-feature', current: false }], truncated: false };
       case 'history': return { commits: [{ oid: '0123456789abcdef', subject: '演示提交：' + '很长的提交标题与说明'.repeat(12), author: '演示用户', date: '2026-10-11' }], hasMore: false };
       case 'commitFiles': return { oid: args.ref, parent: null, entries: [{ path: 'src/second.ts', status: 'M', additions: 3, deletions: 2 }] };
-      case 'stashList': return { stashes: [{ ref: 'stash@{0}', oid: 'demo-stash', subject: '演示备份：' + 'stash-description-'.repeat(8) }], notice: 'Showing at most 100 stashes.' };
-      case 'diff': case 'commitDiff': case 'blame': case 'stashShow': return { text: '演示数据 · 模拟后端\n--- before\n+++ after\n+' + 'long code '.repeat(100), truncated: false };
+      case 'blame': return { path: args.path, oid: '0123456789abcdef', totalLines: 1, skip: 0, hasMore: false, commits: [{ oid: '0123456789abcdef', subject: '演示追溯：改善代码可读性', author: '演示用户', date: '2026-10-11' }], lines: [{ oid: '0123456789abcdef', line: 1, originalLine: 1, text: 'long code '.repeat(100) }] };
+      case 'diff': case 'commitDiff': return { text: '演示数据 · 模拟后端\n--- before\n+++ after\n+' + 'long code '.repeat(100), truncated: false };
       case 'stage': demo.entries = demo.entries.map(entry => args.paths?.includes(entry.path) ? { ...entry, index: 'M', working: ' ' } : entry); break;
       case 'unstage': demo.entries = demo.entries.map(entry => args.paths?.includes(entry.path) ? { ...entry, index: ' ', working: 'M' } : entry); break;
       case 'commit': return { ok: true, oid: 'demo-commit' };

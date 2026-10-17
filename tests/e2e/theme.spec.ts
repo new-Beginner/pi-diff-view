@@ -15,11 +15,11 @@ test.beforeAll(async () => {
   assets['/'] = (await fs.readFile('src/view/index.html', 'utf8')).replace('<title>', '<title>演示数据 · 模拟桥接 · ').replace('<body>', '<body><script src="/mock.js"></script>');
 });
 async function open(page: Page, params = '') {
-  await page.route('http://theme-fixture.invalid/**', route => {
+  await page.route('https://theme-fixture.invalid/**', route => {
     const pathname = new URL(route.request().url()).pathname;
     return route.fulfill({ status: assets[pathname] ? 200 : 404, contentType: pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : 'text/html', body: assets[pathname] ?? '' });
   });
-  await page.goto('http://theme-fixture.invalid/?lang=zh-CN&scenario=panel&' + params);
+  await page.goto('https://theme-fixture.invalid/?lang=zh-CN&scenario=panel&' + params);
   await expect(page.locator('.dv-panel')).toBeVisible();
 }
 async function noHorizontalOverflow(page: Page) {
@@ -104,7 +104,7 @@ for (const width of [360, 600, 1100]) for (const base of ['light', 'dark'] as co
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
     expect(await page.evaluate(() => (window as any).__themeDemo.calls.some((call: any) => call.operation === 'commit'))).toBe(false);
-    for (const label of ['分支', '历史', 'Blame', 'Stash', '暂存区', '工作区']) {
+    for (const label of ['分支', '历史', '追溯', '暂存区', '工作区']) {
       await git.getByRole('button', { name: label, exact: true }).click();
       await expect(git.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
       await noHorizontalOverflow(page);
@@ -249,7 +249,7 @@ for (const width of [360, 600]) for (const base of ['light', 'dark']) test(`unif
   await expect(page.getByLabel('提交摘要')).toHaveCSS('border-radius', '8px');
   await expect(git.locator('.gm-icon-button').first()).toHaveCSS('border-radius', '8px');
   await expect(git.locator('.gm-protected')).toHaveCSS('border-radius', '12px');
-  for (const [label, key] of [['工作区', 'workspace'], ['暂存区', 'staged'], ['分支', 'branches'], ['历史', 'history'], ['Blame', 'blame'], ['Stash', 'stash']]) {
+  for (const [label, key] of [['工作区', 'workspace'], ['暂存区', 'staged'], ['分支', 'branches'], ['历史', 'history'], ['追溯', 'blame']]) {
     await git.getByRole('button', { name: label, exact: true }).click();
     await expect(git.locator('.gm-controls')).toHaveAttribute('data-page', key);
     await expect(git.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
@@ -259,14 +259,14 @@ for (const width of [360, 600]) for (const base of ['light', 'dark']) test(`unif
       await git.locator('.gm-commit').click(); await expect(git.getByRole('region', { name: 'Git 详情' })).toBeVisible();
       await git.getByRole('button', { name: '关闭详情', exact: true }).click();
     }
-    if (key === 'blame') { await git.getByLabel('仓库相对文件路径').fill('src/second.ts'); await git.getByRole('button', { name: '查看 HEAD 行归属' }).click(); await expect(git.getByRole('region', { name: 'Git 详情' })).toBeVisible(); await git.getByRole('button', { name: '关闭详情' }).click(); }
+    if (key === 'blame') { await git.getByLabel('仓库相对文件路径').fill('src/second.ts'); await git.getByRole('button', { name: '开始追溯' }).click(); await git.locator('.gm-commit').click(); await expect(git.getByRole('region', { name: '追溯代码行' })).toBeVisible(); await git.getByRole('button', { name: '收起代码' }).click(); }
     await noHorizontalOverflow(page); await uniformCapture(page, `${key}-${width}-${base}`);
-    if (key === 'branches' || key === 'stash') {
+    if (key === 'branches') {
       const title = git.locator('.gm-records .gm-path').last();
       await expect(title).toHaveCSS('text-overflow', 'ellipsis');
       await expect(title).toHaveCSS('white-space', 'nowrap');
       expect(await title.getAttribute('title')).toBe(await title.textContent());
-      await git.getByRole('button', { name: key === 'branches' ? '切换' : 'Apply', exact: true }).last().click();
+      await git.getByRole('button', { name: '切换', exact: true }).last().click();
       const dialog = page.getByRole('dialog'); await expect(dialog).toBeVisible();
       expect(await popupStyle(dialog)).toEqual(reviewStyle);
       await uniformCapture(page, `${key}-confirm-${width}-${base}`); await page.keyboard.press('Escape');

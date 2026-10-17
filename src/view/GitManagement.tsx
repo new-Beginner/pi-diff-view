@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { UiTransport } from '../core/contracts';
-import type { ManagementArgs, ManagementBranch, ManagementCommit, ManagementEntry, ManagementRepository, ManagementStash, ManagementStatus, ManagementText } from '../git/local-management';
+import type { ManagementArgs, ManagementBranch, ManagementCommit, ManagementEntry, ManagementRepository, ManagementStatus, ManagementText } from '../git/local-management';
 import FileIcon from './FileIcon';
 import FilePath from './FilePath';
 import ReviewIcon from './ReviewIcon';
 import GitPatch from './GitPatch';
 import GitHistory from './GitHistory';
+import GitBlame from './GitBlame';
 import { useGitPreview } from './useGitPreview';
 import { useGitStats } from './useGitStats';
 import './git-management.css';
 
-type Page = 'workspace' | 'staged' | 'branches' | 'history' | 'blame' | 'stash';
-const labels: Record<Page, string> = { workspace: '工作区', staged: '暂存区', branches: '分支', history: '历史', blame: 'Blame', stash: 'Stash' };
+type Page = 'workspace' | 'staged' | 'branches' | 'history' | 'blame';
+const labels: Record<Page, string> = { workspace: '工作区', staged: '暂存区', branches: '分支', history: '历史', blame: '追溯' };
 interface Confirmation { args: ManagementArgs; description: string; }
 function blockedReason(reason = ''): string {
   if (/sensitive|credential|secret|private|public path|protected|安全|凭据/i.test(reason)) return '凭据或敏感路径';
@@ -22,7 +23,6 @@ function blockedReason(reason = ''): string {
 }
 function localizedNotice(value: string): string {
   if (value === 'No commits yet. Stage files and create the first commit.') return '暂无提交；暂存文件后可创建首次提交。';
-  if (value === 'Showing at most 100 stashes.') return '最多显示 100 条 Stash。';
   return value;
 }
 const branchActions: Record<string, string> = { branchSwitch: '切换', branchRename: '重命名', branchDelete: '安全删除' };
@@ -44,7 +44,7 @@ function branchIssue(args: ManagementArgs, error: Error & { code?: string }) {
     INVALID_REF: '分支名无效。请输入有效的本地分支名。',
   };
   return { title: unknown ? `${action}结果待核对：${args.name}` : args.operation === 'branchSwitch' ? `无法切换到 ${args.name}` : `无法${action} ${args.name}`,
-    overwrite, message: unknown ? '等待结果超时，操作可能已执行。请刷新核对实际分支状态，不要重复执行。' : overwrite ? '切换会覆盖本地改动。请先提交，或将改动保存到 Stash。' : messages[code ?? ''] ?? 'Git 未能完成操作。请查看原始信息，处理后再手动尝试。' };
+    overwrite, message: unknown ? '等待结果超时，操作可能已执行。请刷新核对实际分支状态，不要重复执行。' : overwrite ? '切换会覆盖本地改动。请先在工作区提交或妥善备份这些改动，再手动切换。' : messages[code ?? ''] ?? 'Git 未能完成操作。请查看原始信息，处理后再手动尝试。' };
 }
 /** Host must route gitManage through its background job transport (commit hooks can take 90s).
  * This component only uses transport.invoke('gitManage', {operation, root, ...}).
@@ -54,7 +54,6 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const [status, setStatus] = useState<ManagementStatus>();
   const [branches, setBranches] = useState<ManagementBranch[]>([]);
   const [commits, setCommits] = useState<ManagementCommit[]>([]);
-  const [stashes, setStashes] = useState<ManagementStash[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<ManagementText>();
   const filePage = page === 'workspace' || page === 'staged';
@@ -64,10 +63,9 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const [loadedPage, setLoadedPage] = useState<Page>();
   const source = useRef({ root, transport });
   const [message, setMessage] = useState(''), [name, setName] = useState(''), [newName, setNewName] = useState('');
-  const [description, setDescription] = useState(''), [stashMessage, setStashMessage] = useState('');
+  const [description, setDescription] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
   const detailTicket = useRef(0), selectAllRef = useRef<HTMLInputElement>(null);
-  const [blamePath, setBlamePath] = useState(''), [includeUntracked, setIncludeUntracked] = useState(false);
   const [offset, setOffset] = useState(0), [hasMore, setHasMore] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation>();
   useEffect(() => { if (!active) setConfirmation(undefined); }, [active]);
@@ -105,13 +103,12 @@ export function GitManagement({ transport, root, base, active = true }: { transp
       setSelected(previous => retainSelection ? previous.filter(value => paths.has(value)) : []);
     } else {
       // One job per page: repository header and list share authorization and polling.
-      const args: ManagementArgs = target === 'history' ? { operation: 'history', skip, limit: 30 } : { operation: target === 'branches' ? 'branches' : 'stashList' };
-      const result = await invoke<{ repository?: ManagementRepository; branches?: ManagementBranch[]; truncated?: boolean; commits?: ManagementCommit[]; hasMore?: boolean; stashes?: ManagementStash[]; notice?: string }>({ ...args, includeRepository: true });
+      const args: ManagementArgs = target === 'history' ? { operation: 'history', skip, limit: 30 } : { operation: 'branches' };
+      const result = await invoke<{ repository?: ManagementRepository; branches?: ManagementBranch[]; truncated?: boolean; commits?: ManagementCommit[]; hasMore?: boolean; notice?: string }>({ ...args, includeRepository: true });
       if (!valid()) return;
       if (result.repository) setStatus(previous => ({ ...result.repository!, entries: previous?.entries ?? [] }));
       if (target === 'branches') { setBranches(result.branches ?? []); if (result.truncated) setNotice('仅显示前 200 个分支。'); }
       if (target === 'history') { setCommits(result.commits ?? []); setHasMore(!!result.hasMore); }
-      if (target === 'stash') setStashes(result.stashes ?? []);
       if (result.notice) setNotice(result.notice);
       if (!retainSelection) setSelected([]);
     }
@@ -122,7 +119,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     detailTicket.current++; preview.invalidate(); setDetailLoading(false);
     if (source.current.root !== root || source.current.transport !== transport) {
       source.current = { root, transport }; setBusy(false);
-      setStatus(undefined); setBranches([]); setCommits([]); setStashes([]); setLoadedPage(undefined);
+      setStatus(undefined); setBranches([]); setCommits([]); setLoadedPage(undefined);
     }
     running.current = true; setLoading(true); setLoadedPage(undefined); setError(''); setSwitchFailure(undefined); setNotice(''); setDetail(undefined); setSelected([]); setConfirmation(undefined);
     void refreshData(current, page, offset).catch(cause => { if (current === generation.current) setError(String(cause?.message ?? cause)); })
@@ -170,7 +167,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         const e = cause as Error & { code?: string };
         setError(`${e.code ? `${e.code}: ` : ''}${e.message ?? String(cause)}`);
         if (args) setSwitchFailure(branchIssue(args, e));
-        // Failed hooks/stash apply can still modify files. Never retry an operation automatically.
+        // Failed hooks can still modify files. Never retry an operation automatically.
         if (mutation) {
           try { await refreshData(current, page, offset); } catch { /* Preserve the actionable original error. */ }
         }
@@ -209,7 +206,6 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     } catch (cause) { if (current === generation.current) setError(String((cause as Error)?.message ?? cause)); }
     finally { if (current === generation.current) { running.current = false; setBusy(false); } }
   };
-  const stashArgs = (operation: string, stash: ManagementStash): ManagementArgs => ({ operation, ref: stash.ref, oid: stash.oid });
   return <section className="git-management" data-base={base ?? (document.documentElement.dataset.base === 'dark' ? 'dark' : 'light')} aria-label="本地 Git 管理" aria-busy={busy || loading}>
     <div className="gm-top">
     <header className="gm-header"><div><h2>本地 Git</h2></div>
@@ -225,7 +221,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     {error && (switchFailure ? <section className="gm-error gm-switch-error" role="alert">
       <strong>{switchFailure.title}</strong>
       <p>{switchFailure.message}</p>
-      {switchFailure.overwrite && <div className="gm-toolbar"><button disabled={busy} onClick={() => { setPage('workspace'); setOffset(0); }}>查看工作区</button><button disabled={busy} onClick={() => { setPage('stash'); setOffset(0); }}>前往 Stash</button></div>}
+      {switchFailure.overwrite && <div className="gm-toolbar"><button disabled={busy} onClick={() => { setPage('workspace'); setOffset(0); }}>查看工作区</button></div>}
       <details><summary>查看 Git 原始信息</summary><pre>{error}</pre></details>
     </section> : <pre className="gm-error" role="alert">{error}</pre>)}
     {notice && <p className="gm-notice" role="status">{localizedNotice(notice)}{notice.startsWith('Commit 已创建') && <button className="gm-text-button" onClick={() => { setPage('history'); setOffset(0); }}>查看历史</button>}</p>}
@@ -268,7 +264,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           <button disabled={!name.trim() || !status?.head} onClick={() => void execute({ operation: 'branchCreate', name }, true)}>从 HEAD 创建</button></div>
         <label className="gm-field">重命名目标<input value={newName} onChange={e => setNewName(e.target.value)} /></label>
         <ul className="gm-list gm-records gm-branches">{branches.map(branch => <li key={branch.name}><strong className="gm-path" title={`${branch.name}${branch.current ? ' · 当前' : ''}`}>{branch.name}{branch.current ? ' · 当前' : ''}</strong>
-          <button disabled={branch.current} onClick={() => ask({ operation: 'branchSwitch', name: branch.name }, `切换到 ${branch.name}？本地改动会保留；若切换会覆盖改动，Git 将拒绝执行。不会强制覆盖，也不会自动创建或恢复 Stash。`)}>切换</button>
+          <button disabled={branch.current} onClick={() => ask({ operation: 'branchSwitch', name: branch.name }, `切换到 ${branch.name}？本地改动会保留；若切换会覆盖改动，Git 将拒绝执行。不会强制覆盖或自动备份改动。`)}>切换</button>
           <button disabled={!newName.trim() || newName.trim() === branch.name} onClick={() => ask({ operation: 'branchRename', name: branch.name, newName: newName.trim() }, `将 ${branch.name} 重命名为 ${newName.trim()}？不会覆盖已有分支。`)}>重命名</button>
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchDelete', name: branch.name }, `安全删除 ${branch.name}？只允许删除已合入 HEAD 的非当前分支，不支持强制删除。`)}>安全删除</button>
         </li>)}</ul>{!branches.length && !loading && <p>暂无本地分支。</p>}
@@ -278,18 +274,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         {!commits.length && !loading && <p>暂无提交。</p>}
         <div className="gm-toolbar"><button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一页</button><span>{commits.length ? `${offset + 1}–${offset + commits.length}` : '0 条提交'}</span><button disabled={!hasMore} onClick={() => setOffset(offset + 30)}>下一页</button></div>
       </>}
-      {page === 'blame' && <><label className="gm-field">仓库相对文件路径<input value={blamePath} onChange={e => setBlamePath(e.target.value)} placeholder="src/example.ts" /></label>
-        <button disabled={!blamePath.trim() || !status?.head} onClick={() => void execute({ operation: 'blame', path: blamePath })}>查看 HEAD 行归属</button><p className="gm-hint">仅显示已提交内容，不包含工作区修改。</p></>}
-      {page === 'stash' && <>
-        <label className="gm-field">Stash 说明<input maxLength={1000} value={stashMessage} onChange={e => setStashMessage(e.target.value)} /></label>
-        <label><input type="checkbox" checked={includeUntracked} onChange={e => setIncludeUntracked(e.target.checked)} /> 包含未跟踪文件（不包含忽略文件）</label>
-        <button disabled={!status?.head} onClick={() => ask({ operation: 'stashCreate', message: stashMessage, includeUntracked }, '保存仓库改动为 stash，并从工作区移除这些改动。是否继续？')}>创建 Stash</button>
-        <ul className="gm-list gm-records gm-stashes">{stashes.map(stash => <li key={stash.ref}><button className="gm-path" title={`${stash.ref} · ${stash.subject}`} onClick={() => void execute(stashArgs('stashShow', stash))}>{stash.ref} · {stash.subject}</button>
-          <button onClick={() => ask(stashArgs('stashApply', stash), `应用 ${stash.ref}，保留 stash；需要干净工作区。如发生冲突，请手动解决。`)}>Apply</button>
-          <button onClick={() => ask(stashArgs('stashPop', stash), `应用并在成功后删除 ${stash.ref}？冲突时保留 stash，请手动解决。`)}>Pop</button>
-          <button onClick={() => ask(stashArgs('stashDrop', stash), `永久删除 ${stash.ref}？这不会恢复其中的改动。`)}>Drop</button>
-        </li>)}</ul>{!stashes.length && !loading && <p>暂无 stash。</p>}
-      </>}
+      {page === 'blame' && <GitBlame key={generation.current} transport={transport} root={root} head={status?.head} />}
     </fieldset>
     {(detail || detailLoading) && <section className="gm-detail" aria-label="Git 详情" aria-busy={detailLoading}><div className="gm-toolbar"><strong>详情</strong><button onClick={() => { detailTicket.current++; setDetailLoading(false); setDetail(undefined); }}>关闭详情</button></div>
       {detail ? <GitPatch detail={detail} /> : <p role="status">正在读取详情…</p>}</section>}

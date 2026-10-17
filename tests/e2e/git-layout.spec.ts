@@ -53,11 +53,11 @@ test.beforeAll(async () => {
   `;
 });
 async function open(page: Page, base = 'light') {
-  await page.route('http://git-layout.invalid/**', route => {
+  await page.route('https://git-layout.invalid/**', route => {
     const pathname = new URL(route.request().url()).pathname;
     return route.fulfill({ status: assets[pathname] ? 200 : 404, contentType: pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : 'text/html', body: assets[pathname] ?? '' });
   });
-  await page.goto('http://git-layout.invalid/?base=' + base);
+  await page.goto('https://git-layout.invalid/?base=' + base);
   await page.getByRole('button', { name: '本地 Git', exact: true }).click();
   await expect(page.locator('.gm-file')).toHaveCount(80);
   await expect(page.locator('.gm-file-stats').first()).toHaveText('+3-2');
@@ -105,7 +105,7 @@ for (const width of [360, 600, 1100]) for (const base of ['light', 'dark']) {
     await expect(page.getByRole('dialog')).toContainText('不会更改暂存内容');
     await page.getByRole('button', { name: '取消', exact: true }).click();
     expect(await page.evaluate(() => (window as any).calls.some((c: any) => c.args.operation === 'discard'))).toBe(false);
-    for (const name of ['分支', '历史', 'Blame', 'Stash']) {
+    for (const name of ['分支', '历史', '追溯']) {
       await page.getByRole('button', { name, exact: true }).click();
       await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
       await expect(composer).toHaveCount(0);
