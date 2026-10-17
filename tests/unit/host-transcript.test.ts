@@ -60,9 +60,9 @@ it('preserves replayable Edit inputs through normalization but excludes private 
     { id: 'private', role: 'tool', toolCallId: 'c3', toolName: 'Edit', toolArgs: { path: '.env', ops: 'PUT 1.=1:\n+private-secret' } },
     { id: 'private-move', role: 'tool', toolCallId: 'c4', toolName: 'Edit', toolArgs: { path: 'a.txt', ops: 'MV .ssh/id_rsa' } },
   ]);
-  expect(rows[0].blocks[0].args).toEqual({ path: 'package-lock.json', ops: 'PUT 3.=3:\n+  "version": "1.4.1",' });
+  expect(rows[0].blocks[0].args).toEqual({ path: 'package-lock.json', ops: 'PUT 3.=3:\n+  "version": "1.4.1",', tag: 'ABCD' });
   expect(rows[1].blocks[0].args).toEqual({ path: 'a.txt', old_string: 'old', new_string: 'new' });
   expect(rows[2].blocks).toEqual([]); expect(rows[3].blocks).toEqual([]);
   expect(hostEvidenceMessages(rows)).toEqual(rows);
-  expect(JSON.stringify(rows)).not.toMatch(/private-secret|private-extra|ABCD/);
+  expect(JSON.stringify(rows)).not.toMatch(/private-secret|private-extra/);
 });

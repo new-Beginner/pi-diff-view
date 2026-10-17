@@ -16,23 +16,24 @@ async function fixture() {
   const previous = (globalThis as any).pi; vi.spyOn(os, 'homedir').mockReturnValue(temp);
   const since = Date.now() - 1000;
   const messages: any[] = [{ id: 'u', role: 'user', createdAt: since, content: 'PRIVATE USER PROSE' }];
-  let running = true, denied = false;
+  let running = true, denied = false, truncated = false;
   const desktop = {
     listOperations: vi.fn(async () => [{ id: 'agent/getStatus', risk: 'read', description: 'Status' }, { id: 'session/get', risk: 'read', description: 'Session' }]),
     invoke: vi.fn(async ({ operation, args }: any) => {
       if (denied) throw Object.assign(new Error('permission denied'), { code: 'PERMISSION_DENIED' });
       if (operation === 'agent/getStatus') return { status: { sessionId: args[0], isRunning: running, currentTurnId: 'native-turn' } };
-      if (operation === 'session/get') return { session: { id: args[0].id, projectPath: root, messages, messageStart: 0, messageEnd: messages.length, hasMoreBefore: false } };
+      if (operation === 'session/get') return { session: { id: args[0].id, projectPath: root, messages, messageStart: 0, messageEnd: messages.length, hasMoreBefore: false, ...(truncated ? { truncated: true } : {}) } };
       throw new Error('Unexpected desktop operation');
     }),
   };
+  const listeners = new Map<string, (event: any) => void>();
   (globalThis as any).pi = {
     desktop, plugin: { getDataPath: async () => data, getSettings: async () => ({}) }, workspace: { get: async () => ({ path: root }) },
-    app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on() {}, off() {} },
+    app: { getAppearance: async () => ({}) }, commands: { register: async () => {}, unregister: async () => {} }, events: { on(name: string, handler: (event: any) => void) { listeners.set(name, handler); }, off(name: string) { listeners.delete(name); } },
   };
   const plugin = createRequire(import.meta.url)(entry); await plugin.onLoad();
   cleanups.push(async () => { await plugin.onUnload(); (globalThis as any).pi = previous; await fs.rm(temp, { recursive: true, force: true }); });
-  return { plugin, root, temp, pluginRoot, data, messages, since, desktop, settle() { running = false; }, deny() { denied = true; } };
+  return { plugin, root, temp, pluginRoot, data, messages, since, desktop, settle() { running = false; }, deny() { denied = true; }, truncate() { truncated = true; }, ended() { listeners.get('session:turnEnded')?.({ sessionId: 's', turnId: 'native-turn', reason: 'stop' }); } };
 }
 it('reconciles plugin-owned Agent snapshots by exact public tool IDs without reading private host history', async () => {
   const f = await fixture(), file = path.join(f.root, 'file.txt'); await fs.writeFile(file, 'old\n');
@@ -66,4 +67,24 @@ it('keeps denied public status unknown and rejects invalid session IDs', async (
   const f = await fixture(); f.deny();
   expect(await f.plugin.onRendererCall('sessionState', { sessionId: 's' })).toMatchObject({ sessionId: 's', statusKnown: false, running: false });
   await expect(f.plugin.onRendererCall('sessionState', { sessionId: '../private' })).rejects.toThrow(/Invalid session/);
+});
+it('keeps independently verified public activity when transcript content is truncated', async () => {
+  const f = await fixture(); f.truncate();
+  f.messages.push({ id: 'write', role: 'tool', createdAt: f.since + 1, toolCallId: 'write', toolName: 'Write', toolStatus: 'success', toolArgs: { path: 'a.txt', content: 'new\n' }, toolResult: { details: { review: { version: 1, path: 'a.txt', messageId: 'write', status: 'added' } } } });
+  await f.plugin.onRendererCall('sessionContext', { sessionId: 's' });
+  const store = new SnapshotStore(f.data);
+  expect((await store.listRuns(false, true))[0]).toMatchObject({ state: 'running', userMessageId: 'u' });
+  const state = await f.plugin.onRendererCall('sessionState', { sessionId: 's' });
+  expect(state).toMatchObject({ statusKnown: true, running: true, taskId: 'u' });
+});
+it('invalidates pre-completion public status when the official turn-ended event arrives', async () => {
+  const f = await fixture();
+  f.messages.push({ id: 'write', role: 'tool', createdAt: f.since + 1, toolCallId: 'write', toolName: 'Write', toolStatus: 'success', toolArgs: { path: 'a.txt', content: 'new\n' }, toolResult: { details: { review: { version: 1, path: 'a.txt', messageId: 'write', status: 'added' } } } });
+  await f.plugin.onRendererCall('sessionContext', { sessionId: 's' });
+  const store = new SnapshotStore(f.data);
+  expect((await store.listRuns(false, true))[0].state).toBe('running');
+  f.settle(); f.messages.push({ id: 'final', role: 'assistant', createdAt: Date.now(), status: 'complete', content: 'done' });
+  f.ended();
+  await expect.poll(async () => (await store.listRuns(false, true))[0]?.state).toBe('completed');
+  expect(await f.plugin.onRendererCall('sessionState', { sessionId: 's' })).toMatchObject({ statusKnown: true, running: false });
 });

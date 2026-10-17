@@ -244,9 +244,16 @@ export class SnapshotStore {
         const inboxWasRunning = run.state === 'running';
         const current = await this.getRun(id, false, false);
         if (current && (current.sessionId !== run.sessionId || canonical(current.root) !== canonical(run.root))) { await this.audit({ action: 'inbox-identity-root-conflict', runId: id, sessionId: run.sessionId }); continue; }
+        if (current?.execution && run.execution && current.execution.id !== run.execution.id) { await this.audit({ action: 'inbox-execution-conflict', runId: id, sessionId: run.sessionId }); continue; }
         if (current && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
           if ((run.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
           if (current.execution && run.execution?.id === current.execution.id && run.execution.revision < current.execution.revision) continue;
+        }
+        // The Agent may start before public USER context is available. Recovery
+        // later proves that binding by tool IDs; a final revision of the SAME
+        // runner must not erase it merely because its original DTO omitted it.
+        if (current?.execution && run.execution?.id === current.execution.id && current.boundary === 'user' && current.userMessageId && !run.userMessageId) {
+          run.userMessageId = current.userMessageId; run.boundary = 'user';
         }
         // A stale inbox must not undo hash-verified native recovery or host settlement.
         // A genuinely newer capture version is still imported normally.

@@ -32,7 +32,7 @@ const contexts = new Map<string, SessionContext>();
 // Generation-local and bounded: never wait here for renderer work queued behind review.
 const reviewPreparations = new Map<string, { startedAt: number; attemptedAt: number; prepared: boolean }>();
 const sessionRoots = new Map<string, string>();
-const freshHistoryContext = (context: SessionContext) => ({ ...context, statusKnown: context.statusKnown === true && context.evidenceComplete !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
+const freshHistoryContext = (context: SessionContext) => ({ ...context, statusKnown: context.statusKnown === true && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 declare const pi: any;
 let service: ReviewService | null = null, store: SnapshotStore | null = null;
 const repositoryQueue = new ReadWriteQueue(4);
@@ -158,9 +158,12 @@ export async function onLoad(): Promise<void> {
   turnEnded = event => { void serial(async () => {
     if (disposed || !store || !event.sessionId) return;
     await store.importInbox(generation);
-    const context = contexts.get(event.sessionId);
+    // Turn-ended is a refresh signal, not an identity/binding shortcut. The public
+    // status response is independent of transcript pagination/truncation.
+    publicSource!.invalidate(event.sessionId);
+    const snapshot = await publicSource!.read(event.sessionId);
+    const context = await applyPublicSnapshot(snapshot, contexts.get(event.sessionId)?.root);
     if (history && context && service) {
-      // Re-read actual final message evidence; do not bind the event's internal turnId.
       await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
       context.syncedAt = 0; // The renderer's settled state may arrive immediately afterwards.
     }

@@ -1170,9 +1170,17 @@ var init_storage = __esm({
                 await this.audit({ action: "inbox-identity-root-conflict", runId: id2, sessionId: run2.sessionId });
                 continue;
               }
+              if (current?.execution && run2.execution && current.execution.id !== run2.execution.id) {
+                await this.audit({ action: "inbox-execution-conflict", runId: id2, sessionId: run2.sessionId });
+                continue;
+              }
               if (current && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root)) {
                 if ((run2.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
                 if (current.execution && run2.execution?.id === current.execution.id && run2.execution.revision < current.execution.revision) continue;
+              }
+              if (current?.execution && run2.execution?.id === current.execution.id && current.boundary === "user" && current.userMessageId && !run2.userMessageId) {
+                run2.userMessageId = current.userMessageId;
+                run2.boundary = "user";
               }
               if (current?.hostRecovery && (run2.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
               if (current?.hostRecovery?.files && current.sessionId === run2.sessionId && canonical(current.root) === canonical(run2.root) && (!run2.userMessageId || run2.userMessageId === current.userMessageId)) {
@@ -3387,7 +3395,7 @@ var HostHistoryImporter = class {
       if (source2.sessionId !== sessionId || canonical(source2.root) !== canonical(root) || !source2.userMessageId) continue;
       for (const change of Object.values(source2.changes)) {
         if (!change.capture) continue;
-        if (!change.segments?.length && change.evidence?.length) for (const side of ["before", "after"]) endpoint(source2, change, side === "before" ? change.evidence[0] : change.evidence.at(-1), side, change.ambiguous ? { ...change[side], kind: "unavailable", text: null } : change[side], change.ambiguous);
+        if ((!change.segments?.length || !change.ambiguous) && change.evidence?.length) for (const side of ["before", "after"]) endpoint(source2, change, side === "before" ? change.evidence[0] : change.evidence.at(-1), side, change.ambiguous ? { ...change[side], kind: "unavailable", text: null } : change[side], change.ambiguous);
         for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ["before", "after"]) endpoint(source2, change, segment.evidence, side, segment[side]);
       }
     }
@@ -3654,6 +3662,7 @@ var HostHistoryImporter = class {
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every((m) => m.createdAt <= saved.endedAt) ? saved.replyMessageId : void 0;
         const replyId = reply?.id ?? retainedReply;
+        const settled = !live && saved?.userMessageId === user.id && saved.state === "completed" && saved.execution?.state === "settled" && saved.endedAt != null && saved.finalReply && saved.replies.some((r) => r.hash === saved.finalReply.hash && r.timestamp === saved.finalReply.timestamp) && members.every((m) => m.createdAt <= saved.endedAt);
         const changes2 = /* @__PURE__ */ Object.create(null);
         for (const e of turnEvents) {
           const c = capture(e.meta.path), old = changes2[c.path];
@@ -3665,7 +3674,7 @@ var HostHistoryImporter = class {
               if (refs.includes(ref ?? "") && e[side].kind === "unavailable" && !HASH.test(e[side].hash) && !(side === "before" && explicitToolName(e.block?.name) === "edit" && !recorded.before.exists)) e[side] = recorded[side];
             }
           }
-          const note = ["\u539F\u751F\u5386\u53F2\u4FEE\u6539\u4E8B\u4EF6\uFF1B\u672A\u8BFB\u53D6\u5F53\u524D\u6587\u4EF6\u3002", e.meta.state === "reverted" ? "\u4E3B\u7A0B\u5E8F\u5DF2\u6807\u8BB0\u64A4\u9500\uFF1B\u6B64\u5904\u4FDD\u7559\u539F\u4FEE\u6539\u8BC1\u636E\u3002" : "", e.meta.oldPath ? `\u91CD\u547D\u540D\u6765\u6E90\uFF1A${e.meta.oldPath}` : "", e.before.kind === "unavailable" || e.after.kind === "unavailable" ? "\u5386\u53F2\u5B8C\u6574\u5185\u5BB9\u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u53EF\u9760\u8BA1\u7B97\u5B8C\u6574\u5DEE\u5F02\u3002" : ""].filter(Boolean).join(" ");
+          const note = ["\u539F\u751F\u5386\u53F2\u4FEE\u6539\u4E8B\u4EF6\uFF1B\u672A\u8BFB\u53D6\u5F53\u524D\u6587\u4EF6\u3002", e.meta.state === "reverted" ? "\u4E3B\u7A0B\u5E8F\u5DF2\u6807\u8BB0\u64A4\u9500\uFF1B\u6B64\u5904\u4FDD\u7559\u539F\u4FEE\u6539\u8BC1\u636E\u3002" : "", e.meta.oldPath ? `\u91CD\u547D\u540D\u6765\u6E90\uFF1A${e.meta.oldPath}` : "", (old?.before ?? e.before).kind === "unavailable" || e.after.kind === "unavailable" ? "\u5386\u53F2\u5B8C\u6574\u5185\u5BB9\u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u53EF\u9760\u8BA1\u7B97\u5B8C\u6574\u5DEE\u5F02\u3002" : ""].filter(Boolean).join(" ");
           const discontinuous = !!e.conflicted || !!old && (old.ambiguous || (!e.toolOnly || e.capturedBefore) && old.after.kind === "text" && e.before.kind === "text" && (old.after.hash !== e.before.hash || old.after.exists !== e.before.exists));
           const segments = [...old?.segments ?? [], { before: e.before, after: e.after, evidence: `native:${e.meta.messageId}`, ...e.conflicted ? { ambiguous: true } : {} }];
           for (const side of ["before", "after"]) for (const alternative of e.alternatives?.[side] ?? []) segments.push({ before: e.before, after: e.after, [side]: alternative, evidence: `native:${e.meta.messageId}`, ambiguous: true, conflicted: true });
@@ -3681,9 +3690,9 @@ var HostHistoryImporter = class {
         }
         const stopped = last?.meta.status === "aborted" || children.some((child) => ["aborted", "stopped"].includes(child.status));
         const failed2 = last?.meta.status === "error" || children.some((child) => child.status === "failed");
-        const incomplete = stopped || failed2 || Object.values(changes2).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live;
-        const unresolved = !statusKnown && !replyId && !live;
-        const run2 = { version: 2, id: id2, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live || unresolved ? void 0 : Math.max(retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map((child) => child.completedAt ?? 0)), state: live ? "running" : stopped ? "aborted" : failed2 ? "incomplete" : replyId ? "completed" : unresolved ? "unknown" : "incomplete", fileCount: Object.keys(changes2).length, incomplete: incomplete || unresolved, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? "\u6267\u884C\u72B6\u6001\u8BC1\u636E\u7F3A\u5931\u6216\u8FC7\u671F\uFF0C\u5F85\u6838\u9A8C\uFF1B\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5DF2\u7ED3\u675F\u3002" : incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
+        const incomplete = stopped || failed2 || Object.values(changes2).some((c) => c.ambiguous || c.before.kind === "unavailable" || c.after.kind === "unavailable") || !replyId && !live && !settled;
+        const unresolved = !statusKnown && !replyId && !live && !settled;
+        const run2 = { version: 2, id: id2, sessionId, root, generation: "host-history", source: "host-history", userMessageId: user.id, replyMessageId: replyId, boundary: "user", startedAt: user.createdAt, endedAt: live || unresolved ? void 0 : settled ? saved.endedAt : Math.max(retainedReply ? saved.endedAt : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map((child) => child.completedAt ?? 0)), state: live ? "running" : stopped ? "aborted" : failed2 ? "incomplete" : replyId || settled ? "completed" : unresolved ? "unknown" : "incomplete", fileCount: Object.keys(changes2).length, incomplete: incomplete || unresolved, changes: changes2, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? "\u6267\u884C\u72B6\u6001\u8BC1\u636E\u7F3A\u5931\u6216\u8FC7\u671F\uFF0C\u5F85\u6838\u9A8C\uFF1B\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5DF2\u7ED3\u675F\u3002" : incomplete ? "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u6062\u590D\uFF1B\u90E8\u5206\u8BC1\u636E\u6216\u6700\u7EC8\u56DE\u590D\u4E0D\u53EF\u7528\u3002" : "\u4ECE\u4E3B\u7A0B\u5E8F\u5386\u53F2\u8BC1\u636E\u6062\u590D\uFF1B\u6587\u4EF6\u6A21\u5F0F\u672A\u77E5\uFF0C\u4E0D\u4EE3\u8868\u5F53\u524D\u78C1\u76D8\u72B6\u6001\u3002" };
         run2.delegations = children.length ? children : void 0;
         if (live) run2.bindings = {};
         if (duplicates.length) {
@@ -3903,7 +3912,7 @@ function hostEvidenceMessages(messages, sessionId, projectRoot2) {
         continue;
       }
       const safeReview = review && typeof review === "object" ? Object.fromEntries(["version", "sessionId", "messageId", "path", "oldPath", "operation", "status", "state", "beforeExists", "afterExists", "beforeHash", "afterHash", "hunks"].filter((key) => review[key] !== void 0).map((key) => [key, review[key]])) : void 0;
-      const editArgs = name2 === "edit" ? Object.fromEntries(["ops", "old_string", "new_string"].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
+      const editArgs = name2 === "edit" ? Object.fromEntries(["ops", "old_string", "new_string", ...typeof args.tag === "string" && /^[a-fA-F0-9]{4}$/.test(args.tag) ? ["tag"] : []].filter((key) => typeof args[key] === "string").map((key) => [key, args[key]])) : {};
       const lifecycle = safeTaskDetails(name2, result.details);
       const details = { ...safeReview ? { review: safeReview } : {}, ...lifecycle };
       blocks.push({ type: "tool_call", callId: b.callId, name: name2, status: b.status, args: ["write", "edit"].includes(name2) ? { path: args.path ?? args.file_path, ...editArgs, ...name2 === "write" && typeof args.content === "string" ? { content: args.content } : {} } : {}, result: { isError: b.isError ?? result.isError, ...Object.keys(details).length ? { details } : {} } });
@@ -5169,7 +5178,7 @@ var history = null;
 var contexts = /* @__PURE__ */ new Map();
 var reviewPreparations = /* @__PURE__ */ new Map();
 var sessionRoots = /* @__PURE__ */ new Map();
-var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown === true && context.evidenceComplete !== false && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
+var freshHistoryContext = (context) => ({ ...context, statusKnown: context.statusKnown === true && Date.now() - context.updatedAt <= CAPTURE_CONTEXT_TTL, messages: evidence.messages(context.sessionId, canonical(context.root)) });
 var service = null;
 var store = null;
 var repositoryQueue = new ReadWriteQueue(4);
@@ -5327,7 +5336,9 @@ async function onLoad() {
     void serial(async () => {
       if (disposed || !store || !event.sessionId) return;
       await store.importInbox(generation);
-      const context = contexts.get(event.sessionId);
+      publicSource.invalidate(event.sessionId);
+      const snapshot = await publicSource.read(event.sessionId);
+      const context = await applyPublicSnapshot(snapshot, contexts.get(event.sessionId)?.root);
       if (history && context && service) {
         await history.syncSession(event.sessionId, context.root, freshHistoryContext(context));
         context.syncedAt = 0;

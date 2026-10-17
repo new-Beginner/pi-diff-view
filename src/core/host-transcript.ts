@@ -26,7 +26,7 @@ export function hostEvidenceMessages(messages: unknown[], sessionId?: string, pr
         if (name === 'edit' && typeof args.ops === 'string') for (const line of args.ops.split('\n')) if (line.startsWith('MV ')) check(line.slice(3).trim());
       } catch { continue; } // Do not send credential/private file content to the main process.
       const safeReview = review && typeof review === 'object' ? Object.fromEntries(['version', 'sessionId', 'messageId', 'path', 'oldPath', 'operation', 'status', 'state', 'beforeExists', 'afterExists', 'beforeHash', 'afterHash', 'hunks'].filter(key => review[key] !== undefined).map(key => [key, review[key]])) : undefined;
-      const editArgs = name === 'edit' ? Object.fromEntries(['ops', 'old_string', 'new_string'].filter(key => typeof args[key] === 'string').map(key => [key, args[key]])) : {};
+      const editArgs = name === 'edit' ? Object.fromEntries(['ops', 'old_string', 'new_string', ...(typeof args.tag === 'string' && /^[a-fA-F0-9]{4}$/.test(args.tag) ? ['tag'] : [])].filter(key => typeof args[key] === 'string').map(key => [key, args[key]])) : {};
       const lifecycle = safeTaskDetails(name, result.details);
       const details = { ...(safeReview ? { review: safeReview } : {}), ...lifecycle };
       blocks.push({ type: 'tool_call', callId: b.callId, name, status: b.status, args: ['write', 'edit'].includes(name) ? { path: args.path ?? args.file_path, ...editArgs, ...(name === 'write' && typeof args.content === 'string' ? { content: args.content } : {}) } : {}, result: { isError: b.isError ?? result.isError, ...(Object.keys(details).length ? { details } : {}) } });

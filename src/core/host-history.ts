@@ -202,7 +202,9 @@ export class HostHistoryImporter {
       if (source.sessionId !== sessionId || canonical(source.root) !== canonical(root) || !source.userMessageId) continue;
       for (const change of Object.values(source.changes)) {
         if (!change.capture) continue;
-        if (!change.segments?.length && change.evidence?.length) for (const side of ['before', 'after'] as const) endpoint(source, change, side === 'before' ? change.evidence[0] : change.evidence.at(-1)!, side, change.ambiguous ? { ...change[side], kind: 'unavailable', text: null } : change[side], change.ambiguous);
+        // Segments may have incomplete intermediate sides while the exact first/last
+        // capture endpoints remain verified. Never discard those net endpoints on settlement.
+        if ((!change.segments?.length || !change.ambiguous) && change.evidence?.length) for (const side of ['before', 'after'] as const) endpoint(source, change, side === 'before' ? change.evidence[0] : change.evidence.at(-1)!, side, change.ambiguous ? { ...change[side], kind: 'unavailable', text: null } : change[side], change.ambiguous);
         for (const segment of change.segments ?? []) if (!segment.ambiguous || segment.conflicted) for (const side of ['before', 'after'] as const) endpoint(source, change, segment.evidence, side, segment[side]);
       }
     }
@@ -442,6 +444,7 @@ export class HostHistoryImporter {
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
         const retainedReply = !live && !reply && saved?.replyMessageId && saved.endedAt != null && members.every(m => m.createdAt <= saved.endedAt!) ? saved.replyMessageId : undefined;
         const replyId = reply?.id ?? retainedReply;
+        const settled = !live && saved?.userMessageId === user.id && saved.state === 'completed' && saved.execution?.state === 'settled' && saved.endedAt != null && saved.finalReply && saved.replies.some(r => r.hash === saved.finalReply!.hash && r.timestamp === saved.finalReply!.timestamp) && members.every(m => m.createdAt <= saved.endedAt!);
         const changes: Record<string, HistoryChange> = Object.create(null);
         for (const e of turnEvents) {
           const c = capture(e.meta.path), old = changes[c.path];
@@ -454,7 +457,7 @@ export class HostHistoryImporter {
               if (refs.includes(ref ?? '') && e[side]!.kind === 'unavailable' && !HASH.test(e[side]!.hash) && !(side === 'before' && explicitToolName(e.block?.name) === 'edit' && !recorded.before.exists)) e[side] = recorded[side];
             }
           }
-          const note = ['原生历史修改事件；未读取当前文件。', e.meta.state === 'reverted' ? '主程序已标记撤销；此处保留原修改证据。' : '', e.meta.oldPath ? `重命名来源：${e.meta.oldPath}` : '', e.before!.kind === 'unavailable' || e.after!.kind === 'unavailable' ? '历史完整内容不可用，无法可靠计算完整差异。' : ''].filter(Boolean).join(' ');
+          const note = ['原生历史修改事件；未读取当前文件。', e.meta.state === 'reverted' ? '主程序已标记撤销；此处保留原修改证据。' : '', e.meta.oldPath ? `重命名来源：${e.meta.oldPath}` : '', (old?.before ?? e.before!).kind === 'unavailable' || e.after!.kind === 'unavailable' ? '历史完整内容不可用，无法可靠计算完整差异。' : ''].filter(Boolean).join(' ');
           const discontinuous = !!e.conflicted || (!!old && (old.ambiguous || ((!e.toolOnly || e.capturedBefore) && old.after.kind === 'text' && e.before!.kind === 'text' && (old.after.hash !== e.before!.hash || old.after.exists !== e.before!.exists))));
           const segments: NonNullable<CapturedChange['segments']> = [...(old?.segments ?? []), { before: e.before!, after: e.after!, evidence: `native:${e.meta.messageId}`, ...(e.conflicted ? { ambiguous: true } : {}) }];
           // Retain conflicting answers off-screen, so retiring a source cannot erase the conflict on restart.
@@ -465,9 +468,9 @@ export class HostHistoryImporter {
         if (Object.keys(changes).length > 256) { warn('Turn exceeds 256 files; import skipped'); d.skipped++; continue; }
         const stopped = last?.meta.status === 'aborted' || children.some(child => ['aborted', 'stopped'].includes(child.status));
         const failed = last?.meta.status === 'error' || children.some(child => child.status === 'failed');
-        const incomplete = stopped || failed || Object.values(changes).some(c => c.ambiguous || c.before.kind === 'unavailable' || c.after.kind === 'unavailable') || (!replyId && !live);
-        const unresolved = !statusKnown && !replyId && !live;
-        const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live || unresolved ? undefined : Math.max(retainedReply ? saved!.endedAt! : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map(child => child.completedAt ?? 0)), state: live ? 'running' : stopped ? 'aborted' : failed ? 'incomplete' : replyId ? 'completed' : unresolved ? 'unknown' : 'incomplete', fileCount: Object.keys(changes).length, incomplete: incomplete || unresolved, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? '执行状态证据缺失或过期，待核验；不代表任务已结束。' : incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
+        const incomplete = stopped || failed || Object.values(changes).some(c => c.ambiguous || c.before.kind === 'unavailable' || c.after.kind === 'unavailable') || (!replyId && !live && !settled);
+        const unresolved = !statusKnown && !replyId && !live && !settled;
+        const run: HostHistoryRun = { version: 2, id, sessionId, root, generation: 'host-history', source: 'host-history', userMessageId: user.id, replyMessageId: replyId, boundary: 'user', startedAt: user.createdAt, endedAt: live || unresolved ? undefined : settled ? saved!.endedAt : Math.max(retainedReply ? saved!.endedAt! : last?.createdAt ?? turnEvents.at(-1)?.message.createdAt ?? user.createdAt, ...children.map(child => child.completedAt ?? 0)), state: live ? 'running' : stopped ? 'aborted' : failed ? 'incomplete' : replyId || settled ? 'completed' : unresolved ? 'unknown' : 'incomplete', fileCount: Object.keys(changes).length, incomplete: incomplete || unresolved, changes, replies: [], bindings: previous?.replyMessageId === replyId ? previous?.bindings ?? {} : {}, notice: unresolved ? '执行状态证据缺失或过期，待核验；不代表任务已结束。' : incomplete ? '从主程序历史恢复；部分证据或最终回复不可用。' : '从主程序历史证据恢复；文件模式未知，不代表当前磁盘状态。' };
         run.delegations = children.length ? children : undefined;
         if (live) run.bindings = {};
         if (duplicates.length) {

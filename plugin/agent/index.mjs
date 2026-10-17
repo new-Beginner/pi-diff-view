@@ -1073,9 +1073,17 @@ var init_storage = __esm({
                 await this.audit({ action: "inbox-identity-root-conflict", runId: id3, sessionId: run.sessionId });
                 continue;
               }
+              if (current?.execution && run.execution && current.execution.id !== run.execution.id) {
+                await this.audit({ action: "inbox-execution-conflict", runId: id3, sessionId: run.sessionId });
+                continue;
+              }
               if (current && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root)) {
                 if ((run.contentVersion ?? 0) < (current.contentVersion ?? 0) && !current.hostRecovery) continue;
                 if (current.execution && run.execution?.id === current.execution.id && run.execution.revision < current.execution.revision) continue;
+              }
+              if (current?.execution && run.execution?.id === current.execution.id && current.boundary === "user" && current.userMessageId && !run.userMessageId) {
+                run.userMessageId = current.userMessageId;
+                run.boundary = "user";
               }
               if (current?.hostRecovery && (run.contentVersion ?? 0) <= current.hostRecovery.captureVersion) continue;
               if (current?.hostRecovery?.files && current.sessionId === run.sessionId && canonical(current.root) === canonical(run.root) && (!run.userMessageId || run.userMessageId === current.userMessageId)) {
