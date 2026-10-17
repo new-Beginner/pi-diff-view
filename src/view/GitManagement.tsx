@@ -25,6 +25,27 @@ function localizedNotice(value: string): string {
   if (value === 'Showing at most 100 stashes.') return '最多显示 100 条 Stash。';
   return value;
 }
+const branchActions: Record<string, string> = { branchSwitch: '切换', branchRename: '重命名', branchDelete: '安全删除' };
+function branchIssue(args: ManagementArgs, error: Error & { code?: string }) {
+  const action = branchActions[args.operation];
+  if (!action) return undefined;
+  const raw = error.message ?? '', code = error.code ?? raw.match(/^([A-Z_]+):/)?.[1];
+  const overwrite = /would be overwritten|would be lost/i.test(raw);
+  const unknown = code === 'GIT_TIMEOUT' || /timed out|still running/i.test(raw);
+  const messages: Record<string, string> = {
+    STALE_BRANCH: '分支或 HEAD 已发生变化。请刷新列表，核对后重新确认。',
+    BRANCH_NOT_FOUND: '该本地分支已不存在。请刷新列表。',
+    BRANCH_EXISTS: '目标分支名已存在。请选择其他名称，不会覆盖已有分支。',
+    BRANCH_IN_USE: '分支正在其他 worktree 中使用。请先在对应 worktree 处理，再刷新重试。',
+    CURRENT_BRANCH: '不能删除当前分支。请先切换到其他分支。',
+    UNMERGED_BRANCH: '分支尚未安全合并；已拒绝删除，不提供强制删除。',
+    OPERATION_IN_PROGRESS: '仓库正在合并、变基或拣选。请先完成或中止该操作。',
+    GIT_LOCKED: 'Git 锁或权限阻止了操作。请确认其他 Git 进程已结束；不要盲目删除锁文件。',
+    INVALID_REF: '分支名无效。请输入有效的本地分支名。',
+  };
+  return { title: unknown ? `${action}结果待核对：${args.name}` : args.operation === 'branchSwitch' ? `无法切换到 ${args.name}` : `无法${action} ${args.name}`,
+    overwrite, message: unknown ? '等待结果超时，操作可能已执行。请刷新核对实际分支状态，不要重复执行。' : overwrite ? '切换会覆盖本地改动。请先提交，或将改动保存到 Stash。' : messages[code ?? ''] ?? 'Git 未能完成操作。请查看原始信息，处理后再手动尝试。' };
+}
 /** Host must route gitManage through its background job transport (commit hooks can take 90s).
  * This component only uses transport.invoke('gitManage', {operation, root, ...}).
  */
@@ -38,7 +59,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const [detail, setDetail] = useState<ManagementText>();
   const filePage = page === 'workspace' || page === 'staged';
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
-  const [switchFailure, setSwitchFailure] = useState<{ name: string; overwrite: boolean }>();
+  const [switchFailure, setSwitchFailure] = useState<ReturnType<typeof branchIssue>>();
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true);
   const [loadedPage, setLoadedPage] = useState<Page>();
   const source = useRef({ root, transport });
@@ -122,22 +143,33 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     const current = ++generation.current;
     detailTicket.current++; preview.invalidate(); setDetailLoading(false);
     running.current = true; setBusy(mutation); setLoading(!mutation); setLoadedPage(undefined); setError(''); setSwitchFailure(undefined); setNotice(''); setDetail(undefined);
+    let succeeded = false;
     try {
       if (args) {
-        const result = await invoke<ManagementText & { ok?: boolean; oid?: string }>(args);
+        const result = await invoke<ManagementText & { ok?: boolean; oid?: string; repository?: ManagementRepository }>(args);
         if (current !== generation.current) return;
         if ('text' in result) setDetail(result);
         if (mutation) {
-          setNotice(args.operation === 'commit' ? `Commit 已创建${result.oid ? `：${String(result.oid).slice(0, 10)}` : ''}，可在历史查看。${result.notice ?? ''}` : '操作已完成。');
+          succeeded = true;
+          if (result.repository) setStatus({ ...result.repository, entries: [] });
+          const completed = args.operation === 'branchSwitch' ? `已切换到 ${args.name}。` : args.operation === 'branchRename' ? `已将 ${args.name} 重命名为 ${args.newName}。` : args.operation === 'branchDelete' ? `已安全删除 ${args.name}。` : args.operation === 'commit' ? `Commit 已创建${result.oid ? `：${String(result.oid).slice(0, 10)}` : ''}，可在历史查看。` : '操作已完成。';
+          setNotice(completed + (result.notice ?? ''));
           if (args.operation === 'commit') { setMessage(''); setDescription(''); }
+          if (args.operation === 'branchRename') setNewName('');
         }
       }
-      if (!args || mutation) await refreshData(current, page, offset);
+      if (!args || mutation) {
+        try { await refreshData(current, page, offset); }
+        catch (cause) {
+          if (!succeeded) throw cause;
+          if (current === generation.current) setNotice(previous => `${previous} 数据刷新失败，请点击刷新核对；不要重复执行已完成的操作。${(cause as Error)?.message ?? cause}`);
+        }
+      }
     } catch (cause) {
       if (current === generation.current) {
         const e = cause as Error & { code?: string };
         setError(`${e.code ? `${e.code}: ` : ''}${e.message ?? String(cause)}`);
-        if (args?.operation === 'branchSwitch') setSwitchFailure({ name: args.name ?? '', overwrite: /would be overwritten/i.test(e.message ?? '') });
+        if (args) setSwitchFailure(branchIssue(args, e));
         // Failed hooks/stash apply can still modify files. Never retry an operation automatically.
         if (mutation) {
           try { await refreshData(current, page, offset); } catch { /* Preserve the actionable original error. */ }
@@ -145,7 +177,11 @@ export function GitManagement({ transport, root, base, active = true }: { transp
       }
     } finally { if (current === generation.current) { running.current = false; setBusy(false); setLoading(false); } }
   };
-  const ask = (args: ManagementArgs, description: string) => { openerRef.current = document.activeElement as HTMLElement | null; setConfirmation({ args, description }); };
+  const ask = (args: ManagementArgs, description: string) => {
+    if (running.current || loading || !activeRef.current) return;
+    const target = branchActions[args.operation] ? { ...args, name: args.name?.trim(), newName: args.newName?.trim(), oid: branches.find(branch => branch.name === args.name)?.oid, expectedHead: status?.head, expectedBranch: status?.branch } : args;
+    openerRef.current = document.activeElement as HTMLElement | null; setConfirmation({ args: target, description });
+  };
   const changeFiles = (operation: 'stage' | 'unstage', paths: string[]) => void execute({ operation, paths }, true);
   const visible = useMemo(() => (status?.entries ?? []).filter(entry => page === 'staged' ? ![' ', '?'].includes(entry.index) : entry.working !== ' '), [status, page]);
   const actionable = useMemo(() => visible.filter(entry => !entry.blocked), [visible]);
@@ -187,8 +223,8 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     {busy && <p role="status">正在执行 Git，请勿重复操作…</p>}
     {loading && <p role="status">正在读取 Git 数据…</p>}
     {error && (switchFailure ? <section className="gm-error gm-switch-error" role="alert">
-      <strong>无法切换到 {switchFailure.name}</strong>
-      <p>{switchFailure.overwrite ? '切换会覆盖本地改动。请先提交，或将改动保存到 Stash。' : 'Git 未能完成切换。请查看原始信息，处理后再手动尝试。'}</p>
+      <strong>{switchFailure.title}</strong>
+      <p>{switchFailure.message}</p>
       {switchFailure.overwrite && <div className="gm-toolbar"><button disabled={busy} onClick={() => { setPage('workspace'); setOffset(0); }}>查看工作区</button><button disabled={busy} onClick={() => { setPage('stash'); setOffset(0); }}>前往 Stash</button></div>}
       <details><summary>查看 Git 原始信息</summary><pre>{error}</pre></details>
     </section> : <pre className="gm-error" role="alert">{error}</pre>)}
@@ -233,7 +269,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         <label className="gm-field">重命名目标<input value={newName} onChange={e => setNewName(e.target.value)} /></label>
         <ul className="gm-list gm-records gm-branches">{branches.map(branch => <li key={branch.name}><strong className="gm-path" title={`${branch.name}${branch.current ? ' · 当前' : ''}`}>{branch.name}{branch.current ? ' · 当前' : ''}</strong>
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchSwitch', name: branch.name }, `切换到 ${branch.name}？本地改动会保留；若切换会覆盖改动，Git 将拒绝执行。不会强制覆盖，也不会自动创建或恢复 Stash。`)}>切换</button>
-          <button disabled={!newName.trim()} onClick={() => ask({ operation: 'branchRename', name: branch.name, newName }, `将 ${branch.name} 重命名为 ${newName}？`)}>重命名</button>
+          <button disabled={!newName.trim() || newName.trim() === branch.name} onClick={() => ask({ operation: 'branchRename', name: branch.name, newName: newName.trim() }, `将 ${branch.name} 重命名为 ${newName.trim()}？不会覆盖已有分支。`)}>重命名</button>
           <button disabled={branch.current} onClick={() => ask({ operation: 'branchDelete', name: branch.name }, `安全删除 ${branch.name}？只允许删除已合入 HEAD 的非当前分支，不支持强制删除。`)}>安全删除</button>
         </li>)}</ul>{!branches.length && !loading && <p>暂无本地分支。</p>}
       </>}

@@ -15,18 +15,20 @@ import { ReadWriteQueue } from '../core/read-write-queue';
 export interface ManagementEntry { path: string; index: string; working: string; blocked?: string; stats?: ManagementStat; }
 export interface ManagementRepository { root: string; branch: string | null; head: string | null; }
 export interface ManagementStatus extends ManagementRepository { entries: ManagementEntry[]; }
-export interface ManagementBranch { name: string; oid: string; current: boolean; }
+export interface ManagementBranch { name: string; oid: string; current: boolean; worktreePath?: string; }
 export interface ManagementCommit { oid: string; author: string; date: string; subject: string; }
 export interface ManagementStash { ref: string; oid: string; subject: string; }
 export interface ManagementText { text: string; truncated: boolean; notice?: string; }
 export interface ManagementStat { path: string; additions: number | null; deletions: number | null; kind?: 'binary' | 'large' | 'unknown'; }
 export interface ManagementCommitFile extends ManagementStat { status: string; blocked?: string; }
 export interface ManagementCommitFiles { oid: string; parent: string | null; entries: ManagementCommitFile[]; }
+export interface ManagementBranchResult { ok: true; repository?: ManagementRepository; notice?: string; }
 export interface ManagementArgs {
   operation: string; root?: string; paths?: string[]; path?: string; scope?: 'workspace' | 'staged';
   message?: string; summary?: string; description?: string; name?: string; newName?: string; ref?: string; oid?: string;
   confirmed?: boolean; includeUntracked?: boolean; skip?: number; limit?: number;
   fingerprint?: string; includeRepository?: boolean; summaryOnly?: boolean; includeStats?: boolean;
+  expectedHead?: string | null; expectedBranch?: string | null;
 }
 const mutations = new Set(['stage', 'unstage', 'discard', 'commit', 'branchCreate', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
 const confirmation = new Set(['discard', 'commit', 'branchSwitch', 'branchRename', 'branchDelete', 'stashCreate', 'stashApply', 'stashPop', 'stashDrop']);
@@ -93,17 +95,25 @@ async function selected(root: string, values: unknown): Promise<string[]> {
   if (!Array.isArray(values) || !values.length || values.length > 500) fail('INVALID_PATH', 'Select between 1 and 500 explicit file paths.');
   return [...new Set(await Promise.all(values.map(value => filePath(root, value))))];
 }
+async function currentBranch(root: string): Promise<string | null> {
+  const branch = await git(root, ['symbolic-ref', '--quiet', 'HEAD'], { allowFailure: true });
+  if (branch.code === 1) return null;
+  if (branch.code !== 0) fail('GIT_FAILED', 'Could not read the current branch.');
+  const ref = branch.stdout.toString().trim();
+  if (!ref.startsWith('refs/heads/')) fail('INVALID_REF', 'HEAD does not point to a local branch.');
+  return ref.slice('refs/heads/'.length);
+}
 /** Header-only information: list pages must not scan or validate working files. */
 async function repositorySummary(root: string): Promise<ManagementRepository> {
-  const [head, branch] = await Promise.all([
-    headCommit(root), git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }),
-  ]);
-  return { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null };
+  const [head, branch] = await Promise.allSettled([headCommit(root), currentBranch(root)]);
+  if (head.status === 'rejected') throw head.reason;
+  if (branch.status === 'rejected') throw branch.reason;
+  return { root, branch: branch.value, head: head.value ?? null };
 }
 async function status(root: string, includeStats = false): Promise<ManagementStatus> {
   const [raw, head, branch] = await Promise.all([
     git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames']), headCommit(root),
-    git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }),
+    currentBranch(root),
   ]);
   const rows = records(raw.stdout);
   if (rows.length > 500) fail('GIT_LIMIT', 'More than 500 changed files. Use the Git CLI or narrow this repository.');
@@ -128,17 +138,47 @@ async function status(root: string, includeStats = false): Promise<ManagementSta
     }));
     entries.push(...batch);
   }
-  const result = { root, branch: branch.code === 0 ? branch.stdout.toString().trim() : null, head: head ?? null, entries };
+  const result = { root, branch, head: head ?? null, entries };
   if (includeStats && Buffer.byteLength(JSON.stringify(result)) > 48000) for (const entry of entries) delete entry.stats;
   if (Buffer.byteLength(JSON.stringify(result)) > 48000) fail('GIT_LIMIT', 'Status exceeds the panel budget. Use the Git CLI.');
   return result;
 }
 async function branchName(root: string, value: unknown): Promise<string> {
-  const name = text(value, 'Local branch name', 240);
+  const name = text(value, 'Local branch name', 240).trim();
   if (name.startsWith('-') || name === 'HEAD' || name.includes('@{')) fail('INVALID_REF', 'Use a literal local branch name.');
   const check = await git(root, ['check-ref-format', '--branch', name], { allowFailure: true });
   if (check.code !== 0) fail('INVALID_REF', 'Invalid local branch name.');
   return name;
+}
+/** Literal local refs only; NUL fields preserve worktree paths containing whitespace/newlines. */
+async function localBranches(root: string, name?: string): Promise<ManagementBranch[]> {
+  const raw = await run(root, ['for-each-ref', ...(name === undefined ? ['--count=201'] : []),
+    '--format=%(refname:strip=2)%00%(objectname)%00%(HEAD)%00%(worktreepath)%00', name === undefined ? 'refs/heads/' : `refs/heads/${name}`]);
+  const fields = raw.split('\0'), result: ManagementBranch[] = [];
+  for (let i = 0; i + 3 < fields.length; i += 4) {
+    const branch = fields[i].replace(/^\n/, '');
+    if (name !== undefined && branch !== name) continue;
+    result.push({ name: branch, oid: fields[i + 1], current: fields[i + 2] === '*', ...(fields[i + 3] ? { worktreePath: fields[i + 3] } : {}) });
+  }
+  return result;
+}
+async function branchResult(root: string): Promise<ManagementBranchResult> {
+  // The mutation has already succeeded. An optional read must never turn it into a failed write.
+  try { return { ok: true, repository: await repositorySummary(root) }; }
+  catch { return { ok: true, notice: '操作已完成，但仓库状态读取失败；请刷新核对，不要重复执行。' }; }
+}
+async function runBranch(root: string, args: string[]): Promise<void> {
+  try { await run(root, args); }
+  catch (cause) {
+    const error = cause as Error & { code?: string };
+    if (error.code === 'GIT_FAILED') {
+      if (/already (?:checked out|used by worktree)|used by worktree|checked out at/i.test(error.message)) fail('BRANCH_IN_USE', error.message);
+      if (/already exists/i.test(error.message)) fail('BRANCH_EXISTS', error.message);
+      if (/not fully merged/i.test(error.message)) fail('UNMERGED_BRANCH', error.message);
+      if (/cannot lock ref|\.lock.*(?:exists|permission denied)|unable to create.*\.lock/i.test(error.message)) fail('GIT_LOCKED', error.message);
+    }
+    throw cause;
+  }
 }
 async function requireHead(root: string): Promise<string> {
   return await headCommit(root) ?? fail('NO_HEAD', 'This repository has no commits. Stage files and create the first commit.');
@@ -415,26 +455,40 @@ export class LocalGitManagement {
       return { ok: true, oid, ...output(result) };
     }
     if (op === 'branches') {
-      const raw = await run(root, ['for-each-ref', '--count=201', '--format=%(refname:strip=2)%00%(objectname)%00%(HEAD)', 'refs/heads/']);
-      const branches = raw.trimEnd().split('\n').filter(Boolean).map(row => { const [name, oid, current] = row.split('\0'); return { name, oid, current: current === '*' }; });
+      const branches = await localBranches(root);
       return { branches: branches.slice(0, 200), truncated: branches.length > 200 };
     }
     if (op.startsWith('branch')) {
       const name = await branchName(root, args.name);
-      await requireHead(root);
-      if (op === 'branchCreate') await run(root, ['branch', '--', name, await resolveCommit(root, args.ref ?? 'HEAD')]);
+      const before = await repositorySummary(root);
+      if (!before.head) fail('NO_HEAD', 'This repository has no commits. Stage files and create the first commit.');
+      if ((args.expectedHead !== undefined && args.expectedHead !== before.head) || (args.expectedBranch !== undefined && args.expectedBranch !== before.branch)) fail('STALE_BRANCH', 'HEAD or current branch changed since confirmation. Refresh and confirm again.');
+      if (op === 'branchCreate') await runBranch(root, ['branch', '--', name, await resolveCommit(root, args.ref ?? 'HEAD')]);
       else {
-        await resolveCommit(root, `refs/heads/${name}`);
+        const target = (await localBranches(root, name))[0];
+        if (!target) fail('BRANCH_NOT_FOUND', 'The selected local branch no longer exists. Refresh the branch list.');
+        if (args.oid !== undefined && args.oid !== target.oid) fail('STALE_BRANCH', 'The selected branch changed since confirmation. Refresh and confirm again.');
+        if (op === 'branchDelete' && before.branch === name) fail('CURRENT_BRANCH', 'Cannot delete the current branch. Switch to another branch first.');
+        if (target.worktreePath && canonical(target.worktreePath) !== canonical(root)) fail('BRANCH_IN_USE', `Branch is in use by another worktree: ${target.worktreePath}`);
         if (op === 'branchSwitch') {
-          await run(root, ['switch', '--no-guess', '--', name]);
-        } else if (op === 'branchRename') await run(root, ['branch', '-m', '--', name, await branchName(root, args.newName)]);
-        else if (op === 'branchDelete') {
-          const merged = await git(root, ['merge-base', '--is-ancestor', `refs/heads/${name}`, 'HEAD'], { allowFailure: true });
-          if (merged.code !== 0) fail('UNMERGED_BRANCH', 'Branch is not fully merged into HEAD. Safe deletion refused; no force deletion is available.');
-          await run(root, ['branch', '-d', '--', name]);
+          await runBranch(root, ['switch', '--no-guess', '--', name]);
+        } else if (op === 'branchRename') {
+          const next = await branchName(root, args.newName);
+          if (next !== name) {
+            if ((await localBranches(root, next)).length) fail('BRANCH_EXISTS', 'The target local branch already exists. Choose another name.');
+            await runBranch(root, ['branch', '-m', '--', name, next]);
+          }
+        } else if (op === 'branchDelete') {
+          const merged = await git(root, ['merge-base', '--is-ancestor', target.oid, before.head], { allowFailure: true });
+          if (merged.code === 1) fail('UNMERGED_BRANCH', 'Branch is not fully merged into HEAD. Safe deletion refused; no force deletion is available.');
+          if (merged.code !== 0) fail('GIT_FAILED', 'Could not verify whether this branch is merged. Nothing was deleted.');
+          // Recheck after the ancestry read; native -d still supplies the final Git safety checks.
+          const latest = await repositorySummary(root), selected = (await localBranches(root, name))[0];
+          if (latest.head !== before.head || latest.branch !== before.branch || selected?.oid !== target.oid) fail('STALE_BRANCH', 'Repository changed while checking safe deletion. Refresh and confirm again.');
+          await runBranch(root, ['branch', '-d', '--', name]);
         }
       }
-      return { ok: true };
+      return branchResult(root);
     }
     if (op === 'history') {
       if (!(repository ? (await repository).head : await headCommit(root))) return { commits: [], hasMore: false, notice: 'No commits yet. Stage files and create the first commit.' };
