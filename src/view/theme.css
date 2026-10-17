@@ -60,6 +60,16 @@ html, body { margin: 0; color: var(--dv-ink); background: var(--dv-bg); font: 13
 .dv-panel-page { height: 100%; min-height: 0; min-width: 0; }
 .dv-panel-page[hidden] { display: none; }
 .dv-panel-page > .dv-app { height: 100%; min-height: 0; }
+.dv-git-workspace { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; }
+.dv-git-workspace > .dv-panel-page { flex: 1; height: auto; min-height: 0; }
+.dv-git-repositories { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; }
+.dv-git-repositories label { display: flex; align-items: center; gap: 6px; flex: 1 1 180px; min-width: 0; }
+.dv-git-repositories select { width: 0; min-width: 0; flex: 1; }
+.dv-git-repositories select, .dv-git-repositories button { font: inherit; color: var(--dv-text); background: var(--dv-bg); border: 1px solid var(--dv-control-border); border-radius: var(--dv-radius-control); padding: 5px 10px; min-height: 32px; }
+.dv-git-repositories button { cursor: pointer; }
+.dv-git-repositories button:hover:not(:disabled) { background: var(--dv-hover); }
+.dv-git-repositories :focus-visible { outline: 2px solid var(--dv-focus); outline-offset: 2px; }
+.dv-git-repositories :disabled { opacity: .5; cursor: not-allowed; }
 .dv-panel-message { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; padding: 24px 16px; overflow-wrap: anywhere; color: var(--dv-muted); line-height: 1.6; }
 .dv-panel-message[role='alert'] { color: var(--dv-red); background: var(--dv-del-bg); border-left: 3px solid var(--dv-red); padding: 12px 16px; }
 @keyframes dv-state-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }

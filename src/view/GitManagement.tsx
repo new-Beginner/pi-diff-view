@@ -49,7 +49,7 @@ function branchIssue(args: ManagementArgs, error: Error & { code?: string }) {
 /** Host must route gitManage through its background job transport (commit hooks can take 90s).
  * This component only uses transport.invoke('gitManage', {operation, root, ...}).
  */
-export function GitManagement({ transport, root, base, active = true }: { transport: UiTransport; root?: string; base?: 'light' | 'dark'; active?: boolean }) {
+export function GitManagement({ transport, root, base, active = true, onLockChange }: { transport: UiTransport; root?: string; base?: 'light' | 'dark'; active?: boolean; onLockChange?: (locked: boolean) => void }) {
   const [page, setPage] = useState<Page>('workspace');
   const [status, setStatus] = useState<ManagementStatus>();
   const [branches, setBranches] = useState<ManagementBranch[]>([]);
@@ -69,6 +69,8 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const [offset, setOffset] = useState(0), [hasMore, setHasMore] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation>();
   useEffect(() => { if (!active) setConfirmation(undefined); }, [active]);
+  const lockCallback = useRef(onLockChange); lockCallback.current = onLockChange;
+  useEffect(() => { lockCallback.current?.(busy || !!confirmation); return () => { lockCallback.current?.(false); }; }, [busy, !!confirmation]);
   const generation = useRef(0), running = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -83,7 +85,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   const fileScope = page === 'staged' ? 'staged' : 'workspace';
   const preview = useGitPreview(transport, root, fileScope);
   const statsStatus = source.current.root === root && source.current.transport === transport && filePage ? status : undefined;
-  const { values: stats, refreshing: refreshingStats } = useGitStats(transport, root, fileScope, statsStatus, filePage && loadedPage === page && !loading && !busy);
+  const { values: stats, refreshing: refreshingStats } = useGitStats(transport, root, fileScope, statsStatus, active && filePage && loadedPage === page && !loading && !busy);
   const readDetail = async (args: ManagementArgs) => {
     const id = ++detailTicket.current, current = generation.current;
     preview.collapse(); setDetailLoading(true); setError(''); setSwitchFailure(undefined);
@@ -127,13 +129,6 @@ export function GitManagement({ transport, root, base, active = true }: { transp
     return () => { generation.current++; };
     // Old responses cannot overwrite a newer project, page or pagination request.
   }, [root, transport, page, offset]);
-  useEffect(() => {
-    if (!active || !status || running.current) return;
-    const current = ++generation.current;
-    running.current = true; setLoading(true); setLoadedPage(undefined);
-    void refreshData(current, page, offset, true).catch(cause => { if (current === generation.current) setError(String(cause?.message ?? cause)); })
-      .finally(() => { if (current === generation.current) { running.current = false; setLoading(false); } });
-  }, [active]);
   const execute = async (args?: ManagementArgs, mutation = false) => {
     if (running.current) return;
     if (args && !mutation) { await readDetail(args); return; }

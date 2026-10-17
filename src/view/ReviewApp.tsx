@@ -178,14 +178,16 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   useEffect(() => {
     if (panelActive && sessionKey) invalidateSessionReads(transport, sessionKey);
   }, [transport, sessionKey, panelActive]);
+  const bootLoadedTick = useRef(-1);
   useEffect(() => {
-    if (!panelActive) return;
+    if (!panelActive || (boot && bootLoadedTick.current === bootTick)) return;
     let active = true; setBootError('');
     const load = () => {
       const version = { ...settingsVersion.current };
       return transport.invoke<Bootstrap>('bootstrap', { sessionId: initialRequest.sessionId }).then(data => {
       if (!active) return;
       setBoot(data);
+      bootLoadedTick.current = bootTick;
       if (version.layout === settingsVersion.current.layout) setLayout(data.settings.layout);
       if (version.wordWrap === settingsVersion.current.wordWrap) setWrap(data.settings.wordWrap);
       if (!hostLocale) setLocale(data.locale); if (!hostBase) setBase(data.base);

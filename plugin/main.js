@@ -61,8 +61,8 @@ function hostScratchRoot(value) {
 function assertSessionScratchPath(value, sessionId, projectRoot2) {
   const scratch = hostScratchRoot(value);
   if (!scratch || scratch.slice(scratch.lastIndexOf("/") + 1) === sessionId) return;
-  const portable = (path14) => {
-    const value2 = path14.replace(/\\/g, "/").replace(/\/$/, "");
+  const portable = (path16) => {
+    const value2 = path16.replace(/\\/g, "/").replace(/\/$/, "");
     return /^[a-z]:\//i.test(value2) ? value2.toLowerCase() : value2;
   };
   const assigned = projectRoot2 && hostScratchRoot(projectRoot2);
@@ -341,16 +341,16 @@ var init_base = __esm({
           }
         }
       }
-      addToPath(path14, added, removed, oldPosInc, options) {
-        const last = path14.lastComponent;
+      addToPath(path16, added, removed, oldPosInc, options) {
+        const last = path16.lastComponent;
         if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
           return {
-            oldPos: path14.oldPos + oldPosInc,
+            oldPos: path16.oldPos + oldPosInc,
             lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
           };
         } else {
           return {
-            oldPos: path14.oldPos + oldPosInc,
+            oldPos: path16.oldPos + oldPosInc,
             lastComponent: { count: 1, added, removed, previousComponent: last }
           };
         }
@@ -1360,8 +1360,8 @@ var ReadWriteQueue = class {
 };
 
 // src/main.ts
-var import_promises11 = __toESM(require("node:fs/promises"), 1);
-var import_node_path13 = __toESM(require("node:path"), 1);
+var import_promises12 = __toESM(require("node:fs/promises"), 1);
+var import_node_path15 = __toESM(require("node:path"), 1);
 var import_node_crypto10 = require("node:crypto");
 init_storage();
 
@@ -1442,7 +1442,7 @@ function finalReplyCandidates(content) {
 }
 
 // src/core/review-service.ts
-var import_node_path7 = __toESM(require("node:path"), 1);
+var import_node_path9 = __toESM(require("node:path"), 1);
 var import_node_crypto6 = require("node:crypto");
 init_contracts();
 init_path_policy();
@@ -2207,6 +2207,128 @@ async function applyGitAction(review, fileId, action, fingerprint, hunkId, backu
   }
 }
 
+// src/git/discovery.ts
+var import_promises7 = __toESM(require("node:fs/promises"), 1);
+var import_node_path7 = __toESM(require("node:path"), 1);
+init_path_policy();
+var SCAN_LIMITS = { directories: 2e3, entries: 2e4, depth: 6, repositories: 100 };
+function workspaceRoots(workspace) {
+  return [...new Map((workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : []).map((root) => [canonical(root), root])).values()];
+}
+async function authorizedRepositoryPath(requested, allowedRoots) {
+  if (typeof requested !== "string" || !import_node_path7.default.isAbsolute(requested)) fail("INVALID_ROOT", "Select an absolute project directory.");
+  const target = import_node_path7.default.resolve(requested);
+  for (const allowed of allowedRoots) {
+    const real = await import_promises7.default.realpath(allowed).catch(() => void 0);
+    if (!real) continue;
+    const base = inside(allowed, target) ? import_node_path7.default.resolve(allowed) : real;
+    if (!inside(base, target)) continue;
+    const relative = import_node_path7.default.relative(base, target);
+    const resolved = relative ? await safeResolve(real, relative) : real;
+    return import_promises7.default.realpath(resolved).catch(() => fail("INVALID_ROOT", "Project directory is unavailable."));
+  }
+  fail("ROOT_DENIED", "Repository is outside the authorized project directories.");
+}
+async function scanRepositories(roots) {
+  const repositories = [], seen = /* @__PURE__ */ new Set();
+  const queue = [];
+  let truncated2 = false, unavailable = false, entries = 0, gitCount = 0;
+  for (const root of roots) {
+    try {
+      const real = await import_promises7.default.realpath(root);
+      queue.push({ root: real, directory: real, depth: 0 });
+    } catch {
+      repositories.push({ root, name: import_node_path7.default.basename(root), git: false });
+      unavailable = true;
+    }
+  }
+  for (let index = 0; index < queue.length; index++) {
+    if (seen.size >= SCAN_LIMITS.directories || entries >= SCAN_LIMITS.entries || gitCount >= SCAN_LIMITS.repositories) {
+      truncated2 = true;
+      break;
+    }
+    const item = queue[index], key = canonical(item.directory);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (item.depth) await safeResolve(item.root, import_node_path7.default.relative(item.root, item.directory));
+      const marker = await import_promises7.default.lstat(import_node_path7.default.join(item.directory, ".git")).catch(() => void 0);
+      if (item.depth === 0 || marker && !marker.isSymbolicLink() && (marker.isFile() || marker.isDirectory())) {
+        const repo = await discoverRepository(item.directory);
+        if (repo.git || item.depth === 0) repositories.push(repo);
+        if (repo.git) gitCount++;
+      }
+      const children = [];
+      const directory = await import_promises7.default.opendir(item.directory);
+      for await (const entry of directory) {
+        if (++entries > SCAN_LIMITS.entries) {
+          truncated2 = true;
+          break;
+        }
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        try {
+          assertPublicPath(entry.name);
+        } catch {
+          continue;
+        }
+        if ([".workflow", ".agents", ".cache", "dist", "build", "vendor", ".venv", "venv"].includes(entry.name.toLowerCase())) continue;
+        if (item.depth >= SCAN_LIMITS.depth) {
+          truncated2 = true;
+          continue;
+        }
+        if (queue.length + children.length >= SCAN_LIMITS.directories) {
+          truncated2 = true;
+          continue;
+        }
+        children.push(entry.name);
+      }
+      for (const name2 of children.sort()) queue.push({ root: item.root, directory: import_node_path7.default.join(item.directory, name2), depth: item.depth + 1 });
+    } catch {
+      unavailable = true;
+    }
+  }
+  return { repositories, repositoryNotice: [truncated2 ? "\u4ED3\u5E93\u626B\u63CF\u8FBE\u5230\u4E0A\u9650\uFF086 \u5C42\u30012000 \u4E2A\u76EE\u5F55\u300120000 \u4E2A\u76EE\u5F55\u9879\u6216 100 \u4E2A\u4ED3\u5E93\uFF09\uFF1B\u53EF\u5C06\u66F4\u5C0F\u7684\u76EE\u5F55\u8BBE\u4E3A\u5DE5\u4F5C\u533A\u7EE7\u7EED\u7BA1\u7406\u3002" : "", unavailable ? "\u90E8\u5206\u76EE\u5F55\u4E0D\u53EF\u8BBF\u95EE\uFF0C\u5217\u8868\u53EF\u80FD\u4E0D\u5B8C\u6574\u3002" : ""].filter(Boolean).join(" ") || void 0 };
+}
+
+// src/core/repository-selection.ts
+var import_node_path8 = __toESM(require("node:path"), 1);
+init_path_policy();
+init_storage();
+function workspaceKey(roots) {
+  return digest(JSON.stringify(roots.map(canonical).sort()));
+}
+function validateSession(sessionId) {
+  if (sessionId !== void 0 && (typeof sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(sessionId))) fail("SESSION_REQUIRED", "Invalid session identity");
+}
+var RepositorySelection = class {
+  constructor(directory) {
+    this.directory = directory;
+  }
+  tail = Promise.resolve();
+  async read() {
+    const rows = await readJson(import_node_path8.default.join(this.directory, "repository-selection.json"), []);
+    return Array.isArray(rows) ? rows.filter((row) => row && typeof row.workspace === "string" && typeof row.root === "string" && import_node_path8.default.isAbsolute(row.root) && (row.sessionId === void 0 || typeof row.sessionId === "string")).slice(-200) : [];
+  }
+  async get(workspace, sessionId) {
+    validateSession(sessionId);
+    await this.tail;
+    const rows = await this.read();
+    return rows.find((row) => row.workspace === workspace && row.sessionId === sessionId)?.root ?? rows.find((row) => row.workspace === workspace && !row.sessionId)?.root;
+  }
+  set(workspace, root, sessionId) {
+    validateSession(sessionId);
+    const task = this.tail.then(async () => {
+      const rows = (await this.read()).filter((row) => row.workspace !== workspace || row.sessionId !== void 0 && row.sessionId !== sessionId);
+      rows.push({ workspace, root });
+      if (sessionId) rows.push({ workspace, sessionId, root });
+      await atomicJson(import_node_path8.default.join(this.directory, "repository-selection.json"), rows.slice(-200));
+    });
+    this.tail = task.catch(() => {
+    });
+    return task;
+  }
+};
+
 // src/core/review-service.ts
 function runSummary(run2) {
   return { id: run2.id, sessionId: run2.sessionId, root: run2.root, startedAt: run2.startedAt, endedAt: run2.endedAt, state: run2.state, fileCount: Object.keys(run2.changes).filter((value) => !isImagePath(value)).length, incomplete: run2.incomplete };
@@ -2225,12 +2347,14 @@ var ReviewService = class {
     this.store = store2;
     this.host = host;
     this.generation = generation2;
+    this.repositorySelection = new RepositorySelection(store2.directory);
   }
   reviews = /* @__PURE__ */ new Map();
   allowed = /* @__PURE__ */ new Set();
   mutableRoots = /* @__PURE__ */ new Set();
   summaries = /* @__PURE__ */ new Map();
   mutations = Promise.resolve();
+  repositorySelection;
   async authorize(sessionId, run2) {
     const workspace = await this.host.workspace();
     const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
@@ -2247,26 +2371,17 @@ var ReviewService = class {
     return run2;
   }
   async bootstrap(sessionId) {
-    const workspace = await this.host.workspace();
-    const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
-    const repositories = [];
-    this.allowed = new Set(roots.map(canonical));
-    for (const root of roots) {
-      if (repositories.some((r) => canonical(r.root) === canonical(root))) continue;
-      try {
-        const repo = await discoverRepository(root);
-        if (!repositories.some((r) => canonical(r.root) === canonical(repo.root))) repositories.push(repo);
-        this.allowed.add(canonical(repo.root));
-      } catch {
-        repositories.push({ root, name: import_node_path7.default.basename(root), git: false });
-      }
-    }
+    const roots = workspaceRoots(await this.host.workspace());
+    const { repositories, repositoryNotice } = await scanRepositories(roots);
+    const key = workspaceKey(roots);
+    const selectedRepository = await this.repositorySelection.get(key, sessionId) ?? repositories.find((repo) => repo.git)?.root;
+    this.allowed = new Set([...roots, ...repositories.map((repo) => repo.root)].map(canonical));
     this.mutableRoots = new Set(this.allowed);
     const runs = (await this.store.listRuns(false, true)).filter((r) => Object.keys(r.changes).length > 0 || r.version === 2 && r.boundary === "user" && r.state === "running");
     const filtered = sessionId ? runs.filter((r) => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({})), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, workspaceKey: key, selectedRepository, repositoryNotice, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark", settings: { layout: settings.layout === "split" ? "split" : "unified", wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   validateTurn(args, requireRun = true) {
     if (typeof args.sessionId !== "string" || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail("SESSION_REQUIRED", "A valid sessionId is required for recorded turns");
@@ -2329,7 +2444,7 @@ var ReviewService = class {
     return { runId: run2.id, sessionId: run2.sessionId, startedAt: run2.startedAt, fileCount: summary.fileCount, additions: summary.additions, deletions: summary.deletions, unknownFileCount: summary.unknownFileCount, locale: appearance.locale ?? "zh-CN", base: appearance.base === "light" ? "light" : "dark" };
   }
   async summarizeRun(run2, args, readOnly = false, netOnly = false) {
-    const states2 = readOnly ? {} : await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
+    const states2 = readOnly ? {} : await readJson(import_node_path9.default.join(this.store.directory, "restores.json"), {});
     const { bindings: _bindings, cardPreview: _preview, ...content } = run2;
     const key = digest(JSON.stringify(["stats-known-v1", content, states2, readOnly ? [] : [...this.mutableRoots].sort(), readOnly, netOnly]));
     let cached = this.summaries.get(run2.id);
@@ -2412,7 +2527,7 @@ var ReviewService = class {
       } else {
         root = run2.root;
         if (!readOnly && !this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Recorded project is not authorized in this view");
-        const states2 = await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path9.default.join(this.store.directory, "restores.json"), {});
         const entries = Object.entries(run2.changes).filter(([value]) => !isImagePath(value));
         for (let offset = 0; offset < entries.length; offset += 16) {
           const currentRun = run2;
@@ -2426,9 +2541,12 @@ var ReviewService = class {
         notice = turnNotice(run2);
       }
     } else {
-      await this.authorize();
-      if (!root) root = (await this.host.workspace())?.path;
-      if (!root || !this.allowed.has(canonical(root))) fail("ROOT_DENIED", "Select an authorized project folder");
+      const roots = workspaceRoots(await this.host.workspace());
+      if (!root) root = roots.length === 1 ? roots[0] : void 0;
+      if (!root) fail("ROOT_DENIED", "Select an authorized project folder");
+      root = await authorizedRepositoryPath(root, roots);
+      this.allowed = new Set([...roots, root].map(canonical));
+      this.mutableRoots = new Set(this.allowed);
       git2 = await readGitReview(root, request.scope, request.ref);
       root = git2.root;
       files = git2.files.map((file) => ({ ...file, statsKnown: file.statsKnown ?? file.kind === "text", ...file.kind !== "text" || file.statsKnown === false ? { additions: 0, deletions: 0 } : {} }));
@@ -2508,7 +2626,7 @@ var ReviewService = class {
   async hydrateFile(review, file) {
     if (!review.run || review.hydratedFiles?.has(file.id)) return;
     const change = review.run.changes[file.path];
-    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {})]);
+    const [before, after, states2] = await Promise.all([this.hydrateSnapshot(change.before), this.hydrateSnapshot(change.after), readJson(import_node_path9.default.join(this.store.directory, "restores.json"), {})]);
     Object.assign(file, this.turnFile(review.run, file.path, { ...change, before, after }, states2, !review.readOnly));
     review.hydratedFiles?.add(file.id);
   }
@@ -2574,7 +2692,7 @@ var ReviewService = class {
       if (file) await this.hydrateFile(review, file);
       if (!file || file.fingerprint !== args.fingerprint || !file.actions.includes(args.action)) fail("ACTION_DENIED", "Action is not available for this version");
       if (file.origin === "external" || !this.mutableRoots.has(canonical(review.summary.root))) fail("ACTION_DENIED", "External or historical project captures are read-only");
-      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path7.default.join(this.store.directory, "backups"));
+      if (review.git) await applyGitAction(review.git, file.id, args.action, args.fingerprint, args.hunkId, import_node_path9.default.join(this.store.directory, "backups"));
       else if (review.run) {
         if (args.hunkId) fail("ACTION_DENIED", "Turn restore requires a complete file snapshot");
         await this.store.importInbox(this.generation);
@@ -2583,12 +2701,12 @@ var ReviewService = class {
         const latestChange = latest.changes[file.path];
         if (latestChange?.capture?.origin !== "workspace") fail("ACTION_DENIED", "External captures cannot authorize mutations");
         if (!latestChange || !sameSnapshot(latestChange.before, file.before) || !sameSnapshot(latestChange.after, file.after)) fail("FILE_CONFLICT", "Captured file version changed; refresh");
-        const states2 = await readJson(import_node_path7.default.join(this.store.directory, "restores.json"), {});
+        const states2 = await readJson(import_node_path9.default.join(this.store.directory, "restores.json"), {});
         const key = `${review.run.id}:${file.path}`;
         if (states2[key] === "reverted" !== (args.action === "reapply")) fail("FILE_CONFLICT", "Restore state changed; refresh");
-        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path7.default.join(this.store.directory, "backups"));
+        await replaceSnapshot(review.summary.root, file.path, args.action === "reapply" ? file.before : file.after, args.action === "reapply" ? file.after : file.before, import_node_path9.default.join(this.store.directory, "backups"));
         states2[key] = args.action === "reapply" ? "active" : "reverted";
-        await atomicJson(import_node_path7.default.join(this.store.directory, "restores.json"), states2);
+        await atomicJson(import_node_path9.default.join(this.store.directory, "restores.json"), states2);
       } else fail("ACTION_DENIED", "Read-only scope");
       await this.store.audit({ action: args.action, root: review.summary.root, path: file.path, runId: review.run?.id, hunkId: args.hunkId });
       this.reviews.delete(args.reviewId);
@@ -2731,6 +2849,14 @@ ${text2}`;
     switch (method) {
       case "bootstrap":
         return this.bootstrap(args.sessionId);
+      case "selectRepository": {
+        const roots = workspaceRoots(await this.host.workspace()), key = workspaceKey(roots);
+        if (args.workspaceKey && args.workspaceKey !== key) fail("ROOT_DENIED", "\u5DE5\u4F5C\u533A\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u626B\u63CF\u4ED3\u5E93\u540E\u9009\u62E9\u3002");
+        const root = await authorizedRepositoryPath(args.root, roots);
+        if (!(await discoverRepository(root, false)).git) fail("NO_REPOSITORY", "Selected directory is not a Git repository root.");
+        await this.repositorySelection.set(key, root, args.sessionId);
+        return { ok: true };
+      }
       case "review":
         return this.review(args);
       case "reviewFiles":
@@ -2777,7 +2903,7 @@ ${text2}`;
       case "copyPath": {
         const review = this.get(args.reviewId), file = review.files.find((file2) => file2.id === args.fileId);
         if (!file) fail("FILE_NOT_FOUND", "No validated review file for this path");
-        const value = file.absolutePath ?? import_node_path7.default.resolve(review.summary.root, file.path);
+        const value = file.absolutePath ?? import_node_path9.default.resolve(review.summary.root, file.path);
         assertPublicPath(file.path);
         await this.host.clipboard(value);
         return { ok: true };
@@ -2828,7 +2954,7 @@ var JobQueue = class {
   }
   start(method, args) {
     if (this.closed) fail("PLUGIN_UNLOADED", "Diff view is closed");
-    if (!["sessionEvidence", "gitManage", "sessionContext", "captureMaintenance", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
+    if (!["sessionEvidence", "gitManage", "selectRepository", "sessionContext", "captureMaintenance", "bootstrap", "review", "action", "batchAction", "copyPatch", "clearHistory", "turnSummary", "runningChanges", "selectTurn", "openSystemFile", "card", "replyCards"].includes(method)) fail("JOB_DENIED", "This method is not a background operation");
     const navigation2 = method === "selectTurn", systemOpen = method === "openSystemFile";
     if ([...this.jobs.values()].filter((j) => j.state === "pending" && !!j.navigation === navigation2 && !!j.systemOpen === systemOpen).length >= (navigation2 || systemOpen ? 1 : 4)) fail("JOB_BUSY", "Too many pending review operations");
     for (const [id3, j] of this.jobs) if (j.state !== "pending" && (Date.now() - j.at > 6e4 || this.jobs.size > 8)) this.jobs.delete(id3);
@@ -3086,8 +3212,8 @@ function collectDelegations(messages, ownerOf) {
 }
 
 // src/core/host-history.ts
-var import_promises7 = __toESM(require("node:fs/promises"), 1);
-var import_node_path8 = __toESM(require("node:path"), 1);
+var import_promises8 = __toESM(require("node:fs/promises"), 1);
+var import_node_path10 = __toESM(require("node:path"), 1);
 init_contracts();
 init_path_policy();
 
@@ -3193,13 +3319,13 @@ var HostHistoryImporter = class {
   }
   capture(root, value, sessionId) {
     assertPublicPath(value);
-    const absolutePath = import_node_path8.default.resolve(root, value);
+    const absolutePath = import_node_path10.default.resolve(root, value);
     assertSessionScratchPath(absolutePath, sessionId, root);
     assertPublicPath(absolutePath);
     if (this.archive && inside(this.archive.privateRoot, absolutePath) && !inside(this.archive.scratchRoot(sessionId), absolutePath) || inside(this.store.directory, absolutePath)) throw new Error("Private history path");
     const origin = inside(root, absolutePath) ? "workspace" : "external";
-    if (origin === "external" && !import_node_path8.default.isAbsolute(value)) throw new Error("Relative external history path");
-    const display = origin === "workspace" ? import_node_path8.default.relative(root, absolutePath).split(import_node_path8.default.sep).join("/") : absolutePath;
+    if (origin === "external" && !import_node_path10.default.isAbsolute(value)) throw new Error("Relative external history path");
+    const display = origin === "workspace" ? import_node_path10.default.relative(root, absolutePath).split(import_node_path10.default.sep).join("/") : absolutePath;
     assertPublicPath(display);
     const identity2 = canonical(absolutePath);
     return { id: digest(identity2).slice(0, 24), identity: identity2, path: display, absolutePath, origin };
@@ -3218,8 +3344,8 @@ var HostHistoryImporter = class {
     return unknownSnapshot(exists !== false, hash, `${m.messageId}:${side}`);
   }
   async syncSession(sessionId, root, options = {}) {
-    if (!ID.test(sessionId) || !import_node_path8.default.isAbsolute(root)) throw new Error("Invalid history session/root");
-    root = import_node_path8.default.resolve(root);
+    if (!ID.test(sessionId) || !import_node_path10.default.isAbsolute(root)) throw new Error("Invalid history session/root");
+    root = import_node_path10.default.resolve(root);
     const capture = (value) => this.capture(root, value, sessionId);
     const running = typeof options === "boolean" ? options : options.running === true;
     const mainRunning = typeof options === "boolean" ? options : options.mainRunning ?? running;
@@ -3355,12 +3481,12 @@ var HostHistoryImporter = class {
           continue;
         }
         const name2 = explicitToolName(b.name), target = b.args?.path ?? b.args?.file_path;
-        const native = ["write", "edit"].includes(name2) && typeof target === "string" && (!this.archive || import_node_path8.default.isAbsolute(target) || this.isScratch(root, sessionId));
+        const native = ["write", "edit"].includes(name2) && typeof target === "string" && (!this.archive || import_node_path10.default.isAbsolute(target) || this.isScratch(root, sessionId));
         const text2 = name2 === "write" && typeof b.args?.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
         add({ ...native ? { version: 1, path: target, operation: name2 } : {}, ...review, messageId: b.callId, sessionId, beforeExists: review.beforeExists ?? (review.status === "added" ? false : void 0), afterExists: review.afterExists ?? (review.status === "deleted" ? false : text2 !== void 0 ? true : void 0), afterHash: review.afterHash ?? (text2 !== void 0 ? digest(text2) : void 0) }, void 0, review.path === void 0);
       } else {
         const name2 = String(b.name).split(".").pop().toLowerCase(), target = b.args?.path ?? b.args?.file_path;
-        if (!["write", "edit"].includes(name2) || typeof target !== "string" || this.archive && !import_node_path8.default.isAbsolute(target) && !this.isScratch(root, sessionId) || typeof b.callId !== "string") continue;
+        if (!["write", "edit"].includes(name2) || typeof target !== "string" || this.archive && !import_node_path10.default.isAbsolute(target) && !this.isScratch(root, sessionId) || typeof b.callId !== "string") continue;
         const text2 = name2 === "write" && typeof b.args.content === "string" && Buffer.byteLength(b.args.content) <= MAX_TEXT_BYTES ? b.args.content : void 0;
         add({ version: 1, sessionId, messageId: b.callId, path: target, operation: name2, ...text2 !== void 0 ? { afterExists: true, afterHash: digest(text2) } : {} }, void 0, true);
       }
@@ -3652,11 +3778,11 @@ var HostHistoryImporter = class {
             warn2("Existing run root conflict; content frozen; verified repair requires explicit approval");
             continue;
           }
-          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises7.default.readFile(import_node_path8.default.join(this.store.directory, file), "utf8").catch((error) => {
+          const reviewState2 = Object.fromEntries(await Promise.all(["comments.json", "selections.json", "restores.json", "run-aliases.json", "file-aliases.json"].map(async (file) => [file, await import_promises8.default.readFile(import_node_path10.default.join(this.store.directory, file), "utf8").catch((error) => {
             if (error.code === "ENOENT") return null;
             throw error;
           })])));
-          await atomicJson(import_node_path8.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
+          await atomicJson(import_node_path10.default.join(this.store.directory, "backups", `repair-${id2}-${previous.contentVersion ?? 0}.json`), { version: 1, sessionId, root, previous, duplicates, reviewState: reviewState2, createdAt: Date.now() });
         }
         if (!turnEvents.length && !live && !duplicate && !previous) continue;
         const saved = previous ?? (duplicate ? await this.store.getRun(duplicate.id) : null);
@@ -3878,8 +4004,8 @@ function applyReview(before, hunks, expected) {
 }
 
 // src/core/host-evidence-store.ts
-var import_promises8 = __toESM(require("node:fs/promises"), 1);
-var import_node_path9 = __toESM(require("node:path"), 1);
+var import_promises9 = __toESM(require("node:fs/promises"), 1);
+var import_node_path11 = __toESM(require("node:path"), 1);
 init_storage();
 init_path_policy();
 
@@ -3941,14 +4067,14 @@ var LIMIT = 8 * 1024 * 1024;
 var HostEvidenceStore = class {
   directory;
   constructor(dataPath) {
-    this.directory = import_node_path9.default.join(dataPath, "evidence");
+    this.directory = import_node_path11.default.join(dataPath, "evidence");
   }
   file(sessionId, root) {
-    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path9.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
-    return import_node_path9.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(sessionId) || !import_node_path11.default.isAbsolute(root)) throw new Error("Invalid persisted evidence identity");
+    return import_node_path11.default.join(this.directory, `${digest(`${sessionId}\0${canonical(root)}`)}.json`);
   }
   async checkDirectory() {
-    const stat = await import_promises8.default.lstat(this.directory);
+    const stat = await import_promises9.default.lstat(this.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence directory");
   }
   async restore(buffer, sessionId, root) {
@@ -3957,7 +4083,7 @@ var HostEvidenceStore = class {
     await this.checkDirectory();
     let record2;
     try {
-      const stat = await import_promises8.default.lstat(file);
+      const stat = await import_promises9.default.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LIMIT) throw new Error("Unsafe persisted evidence record");
       record2 = await readJson(file);
     } catch (error) {
@@ -3975,12 +4101,12 @@ var HostEvidenceStore = class {
     const record2 = { version: 1, sessionId, root: canonical(root), messages: hostEvidenceMessages(messages) };
     const bytes = Buffer.byteLength(JSON.stringify(record2));
     if (bytes > LIMIT) throw new Error("Persisted evidence exceeds 8 MiB limit");
-    const entries = (await import_promises8.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
-    const present = entries.includes(import_node_path9.default.basename(file));
+    const entries = (await import_promises9.default.readdir(this.directory)).filter((name2) => /^[a-f0-9]{64}\.json$/.test(name2));
+    const present = entries.includes(import_node_path11.default.basename(file));
     if (!present && entries.length >= MAX_RUNS) throw new Error("Persisted evidence session limit reached");
     let size = bytes;
-    for (const name2 of entries) if (name2 !== import_node_path9.default.basename(file)) {
-      const stat = await import_promises8.default.lstat(import_node_path9.default.join(this.directory, name2));
+    for (const name2 of entries) if (name2 !== import_node_path11.default.basename(file)) {
+      const stat = await import_promises9.default.lstat(import_node_path11.default.join(this.directory, name2));
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe persisted evidence record");
       size += stat.size;
     }
@@ -3990,8 +4116,8 @@ var HostEvidenceStore = class {
 };
 
 // src/git/local-management.ts
-var import_promises9 = __toESM(require("node:fs/promises"), 1);
-var import_node_path10 = __toESM(require("node:path"), 1);
+var import_promises10 = __toESM(require("node:fs/promises"), 1);
+var import_node_path12 = __toESM(require("node:path"), 1);
 var import_node_child_process2 = require("node:child_process");
 var import_node_crypto9 = require("node:crypto");
 init_libesm();
@@ -4127,10 +4253,10 @@ async function run(root, args, hooks = false, index) {
 }
 async function filePath(root, value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
+  if (import_node_path12.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file, not a directory or traversal path.");
   assertPublicPath(rel);
   const resolved = await safeResolve(root, rel);
-  const stat = await import_promises9.default.lstat(resolved).catch((error) => {
+  const stat = await import_promises10.default.lstat(resolved).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -4173,7 +4299,7 @@ async function status(root, includeStats = false) {
         await filePath(root, entry.path);
         if (inline) {
           try {
-            const stat = await import_promises9.default.lstat(import_node_path10.default.join(root, entry.path));
+            const stat = await import_promises10.default.lstat(import_node_path12.default.join(root, entry.path));
             if (stat.size <= 16 * 1024) entry.stats = untrackedStat(entry.path, await readSnapshot(root, entry.path));
           } catch {
           }
@@ -4239,7 +4365,7 @@ async function requireHead(root) {
 async function requireIdle(root) {
   for (const name2 of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
     const result = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", name2]);
-    if (await import_promises9.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
+    if (await import_promises10.default.stat(result.stdout.toString().trim()).then(() => true, () => false)) fail("OPERATION_IN_PROGRESS", "Finish or abort the existing merge/rebase/cherry-pick in your Git client first.");
   }
 }
 async function checkedDiffPaths(root, args) {
@@ -4253,7 +4379,7 @@ async function checkedDiffPaths(root, args) {
 }
 function historicalPath(value) {
   const rel = text(value, "Repository-relative file path");
-  if (import_node_path10.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file.");
+  if (import_node_path12.default.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.includes("\\") || rel.split("/").some((p) => p === "." || p === ".." || p === "")) fail("INVALID_PATH", "Select an explicit repository-relative file.");
   assertPublicPath(rel);
   return rel;
 }
@@ -4363,7 +4489,7 @@ function commitMessage(args) {
 ${args.description.trim()}` : ""), "Commit message", 5e3);
 }
 async function indexBytes(index) {
-  return import_promises9.default.readFile(index).catch((error) => {
+  return import_promises10.default.readFile(index).catch((error) => {
     if (error.code === "ENOENT") return void 0;
     throw error;
   });
@@ -4381,7 +4507,7 @@ async function selectedCommit(root, args, message, state) {
   const previous = await headCommit(root);
   const realIndex = (await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).stdout.toString().trim();
   const original = await indexBytes(realIndex);
-  const token = `diff-view-commit-${(0, import_node_crypto9.randomUUID)()}`, isolated = import_node_path10.default.join(import_node_path10.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
+  const token = `diff-view-commit-${(0, import_node_crypto9.randomUUID)()}`, isolated = import_node_path12.default.join(import_node_path12.default.dirname(realIndex), `${token}.index`), nextIndex = `${isolated}.next`;
   let lock, ownsLock = false;
   try {
     await git(root, ["read-tree", ...previous ? [previous] : ["--empty"]], { index: isolated });
@@ -4401,17 +4527,17 @@ async function selectedCommit(root, args, message, state) {
     if (!oid || oid === previous) fail("COMMIT_NOT_CREATED", "Git did not create a new commit. Inspect hook output and refresh.");
     let notice;
     try {
-      if (original) await import_promises9.default.writeFile(nextIndex, original);
+      if (original) await import_promises10.default.writeFile(nextIndex, original);
       else await git(root, ["read-tree", "--empty"], { index: nextIndex });
       await git(root, ["reset", "-q", oid, "--", ...paths], { index: nextIndex });
-      lock = await import_promises9.default.open(`${realIndex}.lock`, "wx");
+      lock = await import_promises10.default.open(`${realIndex}.lock`, "wx");
       ownsLock = true;
       if (!sameIndex(original, await indexBytes(realIndex))) notice = "\u63D0\u4EA4\u5DF2\u6210\u529F\uFF0C\u4F46\u7D22\u5F15\u5728\u63D0\u4EA4\u671F\u95F4\u88AB\u5916\u90E8\u4FEE\u6539\uFF1B\u5DF2\u4FDD\u7559\u5916\u90E8\u6682\u5B58\uFF0C\u8BF7\u5237\u65B0\u6838\u5BF9\u3002";
       else {
-        await lock.writeFile(await import_promises9.default.readFile(nextIndex));
+        await lock.writeFile(await import_promises10.default.readFile(nextIndex));
         await lock.close();
         lock = void 0;
-        await import_promises9.default.rename(`${realIndex}.lock`, realIndex);
+        await import_promises10.default.rename(`${realIndex}.lock`, realIndex);
         ownsLock = false;
       }
     } catch {
@@ -4420,8 +4546,8 @@ async function selectedCommit(root, args, message, state) {
     return { ok: true, oid, ...output(result, notice) };
   } finally {
     await lock?.close().catch(() => void 0);
-    if (ownsLock) await import_promises9.default.unlink(`${realIndex}.lock`).catch(() => void 0);
-    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises9.default.unlink(file).catch(() => void 0);
+    if (ownsLock) await import_promises10.default.unlink(`${realIndex}.lock`).catch(() => void 0);
+    for (const file of [isolated, `${isolated}.lock`, nextIndex, `${nextIndex}.lock`]) await import_promises10.default.unlink(file).catch(() => void 0);
   }
 }
 async function discardTarget(root, values) {
@@ -4441,7 +4567,7 @@ async function discardTarget(root, values) {
 }
 var LocalGitManagement = class {
   /** method MUST be gitManage. allowedRoots MUST come from the host, never the renderer.
-   * root defaults only when exactly one root is authorized; enclosing repos are never adopted.
+   * root defaults only when exactly one root is authorized; real descendants are allowed, enclosing repos never adopted.
    * Returns operation-specific JSON or throws Error with code/message. Writes are exclusive per root.
    */
   async dispatch(method, value, allowedRoots) {
@@ -4449,10 +4575,8 @@ var LocalGitManagement = class {
     if (!value || typeof value !== "object" || Array.isArray(value)) fail("INVALID_ARGUMENT", "Git management arguments are required.");
     const args = value;
     if (!operations.has(args.operation)) fail("INVALID_OPERATION", "Unsupported local-only Git operation.");
-    const roots = await Promise.all(allowedRoots.map((root2) => import_promises9.default.realpath(root2)));
-    const requested = args.root ?? (roots.length === 1 ? roots[0] : fail("ROOT_REQUIRED", "Select an authorized project root."));
-    const root = await import_promises9.default.realpath(text(requested, "Project root")).catch(() => fail("INVALID_ROOT", "Project directory is unavailable. Open an existing project."));
-    if (!roots.some((allowed) => canonical(allowed) === canonical(root))) fail("ROOT_DENIED", "Repository is not an authorized project root.");
+    const requested = args.root ?? (allowedRoots.length === 1 ? allowedRoots[0] : fail("ROOT_REQUIRED", "Select an authorized project root."));
+    const root = await authorizedRepositoryPath(text(requested, "Project root"), allowedRoots);
     const key = canonical(root);
     const queue = queues.get(key) ?? new ReadWriteQueue(4);
     queues.set(key, queue);
@@ -4481,7 +4605,7 @@ var LocalGitManagement = class {
       const target = await discardTarget(root, args.paths);
       if (op === "discardPreview") return { fingerprint: target.fingerprint, untracked: target.untracked };
       if (args.fingerprint !== target.fingerprint) fail("FILE_CHANGED", "File or index changed since confirmation. Refresh and review before discarding.");
-      if (target.untracked) await import_promises9.default.unlink(await safeResolve(root, target.rel));
+      if (target.untracked) await import_promises10.default.unlink(await safeResolve(root, target.rel));
       else await run(root, ["restore", "--worktree", "--", target.rel]);
       return { ok: true };
     }
@@ -4639,13 +4763,13 @@ var dispatch = (method, args, allowedRoots) => localManagement.dispatch(method, 
 init_path_policy();
 
 // src/core/capture-context.ts
-var import_node_path11 = __toESM(require("node:path"), 1);
+var import_node_path13 = __toESM(require("node:path"), 1);
 init_path_policy();
 init_public_path();
 init_storage();
 var CAPTURE_CONTEXT_TTL = 6e3;
 async function writeCaptureContexts(directory, generation2, contexts2) {
-  await atomicJson(import_node_path11.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
+  await atomicJson(import_node_path13.default.join(directory, "capture-contexts.json"), { version: 1, generation: generation2, contexts: contexts2.slice(-200) });
 }
 
 // src/core/host-evidence-buffer.ts
@@ -4995,8 +5119,8 @@ init_capture_leases();
 
 // src/core/system-open.ts
 var import_node_child_process3 = require("node:child_process");
-var import_promises10 = __toESM(require("node:fs/promises"), 1);
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_promises11 = __toESM(require("node:fs/promises"), 1);
+var import_node_path14 = __toESM(require("node:path"), 1);
 init_path_policy();
 var script = `
 $ErrorActionPreference = 'Stop'
@@ -5033,7 +5157,7 @@ function getLauncher() {
   if (launcher) return launcher;
   const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
   if (!/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) fail("SYSTEM_OPEN_FAILED", "Invalid Windows system directory");
-  const executable = import_node_path12.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const executable = import_node_path14.default.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const child = (0, import_node_child_process3.spawn)(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedScript], {
     shell: false,
     windowsHide: true,
@@ -5130,7 +5254,7 @@ function closeSystemOpener() {
   launcher?.stop(unloaded());
 }
 async function assertRegularFile(target) {
-  const stat = await import_promises10.default.lstat(target).catch((error) => {
+  const stat = await import_promises11.default.lstat(target).catch((error) => {
     if (error.code === "ENOENT") fail("FILE_NOT_FOUND", "\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u7CFB\u7EDF\u6253\u5F00\u3002 / The file no longer exists.");
     throw error;
   });
@@ -5140,7 +5264,7 @@ async function openSystemFile(target, options = {}) {
   if (process.platform !== "win32") fail("SYSTEM_OPEN_UNSUPPORTED", "\u7CFB\u7EDF\u6253\u5F00\u76EE\u524D\u4EC5\u652F\u6301 Windows\u3002 / System open currently supports Windows only.");
   if (options.signal?.aborted) throw unloaded();
   assertPublicPath(target);
-  if (!import_node_path12.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
+  if (!import_node_path14.default.isAbsolute(target)) fail("INVALID_PATH", "System open requires an absolute file path");
   if (activeOpen) fail("SYSTEM_OPEN_BUSY", "A system-open request is already pending");
   const token = {}, generation2 = epoch;
   activeOpen = token;
@@ -5201,7 +5325,7 @@ var rendererStages = {};
 var runningDiagnostic;
 var rendererDiagnostic;
 async function saveRendererStatus() {
-  if (store && !disposed) await atomicJson(import_node_path13.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
+  if (store && !disposed) await atomicJson(import_node_path15.default.join(store.directory, "renderer-status.json"), { version: 1, generation, stages: rendererStages, rendererDiagnostic, runningDiagnostic });
 }
 var navigation = new ReviewNavigationStore();
 function serial(work) {
@@ -5299,7 +5423,7 @@ async function heartbeat() {
 async function onLoad() {
   disposed = false;
   generation = (0, import_node_crypto10.randomUUID)();
-  pluginRoot = await import_promises11.default.realpath(__dirname);
+  pluginRoot = await import_promises12.default.realpath(__dirname);
   surfaces.clear();
   systemOpenController = new AbortController();
   const dataPath = await pi.plugin.getDataPath();
@@ -5315,13 +5439,13 @@ async function onLoad() {
   reviewPreparations.clear();
   savedRefreshes.clear();
   sessionRoots.clear();
-  const savedRoots = await readJson(import_node_path13.default.join(store.directory, "session-roots.json"), {});
-  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path13.default.isAbsolute(root)) sessionRoots.set(id2, root);
+  const savedRoots = await readJson(import_node_path15.default.join(store.directory, "session-roots.json"), {});
+  for (const [id2, root] of Object.entries(savedRoots).slice(-200)) if (/^[a-zA-Z0-9-]{1,80}$/.test(id2) && typeof root === "string" && import_node_path15.default.isAbsolute(root)) sessionRoots.set(id2, root);
   rendererStages = {};
   runningDiagnostic = void 0;
   rendererDiagnostic = void 0;
   navigation.clear();
-  navigation.restore(await readJson(import_node_path13.default.join(store.directory, "selections.json"), []));
+  navigation.restore(await readJson(import_node_path15.default.join(store.directory, "selections.json"), []));
   await saveRendererStatus();
   await writeCaptureContexts(store.directory, generation, []);
   locatorFile = await locatorPath(pluginRoot);
@@ -5387,7 +5511,7 @@ async function onUnload() {
   contexts.clear();
   reviewPreparations.clear();
   const current = await readJson(locatorFile, null).catch(() => null);
-  if (current?.generation === generation) await import_promises11.default.rm(locatorFile, { force: true });
+  if (current?.generation === generation) await import_promises12.default.rm(locatorFile, { force: true });
   await pi.commands.unregister("diff-view.open");
   service = null;
   store = null;
@@ -5483,7 +5607,7 @@ async function applyPublicSnapshot(snapshot, fallbackRoot, observedAt = Date.now
   }
   sessionRoots.set(snapshot.sessionId, root);
   while (sessionRoots.size > 200) sessionRoots.delete(sessionRoots.keys().next().value);
-  await atomicJson(import_node_path13.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
+  await atomicJson(import_node_path15.default.join(store.directory, "session-roots.json"), Object.fromEntries(sessionRoots));
   await evidenceStore.restore(evidence, snapshot.sessionId, root);
   const text2 = JSON.stringify(hostEvidenceMessages(snapshot.messages, snapshot.sessionId, root)), revision = evidenceRevision(text2), chunks = evidenceChunks(text2);
   for (const [index, chunk] of chunks.entries()) evidence.append({ sessionId: snapshot.sessionId, root: canonical(root), revision, index, chunk, final: index === chunks.length - 1 });
@@ -5549,7 +5673,7 @@ async function recordedReview(s, args, context) {
   return { ...summary, id: `${summary.id}:pending`, files: [], nextFileOffset: null, sync: { state: "pending" } };
 }
 async function captureMaintenance(args) {
-  if (!args || !["inspect", "retire"].includes(args.action) || typeof args.root !== "string" || !import_node_path13.default.isAbsolute(args.root)) fail("INVALID_MAINTENANCE", "Invalid capture maintenance request");
+  if (!args || !["inspect", "retire"].includes(args.action) || typeof args.root !== "string" || !import_node_path15.default.isAbsolute(args.root)) fail("INVALID_MAINTENANCE", "Invalid capture maintenance request");
   const workspace = await pi.workspace.get();
   const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map((r) => typeof r === "string" ? r : r.path)] : [];
   if (!roots.some((root) => canonical(root) === canonical(args.root))) fail("ROOT_DENIED", "Only an authorized workspace root can be maintained");
@@ -5636,7 +5760,7 @@ async function execute(s, method, args) {
     if (args.scope === "lastTurn") {
       if (typeof args.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.sessionId) || args.fileId != null || args.root != null) fail("NAVIGATION_INVALID", "Latest-turn entry requires a session without a fixed file or project");
       const selection2 = navigation.set({ scope: "lastTurn", sessionId: args.sessionId });
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+      await atomicJson(import_node_path15.default.join(store.directory, "selections.json"), navigation.export());
       return selection2;
     }
     if (typeof args?.sessionId !== "string" || !args.sessionId || args.sessionId.length > 128 || typeof args?.runId !== "string" || !args.runId || args.runId.length > 128 || args.fileId != null && (typeof args.fileId !== "string" || args.fileId.length > 256)) fail("NAVIGATION_INVALID", "Invalid recorded-task target");
@@ -5646,7 +5770,7 @@ async function execute(s, method, args) {
     if (!run2) fail("RUN_MISSING", "Recorded task not found in this session");
     if (disposed || service !== s || version !== navigationVersion) fail("SELECTION_MISSING", "Selection cleared or plugin unloaded");
     const selection = navigation.set({ scope: "turn", sessionId: run2.sessionId, runId: run2.id, root: run2.root }, await store.resolveFileId(args.runId, args.fileId));
-    await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+    await atomicJson(import_node_path15.default.join(store.directory, "selections.json"), navigation.export());
     return selection;
   }
   if (method === "readTurnSelection") {
@@ -5658,7 +5782,7 @@ async function execute(s, method, args) {
     const target = await s.selectTarget({ runId: selection.request.runId, sessionId: args.sessionId });
     if (target && (target.id !== selection.request.runId || target.root !== selection.request.root)) {
       const repaired = navigation.set({ ...selection.request, runId: target.id, root: target.root }, await store.resolveFileId(selection.request.runId, selection.fileId));
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), navigation.export());
+      await atomicJson(import_node_path15.default.join(store.directory, "selections.json"), navigation.export());
       return repaired;
     }
     return selection;
@@ -5674,7 +5798,7 @@ async function execute(s, method, args) {
       evidence.clear();
       reviewPreparations.clear();
       navigation.clear();
-      await atomicJson(import_node_path13.default.join(store.directory, "selections.json"), []);
+      await atomicJson(import_node_path15.default.join(store.directory, "selections.json"), []);
       return result;
     } finally {
       navigationClearing = false;

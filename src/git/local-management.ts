@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
 import { assertPublicPath, canonical, digest, fail, readSnapshot, safeResolve } from '../core/path-policy';
 import { discoverRepository } from './repository';
+import { authorizedRepositoryPath } from './discovery';
 import { git, headCommit, resolveCommit } from './runner';
 import { ReadWriteQueue } from '../core/read-write-queue';
 
@@ -412,7 +413,7 @@ async function discardTarget(root: string, values: unknown) {
 
 export class LocalGitManagement {
   /** method MUST be gitManage. allowedRoots MUST come from the host, never the renderer.
-   * root defaults only when exactly one root is authorized; enclosing repos are never adopted.
+   * root defaults only when exactly one root is authorized; real descendants are allowed, enclosing repos never adopted.
    * Returns operation-specific JSON or throws Error with code/message. Writes are exclusive per root.
    */
   async dispatch(method: string, value: unknown, allowedRoots: readonly string[]): Promise<unknown> {
@@ -420,10 +421,8 @@ export class LocalGitManagement {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_ARGUMENT', 'Git management arguments are required.');
     const args = value as ManagementArgs;
     if (!operations.has(args.operation)) fail('INVALID_OPERATION', 'Unsupported local-only Git operation.');
-    const roots = await Promise.all(allowedRoots.map(root => fs.realpath(root)));
-    const requested = args.root ?? (roots.length === 1 ? roots[0] : fail('ROOT_REQUIRED', 'Select an authorized project root.'));
-    const root = await fs.realpath(text(requested, 'Project root')).catch(() => fail('INVALID_ROOT', 'Project directory is unavailable. Open an existing project.'));
-    if (!roots.some(allowed => canonical(allowed) === canonical(root))) fail('ROOT_DENIED', 'Repository is not an authorized project root.');
+    const requested = args.root ?? (allowedRoots.length === 1 ? allowedRoots[0] : fail('ROOT_REQUIRED', 'Select an authorized project root.'));
+    const root = await authorizedRepositoryPath(text(requested, 'Project root'), allowedRoots);
     const key = canonical(root);
     const queue = queues.get(key) ?? new ReadWriteQueue(4); queues.set(key, queue);
     const pending = queue.run(async () => {

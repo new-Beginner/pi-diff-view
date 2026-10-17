@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ReviewApp from './ReviewApp';
-import { GitManagement } from './GitManagement';
+import { GitWorkspace } from './GitWorkspace';
 import { ensureBounded } from './transport';
-import type { Bootstrap, ReviewRequest, UiTransport } from '../core/contracts';
+import type { ReviewRequest, UiTransport } from '../core/contracts';
 import type { ReviewNavigation } from '../core/review-navigation';
 import { surfaceStamp, type SurfaceReply } from '../core/review-surface-protocol';
 import './theme.css';
@@ -17,9 +17,7 @@ export function Panel() {
   const [cachedSessions, setCachedSessions] = useState<string[]>([]);
   const [error, setError] = useState(''), [selecting, setSelecting] = useState(Boolean(route));
   const [retry, setRetry] = useState(0), [fallback, setFallback] = useState(false);
-  const [mode, setMode] = useState<'session' | 'git'>('session');
-  const [roots, setRoots] = useState<string[]>([]), [gitRoot, setGitRoot] = useState(''), [gitError, setGitError] = useState('');
-  const [gitLoaded, setGitLoaded] = useState(false);
+  const [modes, setModes] = useState<Record<string, 'session' | 'git'>>({});
   const readySession = useRef('');
   const resolvedSelection = useRef<Record<string, string>>({});
   const [surface, setSurface] = useState<SurfaceReply | null>(null);
@@ -35,6 +33,9 @@ export function Panel() {
   const effectiveRoute = surface ? surface.state === 'ready' && surface.sessionId ? `${surface.nonce ? `diff-view:${surface.nonce}` : `diff-session:${encodeURIComponent(surface.sessionId)}`}?sessionId=${encodeURIComponent(surface.sessionId)}` : '' : route;
   const [target, query = ''] = typeof effectiveRoute === 'string' ? effectiveRoute.split('?') : ['', ''];
   const sessionId = surface ? surface.state === 'ready' ? surface.sessionId ?? '' : '' : new URLSearchParams(query).get('sessionId') ?? new URLSearchParams(location.search).get('sessionId') ?? '';
+  const modeKey = sessionId || 'workspace';
+  const mode = modes[modeKey] ?? 'session';
+  const setMode = (value: 'session' | 'git', key = modeKey) => setModes(previous => previous[key] === value ? previous : { ...previous, [key]: value });
   useEffect(() => {
     const id = crypto.randomUUID(); let seq = 0, live = true, pendingSeq = 0, after: string | undefined, timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async (interrupt = false) => {
@@ -57,22 +58,20 @@ export function Panel() {
   useEffect(() => {
     if (!surface?.key || previousSurface.current === surface.key) return;
     previousSurface.current = surface.key; setError(''); setFallback(false);
-    if (surface.nonce) setMode('session');
+    const cached = navigationBySession[sessionId];
+    if (surface.nonce && (cached?.nonce !== surface.nonce || cached.revision !== surface.selectionRevision)) setMode('session');
   }, [surface?.key]);
   useEffect(() => {
     const dispose = window.pluginBridge?.on?.('view:open', value => {
-      setError(''); setSelecting(typeof value?.path === 'string' && value.path.startsWith('diff-view:')); setFallback(false); setMode('session'); setRoute(value?.path); setRetry(n => n + 1);
+      setError(''); setSelecting(typeof value?.path === 'string' && value.path.startsWith('diff-view:')); setFallback(false);
+      if (typeof value?.path === 'string' && value.path.startsWith('diff-view:')) {
+        const id = new URLSearchParams(value.path.split('?')[1] ?? '').get('sessionId');
+        if (id) setMode('session', id);
+      }
+      setRoute(value?.path); setRetry(n => n + 1);
     });
     return () => { if (typeof dispose === 'function') dispose(); };
   }, []);
-  useEffect(() => {
-    if (mode !== 'git') return;
-    let live = true; setGitError('');
-    transport.invoke<Bootstrap>('bootstrap', {}).then(value => {
-      if (live) { const values = value.repositories.map(r => r.root); setRoots(values); setGitRoot(previous => values.includes(previous) ? previous : values[0] ?? ''); setGitLoaded(true); }
-    }).catch(err => { if (live) { setGitError(String(err.message)); setGitLoaded(true); } });
-    return () => { live = false; };
-  }, [mode, transport]);
   useEffect(() => {
     let live = true, changed = false;
     const update = (value: Appearance) => {
@@ -141,11 +140,12 @@ export function Panel() {
     resolvedSelection.current = Object.fromEntries(Object.entries(resolvedSelection.current).filter(([id]) => cachedSessions.includes(id)));
   }, [cachedSessions]);
   return <div className="dv-panel dv-theme" data-base={appearance.base}>
-    <nav className="dv-panel-nav" aria-label="Diff view 功能"><div className="dv-panel-modes" role="group" aria-label="功能切换"><button onClick={() => setMode('session')} aria-pressed={mode === 'session'}>会话修改</button><button onClick={() => setMode('git')} aria-pressed={mode === 'git'}>本地 Git</button></div>{mode === 'git' && roots.length > 1 && <select aria-label="Git 项目" title={gitRoot} value={gitRoot} onChange={e => setGitRoot(e.target.value)}>{roots.map(root => <option key={root}>{root}</option>)}</select>}</nav>
+    <nav className="dv-panel-nav" aria-label="Diff view 功能"><div className="dv-panel-modes" role="group" aria-label="功能切换"><button onClick={() => setMode('session')} aria-pressed={mode === 'session'}>会话修改</button><button onClick={() => setMode('git')} aria-pressed={mode === 'git'}>本地 Git</button></div></nav>
     <div className="dv-panel-content">
     <div className="dv-panel-page" hidden={mode !== 'git'}>
-      {gitError && <p className="dv-panel-message" role="alert">{gitError}</p>}
-      {gitLoaded ? <GitManagement key={gitRoot} active={mode === 'git'} transport={transport} root={gitRoot || undefined} base={appearance.base} /> : mode === 'git' && <p className="dv-panel-message" role="status">正在读取 Git 项目…</p>}
+      {[...new Set([...cachedSessions, ...(sessionId ? [sessionId] : [''])])].map(id => <div className="dv-panel-page" key={id || 'workspace'} hidden={mode !== 'git' || sessionId !== id}>
+        <GitWorkspace active={mode === 'git' && sessionId === id} transport={transport} sessionId={id || undefined} base={appearance.base} />
+      </div>)}
     </div>
     <div className="dv-panel-page" hidden={mode !== 'session'}>
       {surfaceError && <p className="dv-panel-message" role="alert">{surfaceError}</p>}

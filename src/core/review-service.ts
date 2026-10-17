@@ -10,6 +10,8 @@ import { SnapshotStore, atomicJson, readJson } from './storage';
 import { replaceSnapshot } from './rollback';
 import { discoverRepository, readGitReview, type GitReview } from '../git/repository';
 import { applyGitAction } from '../git/actions';
+import { authorizedRepositoryPath, scanRepositories, workspaceRoots } from '../git/discovery';
+import { RepositorySelection, workspaceKey } from './repository-selection';
 export interface ServiceHost { workspace(): Promise<{ path: string; roots?: (string | { path: string })[] } | null>; settings(): Promise<Record<string, unknown>>; setSettings(value: Record<string, unknown>): Promise<void>; appearance(): Promise<{ locale?: string; base?: string }>; clipboard(text: string): Promise<void>; openPanel(): Promise<void>; }
 interface CachedReview { summary: ReviewSummary; files: InternalFile[]; git?: GitReview; run?: CaptureRun; createdAt: number; hunksCache?: Map<string, DiffHunk[]>; hydratedFiles?: Set<string>; readOnly?: boolean; }
 function runSummary(run: CaptureRun): RunSummary { return { id: run.id, sessionId: run.sessionId, root: run.root, startedAt: run.startedAt, endedAt: run.endedAt, state: run.state, fileCount: Object.keys(run.changes).filter(value => !isImagePath(value)).length, incomplete: run.incomplete }; }
@@ -28,7 +30,8 @@ export class ReviewService {
   private mutableRoots = new Set<string>();
   private summaries = new Map<string, { key: string; files: ReviewFile[]; additions: number; deletions: number; unknownFileCount: number; incomplete: boolean; notice?: string; createdAt: number }>();
   private mutations = Promise.resolve();
-  constructor(readonly store: SnapshotStore, readonly host: ServiceHost, readonly generation: string) {}
+  private repositorySelection: RepositorySelection;
+  constructor(readonly store: SnapshotStore, readonly host: ServiceHost, readonly generation: string) { this.repositorySelection = new RepositorySelection(store.directory); }
   private async authorize(sessionId?: string, run?: CaptureRun): Promise<void> {
     const workspace = await this.host.workspace();
     const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map(r => typeof r === 'string' ? r : r.path)] : [];
@@ -47,21 +50,17 @@ export class ReviewService {
     return run;
   }
   async bootstrap(sessionId?: string): Promise<Bootstrap> {
-    const workspace = await this.host.workspace();
-    const roots = workspace ? [workspace.path, ...(workspace.roots ?? []).map(r => typeof r === 'string' ? r : r.path)] : [];
-    const repositories: RepositoryInfo[] = [];
-    this.allowed = new Set(roots.map(canonical));
-    for (const root of roots) {
-      if (repositories.some(r => canonical(r.root) === canonical(root))) continue;
-      try { const repo = await discoverRepository(root); if (!repositories.some(r => canonical(r.root) === canonical(repo.root))) repositories.push(repo); this.allowed.add(canonical(repo.root)); }
-      catch { repositories.push({ root, name: path.basename(root), git: false }); }
-    }
+    const roots = workspaceRoots(await this.host.workspace());
+    const { repositories, repositoryNotice } = await scanRepositories(roots);
+    const key = workspaceKey(roots);
+    const selectedRepository = await this.repositorySelection.get(key, sessionId) ?? repositories.find(repo => repo.git)?.root;
+    this.allowed = new Set([...roots, ...repositories.map(repo => repo.root)].map(canonical));
     this.mutableRoots = new Set(this.allowed);
     const runs = (await this.store.listRuns(false, true)).filter(r => Object.keys(r.changes).length > 0 || (r.version === 2 && r.boundary === 'user' && r.state === 'running'));
     const filtered = sessionId ? runs.filter(r => r.sessionId === sessionId) : [];
     for (const r of filtered) if (sessionId && r.sessionId === sessionId) this.allowed.add(canonical(r.root));
     const appearance = await this.host.appearance().catch(() => ({} as { locale?: string; base?: string })), settings = await this.host.settings();
-    return { repositories, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
+    return { repositories, workspaceKey: key, selectedRepository, repositoryNotice, runs: filtered.map(runSummary).slice(0, 100), locale: appearance.locale ?? 'zh-CN', base: appearance.base === 'light' ? 'light' : 'dark', settings: { layout: settings.layout === 'split' ? 'split' : 'unified', wordWrap: settings.wordWrap === true, nativePreflight: settings.nativePreflight === true } };
   }
   private validateTurn(args: { runId?: string; sessionId?: string }, requireRun = true): void {
     if (typeof args.sessionId !== 'string' || !args.sessionId || args.sessionId.length > 256 || /[\0\r\n]/.test(args.sessionId)) fail('SESSION_REQUIRED', 'A valid sessionId is required for recorded turns');
@@ -208,9 +207,11 @@ export class ReviewService {
         notice = turnNotice(run);
       }
     } else {
-      await this.authorize();
-      if (!root) root = (await this.host.workspace())?.path;
-      if (!root || !this.allowed.has(canonical(root))) fail('ROOT_DENIED', 'Select an authorized project folder');
+      const roots = workspaceRoots(await this.host.workspace());
+      if (!root) root = roots.length === 1 ? roots[0] : undefined;
+      if (!root) fail('ROOT_DENIED', 'Select an authorized project folder');
+      root = await authorizedRepositoryPath(root, roots);
+      this.allowed = new Set([...roots, root].map(canonical)); this.mutableRoots = new Set(this.allowed);
       git = await readGitReview(root, request.scope as GitScope, request.ref);
       root = git.root; files = git.files.map(file => ({ ...file, statsKnown: file.statsKnown ?? file.kind === 'text', ...(file.kind !== 'text' || file.statsKnown === false ? { additions: 0, deletions: 0 } : {}) })); notice = git.notice;
     }
@@ -459,6 +460,13 @@ export class ReviewService {
   async invoke(method: string, args: any = {}): Promise<unknown> {
     switch (method) {
       case 'bootstrap': return this.bootstrap(args.sessionId);
+      case 'selectRepository': {
+        const roots = workspaceRoots(await this.host.workspace()), key = workspaceKey(roots);
+        if (args.workspaceKey && args.workspaceKey !== key) fail('ROOT_DENIED', '工作区已变化，请重新扫描仓库后选择。');
+        const root = await authorizedRepositoryPath(args.root, roots);
+        if (!(await discoverRepository(root, false)).git) fail('NO_REPOSITORY', 'Selected directory is not a Git repository root.');
+        await this.repositorySelection.set(key, root, args.sessionId); return { ok: true };
+      }
       case 'review': return this.review(args);
       case 'reviewFiles': return this.reviewFiles(args);
       case 'turnSummary': return this.turnSummary(args);
