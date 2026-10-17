@@ -1,5 +1,5 @@
 import { it, expect, vi, afterEach } from 'vitest';
-import { boundedTransport } from '../../src/view/transport';
+import { boundedTransport, invalidateSessionReads } from '../../src/view/transport';
 import { prefetchDiffDetail } from '../../src/view/useDiffDetail';
 import type { ReviewDetail, UiTransport } from '../../src/core/contracts';
 import { JobQueue } from '../../src/core/jobs';
@@ -172,4 +172,24 @@ it('drains five legitimate reads through the real four-job queue without JOB_BUS
     expect(executed).toEqual(['root-0', 'root-1', 'root-2', 'root-3', 'bootstrap']);
     for (const at of starts) expect(starts.filter(time => time >= at && time < at + 1000).length).toBeLessThanOrEqual(6);
   } finally { jobs.close(); }
+});
+it('reactivation detaches only the session reads and an older completion cannot evict their replacements', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(90000);
+  const queue = (globalThis as any).__piDiffBurstQueue; queue.starts = []; await queue.tail;
+  const finish: ((value: unknown) => void)[] = [];
+  const invoke = vi.fn((_method: string, _args: unknown) => new Promise(resolve => finish.push(resolve)));
+  const transport = boundedTransport(invoke as UiTransport['invoke']);
+  const args = { sessionId: 'a' }, otherArgs = { sessionId: 'b' };
+  const old = transport.invoke('bootstrap', args), other = transport.invoke('bootstrap', otherArgs);
+  expect(transport.invoke('bootstrap', args)).toBe(old);
+  await vi.advanceTimersByTimeAsync(0); expect(invoke).toHaveBeenCalledTimes(2);
+  invalidateSessionReads(transport, 'a');
+  const fresh = transport.invoke('bootstrap', args);
+  expect(fresh).not.toBe(old); expect(transport.invoke('bootstrap', otherArgs)).toBe(other);
+  await vi.advanceTimersByTimeAsync(0); expect(invoke).toHaveBeenCalledTimes(3);
+  finish[0]({ state: 'done', result: 'old' }); await old;
+  expect(transport.invoke('bootstrap', args)).toBe(fresh);
+  finish[1]({ state: 'done', result: 'other' }); finish[2]({ state: 'done', result: 'fresh' });
+  expect(await Promise.all([other, fresh])).toEqual(['other', 'fresh']);
+  expect(invoke.mock.calls.every(([method, value]: any) => method === 'jobStart' && !('epoch' in value.args))).toBe(true);
 });

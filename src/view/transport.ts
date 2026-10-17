@@ -9,6 +9,10 @@ const reads = new Set(['bootstrap', 'review', 'reviewFiles', 'turnSummary', 'run
 const gitReads = new Set(['status', 'branches', 'history', 'stashList', 'diff', 'stats', 'commitFiles', 'commitDiff', 'blame', 'stashShow', 'discardPreview']);
 const navigationMethods = new Set(['openSystemFile', 'activeReviewSession', 'readTurnSelection', 'selectTurn', 'reviewSurface']);
 interface JobResult<T> { state: 'pending' | 'done' | 'error'; result?: T; error?: { code: string; message: string } }
+const sessionReadInvalidators = new WeakMap<UiTransport['invoke'], (sessionId: string) => void>();
+export function invalidateSessionReads(transport: UiTransport, sessionId: string): void {
+  if (sessionId) sessionReadInvalidators.get(transport.invoke)?.(sessionId);
+}
 export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
   const wire = <T,>(method: string, args?: unknown, navigation = navigationMethods.has(method)): Promise<T> => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
@@ -81,16 +85,22 @@ export function boundedTransport(invoke: UiTransport['invoke']): UiTransport {
     if (!read) queue[lane] = result.then(() => undefined, () => undefined);
     return result;
   };
-  const pendingReads = new Map<string, Promise<unknown>>(); let readEpoch = 0;
-  return { invoke<T>(method: string, args?: unknown): Promise<T> {
+  const pendingReads = new Map<string, { sessionId?: string; result: Promise<unknown> }>(); let readEpoch = 0;
+  const transport: UiTransport = { invoke<T>(method: string, args?: unknown): Promise<T> {
     const read = ['bootstrap', 'review', 'turnSummary', 'runningChanges', 'card', 'replyCards'].includes(method)
       || (method === 'gitManage' && gitReads.has((args as { operation?: string })?.operation ?? ''));
     if (!read) { if (!reads.has(method) && !['reviewSurface', 'readTurnSelection'].includes(method)) readEpoch++; return request<T>(method, args); }
     const key = JSON.stringify([readEpoch, method, args]);
-    const previous = pendingReads.get(key); if (previous) return previous as Promise<T>;
-    const result = request<T>(method, args).finally(() => pendingReads.delete(key));
-    pendingReads.set(key, result); return result;
+    const previous = pendingReads.get(key); if (previous) return previous.result as Promise<T>;
+    const result = request<T>(method, args).finally(() => { if (pendingReads.get(key)?.result === result) pendingReads.delete(key); });
+    pendingReads.set(key, { sessionId: (args as { sessionId?: string })?.sessionId, result }); return result;
   } };
+  // Detach stale readers, not their backend jobs or any writes. A reactivated
+  // view must not coalesce onto a read captured before it left the session.
+  sessionReadInvalidators.set(transport.invoke, sessionId => {
+    for (const [key, read] of pendingReads) if (read.sessionId === sessionId) pendingReads.delete(key);
+  });
+  return transport;
 }
 const known = new WeakMap<UiTransport, UiTransport>();
 const knownInvokes = new WeakSet<UiTransport['invoke']>();

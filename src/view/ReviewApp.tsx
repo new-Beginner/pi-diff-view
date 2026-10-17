@@ -9,7 +9,7 @@ import ReviewIcon from './ReviewIcon';
 import ReviewFilePreview from './ReviewFilePreview';
 import ScopePicker from './ScopePicker';
 import { messages, kindLabel } from './i18n';
-import { ensureBounded } from './transport';
+import { ensureBounded, invalidateSessionReads } from './transport';
 import { useDiffDetail, prefetchDiffDetail, prepareDiffDetail } from './useDiffDetail';
 import { captureScrollAnchor, restoreScrollAnchor, reconcileHunkViews, reviewFileVersion, type HunkView, type ScrollAnchor } from './live-diff';
 import './review.css';
@@ -99,7 +99,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const extraExpanded = expandedFiles.scope === scopeKey ? expandedFiles.ids : new Set<string>();
   useEffect(() => { setExpandedFiles({ scope: scopeKey, ids: new Set() }); }, [scopeKey, navigationKey]);
   const diffPane = useRef<HTMLDivElement>(null);
-  const reviewPending = useRef(0), loadedScope = useRef('');
+  const reviewPending = useRef<symbol>(), loadedScope = useRef('');
   const historyRevision = useRef('');
   const workspaceRef = useRef<HTMLDivElement>(null), continuationRef = useRef<HTMLDivElement>(null);
   const fileCollapseAnchor = useRef<{ selected: string; top: number }>();
@@ -176,6 +176,9 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     appRef.current?.querySelector<HTMLElement>('.dv-file[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [navigationKey, selected]);
   useEffect(() => {
+    if (panelActive && sessionKey) invalidateSessionReads(transport, sessionKey);
+  }, [transport, sessionKey, panelActive]);
+  useEffect(() => {
     if (!panelActive) return;
     let active = true; setBootError('');
     const load = () => {
@@ -212,7 +215,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     if (!request.root && !request.sessionId && !request.runId) { setLoadingReview(false); return; }
     if ((request.scope === 'commit' || request.scope === 'branch') && !request.ref?.trim()) { setLoadingReview(false); setReviewError(t.emptyRef); return; }
     // Background updates never clear existing content or disable its read-only controls.
-    reviewPending.current++; setLoadingReview(changedScope || !matchingReview);
+    const pending = Symbol(); reviewPending.current = pending; setLoadingReview(changedScope || !matchingReview);
     const restartSync = retrySync.current; retrySync.current = false;
     transport.invoke<ReviewSummary>('review', { ...request, retrySync: restartSync || undefined, focusFileId: request.scope === 'turn' && request.runId === initialRequest.runId ? initialFileId : undefined }).then(async response => {
       if (!active) return;
@@ -270,8 +273,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         data = { ...data, files: [...data.files, ...page.files.filter(file => !isImagePath(file.path))], nextFileOffset: page.nextOffset };
         if (streaming || data.nextFileOffset == null) await publish();
       }
-    }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { reviewPending.current--; if (active) setLoadingReview(false); });
-    return () => { active = false; };
+    }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (reviewPending.current === pending) reviewPending.current = undefined; if (active) setLoadingReview(false); });
+    return () => { active = false; if (reviewPending.current === pending) reviewPending.current = undefined; };
   }, [transport, scopeKey, refreshTick, panelActive]);
   const resetPage = () => { setCollapsed(new Set()); };
   useEffect(() => {

@@ -188,6 +188,7 @@ var background = /* @__PURE__ */ new Set(["sessionEvidence", "gitManage", "sessi
 var reads = /* @__PURE__ */ new Set(["bootstrap", "review", "reviewFiles", "turnSummary", "runningChanges", "file", "comments", "feedback", "replyCards", "rendererReport", "nativeProbeInfo"]);
 var gitReads = /* @__PURE__ */ new Set(["status", "branches", "history", "stashList", "diff", "stats", "commitFiles", "commitDiff", "blame", "stashShow", "discardPreview"]);
 var navigationMethods = /* @__PURE__ */ new Set(["openSystemFile", "activeReviewSession", "readTurnSelection", "selectTurn", "reviewSurface"]);
+var sessionReadInvalidators = /* @__PURE__ */ new WeakMap();
 function boundedTransport(invoke) {
   const wire = (method, args, navigation = navigationMethods.has(method)) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ method, args })).length;
@@ -262,7 +263,7 @@ function boundedTransport(invoke) {
   };
   const pendingReads = /* @__PURE__ */ new Map();
   let readEpoch = 0;
-  return { invoke(method, args) {
+  const transport = { invoke(method, args) {
     const read = ["bootstrap", "review", "turnSummary", "runningChanges", "card", "replyCards"].includes(method) || method === "gitManage" && gitReads.has(args?.operation ?? "");
     if (!read) {
       if (!reads.has(method) && !["reviewSurface", "readTurnSelection"].includes(method)) readEpoch++;
@@ -270,11 +271,17 @@ function boundedTransport(invoke) {
     }
     const key = JSON.stringify([readEpoch, method, args]);
     const previous = pendingReads.get(key);
-    if (previous) return previous;
-    const result = request(method, args).finally(() => pendingReads.delete(key));
-    pendingReads.set(key, result);
+    if (previous) return previous.result;
+    const result = request(method, args).finally(() => {
+      if (pendingReads.get(key)?.result === result) pendingReads.delete(key);
+    });
+    pendingReads.set(key, { sessionId: args?.sessionId, result });
     return result;
   } };
+  sessionReadInvalidators.set(transport.invoke, (sessionId) => {
+    for (const [key, read] of pendingReads) if (read.sessionId === sessionId) pendingReads.delete(key);
+  });
+  return transport;
 }
 var known = /* @__PURE__ */ new WeakMap();
 var knownInvokes = /* @__PURE__ */ new WeakSet();

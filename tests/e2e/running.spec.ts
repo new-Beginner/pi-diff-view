@@ -277,6 +277,8 @@ test('every pill click jumps to latest-turn files regardless of the previous vie
   await page.evaluate(value => (window as any).__liveHost.task('next-user', value), nextSince);
   run = { ...run, id: 'next-live-run', userMessageId: 'next-user', startedAt: nextSince + 1, state: 'running', endedAt: undefined, changes: {}, replies: [], bindings: {} };
   await change('latest turn content\n');
+  // Both turns contain current.txt; file count alone can still match the old turn.
+  await expect(frame.locator('.dv-file .dv-added')).toHaveText('+1');
   await expect(frame.locator('.dv-file')).toHaveCount(1); await expect(frame.locator('.dv-file[aria-current="true"], .dv-review h2')).toHaveCount(0);
   await frame.locator('.dv-file').click(); await expect(frame.locator('.dv-code').filter({ hasText: 'latest turn content' })).toBeVisible();
   await expect(scope).toHaveAttribute('data-value', 'lastTurn'); await expect(page.locator('.dv-running-pill')).toBeVisible();

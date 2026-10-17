@@ -14,7 +14,7 @@ async function setup(page: Page, unknown = false) {
         if (method === 'diff.review') {
           result.runId = 'late-run';
           result.run = { id: result.runId, sessionId: args.sessionId, root: result.root, startedAt: 1750000100000, endedAt: 1750000101000, state: 'completed', fileCount: 1, incomplete: unknown };
-          result.files = [{ ...result.files[0], path: `${args.sessionId}/late-run.ts`, kind: unknown ? 'unavailable' : 'text', statsKnown: !unknown, additions: unknown ? 0 : 3, deletions: unknown ? 0 : 2, actions: [] }];
+          result.files = [{ ...result.files[0], path: `${args.sessionId}/late-run.ts`, kind: unknown ? 'unavailable' : 'text', statsKnown: !unknown, additions: unknown ? 0 : 3, deletions: unknown ? 0 : 2, note: unknown ? '历史完整内容不可用，无法可靠计算完整差异。' : undefined, actions: [] }];
           demo.review = result;
           if (args.sessionId === 'session-a' && demo.holdReview) {
             demo.waitingReview = true; await new Promise<void>(resolve => demo.releaseReview = resolve);
@@ -42,6 +42,7 @@ test('missing evidence is unknown at file and aggregate levels, never a complete
   await expect(page.locator('.dv-stats-note')).toContainText('1 个文件暂无法显示行数');
   await expect(page.locator('.dv-stats-note p')).toBeHidden();
   await page.locator('.dv-stats-note summary').click(); await expect(page.locator('.dv-stats-note p')).toBeVisible();
+  await expect(page.locator('.dv-stats-note p')).toHaveText('历史完整内容不可用，无法可靠计算完整差异。');
   await expect(page.getByRole('combobox', { name: '对话轮次', exact: true })).toHaveCount(0);
 });
 test('a late review cannot overwrite the files or turn dropdown after switching session', async ({ page }) => {

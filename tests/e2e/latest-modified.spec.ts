@@ -93,7 +93,7 @@ test('A to B to A revalidates immediately, retaining nodes, selected file, folds
   await expect(title(page)).toHaveText('session-b/previous.ts');
   const before = await page.evaluate(() => (window as any).__demo.calls.filter((c: any) => c.method === 'diff.review' && c.args.sessionId === 'session-a').length);
   // Isolate activation latency from the separate six-request rolling admission cap.
-  await page.evaluate(() => { (window as any).__piDiffBurstQueue.starts = []; (window as any).__demo.openLocation('diff-session:session-a?sessionId=session-a'); });
+  await page.evaluate(async () => { const queue = (window as any).__piDiffBurstQueue; await queue.tail; await queue.navigationTail; queue.starts = []; (window as any).__demo.openLocation('diff-session:session-a?sessionId=session-a'); });
   await expect(title(page)).toHaveText('session-a/previous.ts');
   await expect.poll(() => page.evaluate(() => (window as any).__demo.calls.filter((c: any) => c.method === 'diff.review' && c.args.sessionId === 'session-a').length), { timeout: 500 }).toBeGreaterThan(before);
   await expect(page.locator('[data-hunk-nav]:visible').first()).toHaveAttribute('aria-expanded', 'false');
@@ -109,6 +109,9 @@ test('a pre-switch delayed latest result cannot overwrite new current changes af
   await expect(title(page)).toHaveText('session-b/previous.ts');
   await page.evaluate(() => { (window as any).__piDiffBurstQueue.starts = []; (window as any).__latest.currentFiles = true; (window as any).__demo.openLocation('diff-session:session-a?sessionId=session-a'); });
   await expect(title(page)).toHaveText('session-a/current.ts');
+  // The detached pre-switch request must not stop the reactivated view's polling.
+  await page.evaluate(() => { (window as any).__latest.currentState = 'completed'; });
+  await expect.poll(() => page.evaluate(() => (window as any).__demo.review.run?.state)).toBe('completed');
   await page.evaluate(() => (window as any).__latest.release());
   await page.waitForTimeout(350);
   await expect(title(page)).toHaveText('session-a/current.ts');
