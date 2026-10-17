@@ -209,11 +209,12 @@ export function GitManagement({ transport, root, base, active = true }: { transp
   return <section className="git-management" data-base={base ?? (document.documentElement.dataset.base === 'dark' ? 'dark' : 'light')} aria-label="本地 Git 管理" aria-busy={busy || loading}>
     <div className="gm-top">
     <header className="gm-header"><div><h2>本地 Git</h2></div>
-      <div className="gm-top-actions">{filePage && <button className="gm-icon-button" disabled={busy || !!confirmation || !preview.preview.path} aria-label="折叠全部文件" title="折叠全部文件" onClick={preview.collapse}><ReviewIcon name="collapse" /></button>}
+      <div className="gm-top-actions">{filePage && <button className="gm-icon-button" disabled={busy || loading || !!confirmation || !actionable.length} aria-label={Object.keys(preview.previews).length ? '折叠全部文件' : '展开全部文件'} title={Object.keys(preview.previews).length ? '折叠全部文件' : '展开全部文件'} onClick={() => Object.keys(preview.previews).length ? preview.collapse() : preview.expandAll(actionable.map(entry => entry.path))}><ReviewIcon name="collapse" /></button>}
       <button className="gm-icon-button" disabled={busy || loading || !!confirmation} aria-label="刷新" title="刷新" onClick={() => void execute()}><ReviewIcon name="refresh" /></button></div></header>
     <p className="gm-root" title={status?.root ?? root}>{status?.root ?? root ?? '当前授权项目'}<span className="gm-branch">{status ? status.branch ?? (status.head ? '分离 HEAD' : '尚无提交') : '正在读取…'}</span></p>
     <nav aria-label="Git 功能">{(Object.keys(labels) as Page[]).map(item => <button key={item} disabled={busy || !!confirmation} aria-pressed={item === page}
-      onClick={() => { setPage(item); setOffset(0); }}>{labels[item]}</button>)}</nav>
+      onClick={() => { preview.collapse(); setPage(item); setOffset(0); }}>{labels[item]}</button>)}
+</nav>
     </div>
     <div className="gm-scroll" tabIndex={0} aria-label="Git 内容">
     {busy && <p role="status">正在执行 Git，请勿重复操作…</p>}
@@ -238,7 +239,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
         <ul className="gm-list gm-files" aria-label="可操作文件">{actionable.map(entry => <li key={entry.path} className={selectedSet.has(entry.path) ? 'gm-selected' : ''}>
           <div className="gm-file-row">
           <input type="checkbox" aria-label={`选择 ${entry.path}`} checked={selectedSet.has(entry.path)} onChange={() => toggle(entry.path)} />
-          <button className="gm-path gm-file" aria-label={entry.path} aria-expanded={preview.preview.path === entry.path} onClick={() => showDiff(entry)} onPointerEnter={() => { if (!busy) preview.prefetch(entry.path); }} onPointerLeave={preview.cancelPrefetch} onFocus={() => { if (!busy) preview.prefetch(entry.path); }} onBlur={preview.cancelPrefetch} title={entry.path}>
+          <button className="gm-path gm-file" aria-label={entry.path} aria-expanded={!!preview.previews[entry.path]} onClick={() => showDiff(entry)} onPointerEnter={() => { if (!busy) preview.prefetch(entry.path); }} onPointerLeave={preview.cancelPrefetch} onFocus={() => { if (!busy) preview.prefetch(entry.path); }} onBlur={preview.cancelPrefetch} title={entry.path}>
             <FileIcon path={entry.path} /><span className="gm-file-name"><FilePath path={entry.path} /></span><span className="gm-file-chevron"><ReviewIcon name="chevron" /></span>
           </button>
           <span className={`gm-file-stats${refreshingStats.has(entry.path) ? ' gm-stats-refreshing' : ''}`} aria-busy={refreshingStats.has(entry.path)} title={`暂存区 / 工作区状态：${entry.index}${entry.working}${refreshingStats.has(entry.path) ? ' · 正在更新行数' : ''}`} aria-label={`${entry.path} 增删行数${refreshingStats.has(entry.path) ? '（正在更新）' : ''}`}>
@@ -248,7 +249,7 @@ export function GitManagement({ transport, root, base, active = true }: { transp
           <button className="gm-icon-button" aria-label={`${page === 'staged' ? '取消暂存' : '暂存'} ${entry.path}`} title={page === 'staged' ? '取消暂存' : '暂存'} onClick={() => changeFiles(page === 'staged' ? 'unstage' : 'stage', [entry.path])}><ReviewIcon name={page === 'staged' ? 'unstage' : 'stage'} /></button>
           {page === 'workspace' && <button className="gm-icon-button gm-discard" aria-label={`撤销 ${entry.path}`} title="撤销工作区改动" onClick={() => void askDiscard(entry)}><ReviewIcon name="undo" /></button>}
           </div>
-          {preview.preview.path === entry.path && <section className="gm-inline-diff" aria-label={`${entry.path} 差异`} aria-busy={!!preview.preview.pending}>{preview.preview.data ? <GitPatch detail={preview.preview.data} /> : preview.preview.error ? <p role="alert">{preview.preview.error}<button onClick={() => { preview.collapse(); preview.toggle(entry.path); }}>重试</button></p> : <div className="gm-preview-placeholder">{preview.preview.slow && <span role="status">正在读取差异…</span>}</div>}</section>}
+          {preview.previews[entry.path] && <section className="gm-inline-diff" aria-label={`${entry.path} 差异`} aria-busy={!!preview.previews[entry.path].pending}>{preview.previews[entry.path].data ? <GitPatch detail={preview.previews[entry.path].data!} /> : preview.previews[entry.path].error ? <p role="alert">{preview.previews[entry.path].error}<button onClick={() => preview.retry(entry.path)}>重试</button></p> : <div className="gm-preview-placeholder">{preview.previews[entry.path].slow && <span role="status">正在读取差异…</span>}</div>}</section>}
         </li>)}</ul>
         {!visible.length && !busy && !loading && <p className="gm-hint">没有{page === 'staged' ? '已暂存' : '工作区'}改动。</p>}
         {protectedFiles.length > 0 && <details className="gm-protected"><summary>已排除 {protectedFiles.length} 个受保护文件（不可操作）</summary>

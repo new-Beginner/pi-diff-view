@@ -331,7 +331,7 @@ test('every file has reference-style controls and menus act on their own file', 
   await created.locator('.dv-file').click();
   await expect(page.locator('.dv-file[aria-current="true"]')).toContainText('src/theme/index.ts');
   await expect(page.locator('.dv-row')).toHaveCount(3);
-  await page.getByRole('button', { name: '折叠文件', exact: true }).click();
+  await page.getByRole('button', { name: '折叠全部文件', exact: true }).click();
   await expect(page.locator('.dv-review')).toBeHidden();
   await created.locator('summary').click();
   await created.getByRole('button', { name: '展开文件', exact: true }).click();
@@ -364,7 +364,7 @@ test('legacy image entries are excluded before selection and totals; text and bi
 
 test('last-row menu flips upward and stays inside the scroll viewport', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 430 }); await ready(page);
-  await page.getByRole('button', { name: 'Collapse file', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse all files', exact: true }).click();
   const last = page.locator('.dv-file-row').last();
   await last.locator('summary').click();
   await expect(last.locator('.dv-file-menu')).toHaveAttribute('data-placement', 'above');

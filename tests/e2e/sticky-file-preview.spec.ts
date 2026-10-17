@@ -147,7 +147,7 @@ for (const location of ['middle', 'bottom'] as const) test(`direct title collaps
 
 test('toolbar collapse also preserves the selected file instead of clamping to unrelated trailing files', async ({ page }) => {
   await setup(page); await scrollInside(page, 'bottom');
-  await page.getByRole('button', { name: 'Collapse file', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse all files', exact: true }).click();
   await expect(page.locator('.dv-review')).toBeHidden();
   const after = await geometry(page);
   expect(Math.abs(after.top - after.viewportTop)).toBeLessThanOrEqual(1); expect(after.hit).toBe(true);
@@ -182,7 +182,7 @@ test('live insertion preserves visible code geometry, folded hunks, layout, hori
 
 test('collapsed file and its hunk folds retain title geometry across a live update', async ({ page }) => {
   await setup(page); await page.locator('[data-hunk-nav]').last().click(); await scrollInside(page);
-  await page.getByRole('button', { name: 'Collapse file', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse all files', exact: true }).click();
   const before = await geometry(page);
   await page.evaluate(() => { (window as any).__demo.version = 1; });
   await expect(currentRow(page).locator('.dv-added')).toHaveText('+301');

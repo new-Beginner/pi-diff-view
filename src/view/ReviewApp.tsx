@@ -6,6 +6,7 @@ import { DiffRows } from './DiffRows';
 import FilePath from './FilePath';
 import FileIcon from './FileIcon';
 import ReviewIcon from './ReviewIcon';
+import ReviewFilePreview from './ReviewFilePreview';
 import ScopePicker from './ScopePicker';
 import { messages, kindLabel } from './i18n';
 import { ensureBounded } from './transport';
@@ -36,6 +37,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const settingsVersion = useRef({ layout: 0, wordWrap: 0 });
   const [searchOpen, setSearchOpen] = useState(false);
   const [fileCollapsed, setFileCollapsed] = useState(false);
+  const [expandedFiles, setExpandedFiles] = useState<{ scope: string; ids: Set<string>; multiple?: boolean }>({ scope: '', ids: new Set() });
   const appRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const closeMenus = (event: PointerEvent | KeyboardEvent) => {
@@ -85,6 +87,8 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   const reviewSync = syncStatus?.scope === scopeKey ? syncStatus.state : 'ready';
   const scopeRef = useRef(scopeKey); scopeRef.current = scopeKey;
   useEffect(() => { setConfirmation(value => value?.kind === 'systemOpen' && value.scope !== scopeKey ? null : value); }, [scopeKey]);
+  const extraExpanded = expandedFiles.scope === scopeKey ? expandedFiles.ids : new Set<string>();
+  useEffect(() => { setExpandedFiles({ scope: scopeKey, ids: new Set() }); }, [scopeKey, navigationKey]);
   const diffPane = useRef<HTMLDivElement>(null);
   const reviewPending = useRef(0), loadedScope = useRef('');
   const historyRevision = useRef('');
@@ -102,6 +106,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
   }, [fileCollapsed, selected]);
   const matchingReview = review && review.scope === request.scope && (!request.root || review.root === request.root) && review.sessionId === request.sessionId && (request.scope !== 'turn' || review.runId === request.runId) ? review : null;
   const validReview = matchingReview?.files.some(file => file.id === selected) ? matchingReview : null;
+  useEffect(() => { setExpandedFiles({ scope: scopeKey, ids: new Set() }); }, [matchingReview?.runId]);
   const selectedFile = matchingReview?.files.find(file => file.id === selected);
   const detailVersion = selectedFile ? reviewFileVersion(selectedFile) : undefined;
   const { detail, loading: loadingDetail, loadingMore, error: detailError, loadMore } = useDiffDetail(transport, validReview?.id, selected, context, detailTick, `${scopeKey}|${matchingReview?.runId ?? ''}`, detailVersion);
@@ -331,12 +336,37 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     await transport.invoke('copyPath', { reviewId: matchingReview.id, fileId: file.id });
     if (live.current) showStatus(locale.startsWith('zh') ? '路径已复制' : 'Path copied');
   });
-  const openFile = (file: ReviewFile) => { resetPage(); setSelected(file.id); setFileCollapsed(false); };
+  const openFile = (file: ReviewFile) => {
+    if (expandedFiles.scope === scopeKey && expandedFiles.multiple && file.id !== selected) {
+      const ids = new Set(extraExpanded);
+      if (selected && !fileCollapsed) ids.add(selected);
+      ids.delete(file.id); setExpandedFiles({ scope: scopeKey, ids, multiple: true });
+    }
+    resetPage(); setSelected(file.id); setFileCollapsed(false);
+  };
   const collapseFile = () => {
     const viewport = workspaceRef.current, row = appRef.current?.querySelector<HTMLElement>('.dv-file[aria-current="true"]')?.closest<HTMLElement>('.dv-file-row');
     if (viewport && row) fileCollapseAnchor.current = { selected, top: Math.max(0, Math.min(row.getBoundingClientRect().top - viewport.getBoundingClientRect().top, viewport.clientHeight - row.offsetHeight)) };
     setFileCollapsed(true);
   };
+  const fileExpanded = (file: ReviewFile) => file.id === selected ? !fileCollapsed : extraExpanded.has(file.id);
+  const anyFileExpanded = visibleFiles.some(fileExpanded);
+  const toggleAllFiles = () => {
+    if (anyFileExpanded) {
+      collapseFile(); setExpandedFiles({ scope: scopeKey, ids: new Set() });
+    } else {
+      const target = visibleFiles.some(file => file.id === selected) ? selected : visibleFiles[0]?.id;
+      if (!target) return;
+      setSelected(target); setFileCollapsed(false);
+      setExpandedFiles({ scope: scopeKey, ids: new Set(visibleFiles.filter(file => file.id !== target).map(file => file.id)), multiple: true });
+    }
+  };
+  const toggleFile = (file: ReviewFile) => {
+    if (file.id === selected) { if (fileCollapsed) setFileCollapsed(false); else collapseFile(); }
+    else if (extraExpanded.has(file.id)) setExpandedFiles({ ...expandedFiles, scope: scopeKey, ids: new Set([...extraExpanded].filter(id => id !== file.id)) });
+    else openFile(file);
+  };
+  const toggleFilesLabel = locale.startsWith('zh') ? anyFileExpanded ? '折叠全部文件' : '展开全部文件' : anyFileExpanded ? 'Collapse all files' : 'Expand all files';
   const openWithDefaultApp = async (file: ReviewFile, targetReview = matchingReview) => {
     if (!targetReview?.sessionId || systemOpenPending.current || !panelActive) return;
     systemOpenPending.current = true; setOpeningSystemFile(true); setError(''); setStatus('');
@@ -364,10 +394,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     menu.dataset.placement = upward ? 'above' : 'below';
     body.style.maxHeight = `${Math.max(60, upward ? above : below)}px`;
   };
-  const actionButtons = (file: ReviewFile, hunk?: DiffHunk) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || loadingDetail || reviewSync !== 'ready'} onClick={() => { setError(''); if (review) { setConfirmation({ kind: 'action', action, file, hunk, review }); } }}>{t[action]}</button>);
+  const actionButtons = (file: ReviewFile, hunk?: DiffHunk, fileLoading = loadingDetail) => file.actions.map(action => <button key={action} disabled={busy || loadingReview || fileLoading || reviewSync !== 'ready'} onClick={() => { setError(''); if (review) { setConfirmation({ kind: 'action', action, file, hunk, review }); } }}>{t[action]}</button>);
   const selectedIndex = visibleFiles.findIndex(file => file.id === selected);
-  const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id} data-expanded={file.id === selected && !fileCollapsed}>
-    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={file.id === selected && !fileCollapsed} disabled={busy} onPointerEnter={() => { if (validReview?.id && file.kind === 'text') prefetchDiffDetail(transport, validReview.id, file.id, context, detailTick); }} onClick={() => { if (file.id === selected) { if (fileCollapsed) setFileCollapsed(false); else collapseFile(); } else openFile(file); }} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
+  const fileRow = (file: ReviewFile) => <div className="dv-file-row" key={file.id} data-expanded={fileExpanded(file)}>
+    <button className="dv-file" aria-current={file.id === selected ? 'true' : undefined} aria-expanded={fileExpanded(file)} disabled={busy} onPointerEnter={() => { if (matchingReview?.id && file.kind === 'text') prefetchDiffDetail(transport, matchingReview.id, file.id, context, detailTick); }} onClick={() => toggleFile(file)} title={`${file.oldPath ? `${file.oldPath} → ` : ''}${file.absolutePath ?? file.path} · ${t[file.status]}`}>
       <FileIcon path={file.path} /><span className="dv-file-label"><span className="dv-file-name"><FilePath path={file.path} external={file.origin === 'external'} /></span><span className="dv-file-chevron"><ReviewIcon name="chevron" /></span></span>{file.segmentCount ? <span className="dv-counts dv-muted" title={file.note}>{locale.startsWith('zh') ? `${file.segmentCount} 段 · 净行数未知` : `${file.segmentCount} segments · net unknown`}</span> : file.statsKnown === false || file.kind !== 'text' ? <span className="dv-counts dv-muted" aria-label={locale.startsWith('zh') ? '行数未知' : 'Unknown totals'}>{locale.startsWith('zh') ? '行数未知' : 'Unknown'}</span> : <span className="dv-counts"><span className="dv-added">+{file.additions}</span><span className="dv-deleted">-{file.deletions}</span></span>}
     </button>
     <button className="dv-icon-button dv-file-open" disabled={busy || openingSystemFile || !matchingReview?.sessionId || !panelActive || !!confirmation} aria-label={`${locale.startsWith('zh') ? '打开文件' : 'Open file'} ${file.path}`} title={locale.startsWith('zh') ? '使用系统默认程序打开当前磁盘文件' : 'Open the current disk file with its default app'} onClick={() => requestSystemOpen(file)}><ReviewIcon name="open" /></button>
@@ -379,6 +409,10 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
       {file.oldPath && <p>← {file.oldPath}</p>}<p className="dv-muted">{t[file.status]} · {kindLabel(file.kind, locale)}</p>{file.note && <p className="dv-muted">{file.note}</p>}
     </div></details>
   </div>;
+  const otherFile = (file: ReviewFile) => <section className={extraExpanded.has(file.id) ? 'dv-file-section' : undefined} key={file.id}>
+    {fileRow(file)}
+    {extraExpanded.has(file.id) && matchingReview && <ReviewFilePreview transport={transport} review={matchingReview} file={file} context={context} reload={detailTick} identity={`${scopeKey}|${matchingReview.runId ?? ''}`} layout={layout} wrap={wrap} locale={locale} viewport={workspaceRef} actions={actionButtons} />}
+  </section>;
   return <section ref={appRef} className="dv-app" data-base={base} lang={locale} aria-label={t.title} onKeyDown={event => { if (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && !confirmation) { event.preventDefault(); navigateHunk(event.key === 'ArrowDown' ? 1 : -1); } }}>
     <header className="dv-top">
       <div className="dv-heading">
@@ -404,7 +438,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
             {review?.notice && <p className="dv-muted">{review.notice}</p>}
             {context !== 3 && <p className="dv-muted">{t.expandedHint}</p>}
           </div></details>
-          <button className="dv-icon-button" aria-label={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} title={locale.startsWith('zh') ? '折叠文件' : 'Collapse file'} disabled={busy || !selected || fileCollapsed} onClick={collapseFile}><ReviewIcon name="collapse" /></button>
+          <button className="dv-icon-button" aria-label={toggleFilesLabel} title={toggleFilesLabel} disabled={busy || !visibleFiles.length} onClick={toggleAllFiles}><ReviewIcon name="collapse" /></button>
           {onClose && <button className="dv-icon-button" aria-label={t.close} onClick={onClose} disabled={busy}><ReviewIcon name="close" /></button>}
         </div>
       </div>
@@ -421,7 +455,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
     {status && <div className="dv-toast" role="status">{status}</div>}
     {batchResults.length > 0 && <details className="dv-message" open><summary>{t.batch}</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{batchResults.map(result => `${result.ok ? '✓' : '✗'} ${result.path}: ${result.message}`).join('\n')}</pre></details>}
     {bootError ? <div className="dv-empty dv-error" role="alert">{bootError}<button onClick={() => setBootTick(value => value + 1)}>{t.retry}</button></div> : !boot && !review ? <div className="dv-empty" role="status">{t.loading}</div> : <div className="dv-workspace" ref={workspaceRef}>
-      <nav className="dv-file-list" aria-label={t.files}>{(selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex)).map(fileRow)}</nav>
+      <nav className="dv-file-list" aria-label={t.files}>{(selectedIndex < 0 ? visibleFiles : visibleFiles.slice(0, selectedIndex)).map(otherFile)}</nav>
       {!visibleFiles.length && !loadingReview && !reviewError && !bootError && reviewSync === 'ready' && <p className="dv-rail-empty">{query ? t.noMatches : matchingReview?.run?.state === 'running' ? locale.startsWith('zh') ? '本轮正在运行，尚未记录文件修改。' : 'This turn is running; no file changes recorded yet.' : t.noFiles}{query && <button onClick={() => setQuery('')}>{t.clearSearch}</button>}</p>}
       <section className="dv-file-section">
       {selectedIndex >= 0 && fileRow(visibleFiles[selectedIndex])}
@@ -438,7 +472,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         </>}
       </main>
       </section>
-      {selectedIndex >= 0 && <nav className="dv-file-list" aria-label={t.files}>{visibleFiles.slice(selectedIndex + 1).map(fileRow)}</nav>}
+      {selectedIndex >= 0 && <nav className="dv-file-list" aria-label={t.files}>{visibleFiles.slice(selectedIndex + 1).map(otherFile)}</nav>}
     </div>}
     {confirmation && <Modal title={confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '确认外部打开' : 'Confirm system open' : confirmation.kind === 'action' || confirmation.kind === 'batch' ? `${t.confirm}: ${t[confirmation.action]}` : t.clearHistory} busy={busy || openingSystemFile} onClose={() => setConfirmation(null)}>
       <p>{confirmation.kind === 'systemOpen' ? locale.startsWith('zh') ? '此文件类型可能执行程序或脚本。确认使用系统默认程序打开当前磁盘文件？' : 'This file type may execute a program or script. Open the current disk file with its default app?' : confirmation.kind === 'batch' ? t.batchHint : confirmation.kind === 'action' ? t.confirmHint : t.clearHint}</p>

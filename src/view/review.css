@@ -79,6 +79,7 @@
 /* The toolbar is outside the scrollport; top: 0 is already below all of its rows. */
 .dv-file-section { min-width: 0; }
 .dv-file-section > .dv-file-row, .dv-file-section > .dv-file-row:has(> .dv-file-menu[open]) { position: sticky; top: 0; z-index: 2; isolation: isolate; }
+.dv-file-row:has(> .dv-file-menu[open]), .dv-file-section > .dv-file-row:has(> .dv-file-menu[open]) { z-index: 3; }
 /* Opaque backing without changing the existing transparent row/hover treatment. */
 .dv-file-section > .dv-file-row::before { content: ''; position: absolute; inset: 0; background: var(--dv-bg); z-index: -1; pointer-events: none; }
 .dv-app .dv-file { flex: 1; min-width: 0; border: 0; border-radius: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; text-align: left; padding: 10px 8px 10px 16px; gap: 8px; background: transparent; min-height: 43px; }

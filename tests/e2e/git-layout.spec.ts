@@ -11,7 +11,7 @@ test.beforeAll(async () => {
   assets['/mock.js'] = `
     const base = new URLSearchParams(location.search).get('base');
     const entries = Array.from({length: 80}, (_, i) => ({path: 'src/very-long-directory/components/file-' + i + '.tsx', index: 'M', working: 'M'}));
-    window.calls = []; window.failCommit = false; window.diffDelay = 0; window.failDiff = false; window.diffRevision = 1; window.failStats = false;
+    window.calls = []; window.failCommit = false; window.diffDelay = 0; window.failDiff = false; window.diffRevision = 1; window.failStats = false; window.emptyStatus = false;
     window.historyCommits = [{oid:'abc123',subject:'created commit',author:'fixture',date:'2026-01-01'}];
     window.pageDelays = {}; window.failHistory = false;
     window.pluginBridge = { on() {}, async invoke(method, args = {}) {
@@ -23,7 +23,7 @@ test.beforeAll(async () => {
       }
       if (method === 'diff.bootstrap') return {repositories:[{root:'D:/project',name:'project',git:true}],runs:[],settings:{}};
       if (method !== 'diff.gitManage') throw Error('Unexpected method ' + method);
-      if (args.operation === 'status') return {root:'D:/project',branch:'main',head:'head',entries};
+      if (args.operation === 'status') return {root:'D:/project',branch:'main',head:'head',entries:window.emptyStatus ? [] : entries};
       if (args.operation === 'stats') {
         if (window.failStats) throw Error('stats unavailable');
         return {entries:args.paths.map((path, i) => i === 2 ? {path,additions:null,deletions:null,kind:'binary'} : {path,additions:args.scope === 'staged' ? 5 : 3,deletions:args.scope === 'staged' ? 1 : 2})};
@@ -153,6 +153,37 @@ test('selected Commit requires summary, accepts optional description and retains
   await expect(page.locator('.gm-commit')).toContainText('created commit');
 });
 
+test('expand/collapse all previews toggles all files on workspace and staged pages', async ({ page }) => {
+  await open(page);
+  const all = page.getByRole('button', { name: '展开全部文件', exact: true });
+  await expect(all).toBeEnabled();
+  await all.click();
+  await expect(page.locator('.gm-inline-diff')).toHaveCount(80);
+  await expect(page.getByRole('button', { name: '折叠全部文件', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '折叠全部文件', exact: true }).click();
+  await expect(page.locator('.gm-inline-diff')).toHaveCount(0);
+  await page.getByRole('button', { name: '暂存区', exact: true }).click();
+  await expect(page.locator('.gm-file')).toHaveCount(80);
+  await page.getByRole('button', { name: '展开全部文件', exact: true }).click();
+  await expect(page.locator('.gm-inline-diff')).toHaveCount(80);
+  await page.getByRole('button', { name: '折叠全部文件', exact: true }).click();
+  await expect(page.locator('.gm-inline-diff')).toHaveCount(0);
+});
+
+test('expand-all queue stops after collapse and empty file lists disable the control', async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => { (window as any).diffDelay = 120; });
+  await page.getByRole('button', { name: '展开全部文件', exact: true }).click();
+  await page.getByRole('button', { name: '折叠全部文件', exact: true }).click();
+  const callsAfterCollapse = await diffCalls(page);
+  await page.waitForTimeout(300);
+  expect(await diffCalls(page)).toBe(callsAfterCollapse);
+  await page.evaluate(() => { (window as any).emptyStatus = true; });
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(page.locator('.gm-file')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '展开全部文件', exact: true })).toBeDisabled();
+});
+
 test('slow read never locks the Git page; cached reopen is immediate and refresh invalidates it', async ({ page }) => {
   await open(page);
   await page.evaluate(() => { (window as any).diffDelay = 600; });
@@ -273,4 +304,22 @@ test('history refresh retains rows, blocks mutations only locally and pagination
   await expect(page.locator('.git-management')).toHaveAttribute('aria-busy', 'false');
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.args.operation === 'status').length)).toBe(before);
   expect(await page.evaluate(() => (window as any).calls.some((c: any) => c.args.operation === 'history' && c.args.skip === 30))).toBe(true);
+});
+
+test('old batch completions resume only the current scope queue', async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => { (window as any).diffDelay = 1500; });
+  await page.getByRole('button', { name: '展开全部文件', exact: true }).click();
+  await expect.poll(() => diffCalls(page)).toBeGreaterThanOrEqual(3);
+  await page.getByRole('button', { name: '暂存区', exact: true }).click();
+  await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
+  await page.evaluate(() => { (window as any).diffDelay = 0; });
+  const start = await diffCalls(page);
+  await page.getByRole('button', { name: '展开全部文件', exact: true }).click();
+  await expect.poll(() => diffCalls(page)).toBeGreaterThan(start + 3);
+  const scopes = await page.evaluate(start => (window as any).calls.filter((call: any) => call.args.operation === 'diff').slice(start).map((call: any) => call.args.scope), start);
+  expect(scopes.length).toBeGreaterThan(3);
+  expect(scopes.every((scope: string) => scope === 'staged')).toBe(true);
+  await page.getByRole('button', { name: '折叠全部文件', exact: true }).click();
+  await expect(page.locator('.gm-inline-diff')).toHaveCount(0);
 });

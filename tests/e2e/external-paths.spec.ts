@@ -26,7 +26,7 @@ for (const width of [560, 380]) test(`file statistics and actions stay aligned t
   expect(await positions()).toEqual(before);
   await expect(page.locator('.dv-file-collapse')).toHaveCount(0);
   await file.click(); await expect(file).toHaveAttribute('aria-expanded', 'true');
-  await page.getByRole('button', { name: '折叠文件', exact: true }).click();
+  await page.getByRole('button', { name: '折叠全部文件', exact: true }).click();
   await expect(file).toHaveAttribute('aria-expanded', 'false');
   expect(await positions()).toEqual(before);
 });
