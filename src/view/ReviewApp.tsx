@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Action, ActionResult, Bootstrap, CaptureMaintenanceInspection, DiffHunk, ReviewActionRequest, ReviewFile, ReviewFilesPage, ReviewRequest, ReviewSummary, Scope, UiTransport } from '../core/contracts';
-import { isImagePath } from '../core/review-file-policy';
+import { isVisibleReviewFile } from '../core/review-file-policy';
 import { requiresSystemOpenConfirmation } from '../core/system-open-policy';
 import { DiffRows } from './DiffRows';
 import FilePath from './FilePath';
@@ -231,7 +231,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         setSyncStatus({ scope: scopeKey, state: response.sync?.state ?? 'ready' });
       }
       if (review?.id === response.id && review.nextFileOffset == null) return;
-      let data: ReviewSummary = { ...response, files: response.files.filter(file => !isImagePath(file.path)), nextFileOffset: response.nextFileOffset ?? null };
+      let data: ReviewSummary = { ...response, files: response.files.filter(isVisibleReviewFile), nextFileOffset: response.nextFileOffset ?? null };
       // Latest-turn list navigation never opens a diff until the user selects a file.
       const targetId = (id: string) => data.files.some(file => file.id === id) ? id : initialFileId && data.files.some(file => file.id === initialFileId) ? initialFileId : data.nextFileOffset != null ? initialFileId ?? id : autoSelectFile || request.scope !== 'lastTurn' ? data.files[0]?.id ?? '' : '';
       const publish = async () => {
@@ -272,7 +272,7 @@ export function ReviewApp({ transport: source, initialRequest = {}, initialFileI
         const page = await transport.invoke<ReviewFilesPage>('reviewFiles', { reviewId: data.id, offset });
         if (!active) return;
         if (page.reviewId !== data.id || page.offset !== offset || (page.nextOffset != null && page.nextOffset <= offset)) throw new Error('无效的文件列表分页。');
-        data = { ...data, files: [...data.files, ...page.files.filter(file => !isImagePath(file.path))], nextFileOffset: page.nextOffset };
+        data = { ...data, files: [...data.files, ...page.files.filter(isVisibleReviewFile)], nextFileOffset: page.nextOffset };
         if (streaming || data.nextFileOffset == null) await publish();
       }
     }).catch(err => { if (active) setReviewError(errorText(err)); }).finally(() => { if (reviewPending.current === pending) reviewPending.current = undefined; if (active) setLoadingReview(false); });
