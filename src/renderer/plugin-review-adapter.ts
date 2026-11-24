@@ -17,10 +17,14 @@ const validId = (value: string | null): value is string => !!value && /^[a-zA-Z0
 export function domSession(document: Document): string | null {
   const panes = [...document.querySelectorAll('[data-session-pane][data-visible="true"]')];
   const rows = [...document.querySelectorAll('.thread-item.active[data-sidebar-session-row]')];
-  if (panes.length > 1 || rows.length > 1) return null;
+  if (panes.length > 1) return null;
   const pane = panes[0]?.getAttribute('data-session-pane') ?? null;
-  const row = rows[0]?.getAttribute('data-sidebar-session-row') ?? null;
-  if ((panes.length && !validId(pane)) || (rows.length && !validId(row)) || (pane && row && pane !== row)) return null;
+  const rowIds = rows.map((row) => row.getAttribute('data-sidebar-session-row'));
+  if ((panes.length > 0 && !validId(pane)) || rowIds.some((id) => !validId(id))) return null;
+  const distinctRowIds = [...new Set(rowIds)];
+  if (distinctRowIds.length > 1) return null;
+  const row = distinctRowIds[0] ?? null;
+  if (pane && row && pane !== row) return null;
   return pane ?? row;
 }
 export interface ReviewNavigationChannel {

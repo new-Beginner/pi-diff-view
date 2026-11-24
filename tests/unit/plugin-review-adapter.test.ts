@@ -25,12 +25,35 @@ it('follows DOM immediately without requesting state; releases observers', async
   expect(sessions).toEqual(['s', null, 'other']); expect(f.read).not.toHaveBeenCalled();
   f.adapter.close(); stop(); f.notify(); expect(f.disconnect).toHaveBeenCalledTimes(1); expect(sessions).toHaveLength(3);
 });
-it('refuses duplicate panes, duplicate rows, invalid ids and switching conflicts', () => {
-  const f = fixture(); f.nodes.set('.thread-item.active[data-sidebar-session-row]', [f.attributes({ 'data-sidebar-session-row': 'other' })]);
-  expect(domSession(f.document)).toBeNull(); f.nodes.delete('.thread-item.active[data-sidebar-session-row]');
-  f.nodes.get('[data-session-pane][data-visible="true"]')!.push(f.attributes({ 'data-session-pane': 's' })); expect(domSession(f.document)).toBeNull();
-  f.nodes.set('[data-session-pane][data-visible="true"]', [f.attributes({ 'data-session-pane': '../../secrets' })]); expect(domSession(f.document)).toBeNull();
+it('accepts duplicated active rows for one session and refuses ambiguity', () => {
+  const f = fixture();
+  const row = f.attributes({ 'data-sidebar-session-row': 's' });
+  f.nodes.set('.thread-item.active[data-sidebar-session-row]', [row, row]);
+  expect(domSession(f.document)).toBe('s');
+  f.nodes.set('.thread-item.active[data-sidebar-session-row]', [row, f.attributes({ 'data-sidebar-session-row': 'other' })]);
+  expect(domSession(f.document)).toBeNull();
+  f.nodes.set('.thread-item.active[data-sidebar-session-row]', []);
+  f.nodes.set('[data-session-pane][data-visible="true"]', [
+    f.attributes({ 'data-session-pane': 's' }),
+    f.attributes({ 'data-session-pane': 's' }),
+  ]);
+  expect(domSession(f.document)).toBeNull();
+  f.nodes.set('[data-session-pane][data-visible="true"]', [f.attributes({ 'data-session-pane': 's' })]);
+  f.nodes.set('.thread-item.active[data-sidebar-session-row]', [row, row]);
+  expect(domSession(f.document)).toBe('s');
+  f.nodes.set('.thread-item.active[data-sidebar-session-row]', [f.attributes({ 'data-sidebar-session-row': '../../secrets' })]);
+  expect(domSession(f.document)).toBeNull();
 });
+it('opens the current session when Recent and project groups both render its active row', async () => {
+  const f = fixture();
+  const activeRow = f.attributes({ 'data-sidebar-session-row': 's' });
+  f.nodes.set('.thread-item.active[data-sidebar-session-row]', [activeRow, activeRow]);
+  await f.adapter.open('s', location);
+  expect(f.navigation.prepare).toHaveBeenCalledWith('s', location, expect.any(Function));
+  expect(f.navigation.confirm).toHaveBeenCalledWith('ticket', expect.any(Function));
+  f.adapter.close();
+});
+
 it('opens an already active exact tab without reading state or clicking again, and confirms navigation', async () => {
   const f = fixture(); await f.adapter.open('s', location);
   expect(f.read).not.toHaveBeenCalled(); expect(f.tab.click).not.toHaveBeenCalled();
