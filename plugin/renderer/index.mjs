@@ -667,10 +667,14 @@ var validId = (value) => !!value && /^[a-zA-Z0-9-]{1,80}$/.test(value);
 function domSession(document2) {
   const panes = [...document2.querySelectorAll('[data-session-pane][data-visible="true"]')];
   const rows = [...document2.querySelectorAll(".thread-item.active[data-sidebar-session-row]")];
-  if (panes.length > 1 || rows.length > 1) return null;
+  if (panes.length > 1) return null;
   const pane = panes[0]?.getAttribute("data-session-pane") ?? null;
-  const row = rows[0]?.getAttribute("data-sidebar-session-row") ?? null;
-  if (panes.length && !validId(pane) || rows.length && !validId(row) || pane && row && pane !== row) return null;
+  const rowIds = rows.map((row2) => row2.getAttribute("data-sidebar-session-row"));
+  if (panes.length > 0 && !validId(pane) || rowIds.some((id) => !validId(id))) return null;
+  const distinctRowIds = [...new Set(rowIds)];
+  if (distinctRowIds.length > 1) return null;
+  const row = distinctRowIds[0] ?? null;
+  if (pane && row && pane !== row) return null;
   return pane ?? row;
 }
 function createPluginReviewAdapter(options = {}) {
